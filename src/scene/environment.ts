@@ -151,7 +151,9 @@ normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz) * (gl_FrontFacing ? 1.0 : -
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.waterColumn = new THREE.Mesh(bg, bm);
+    // no bottom face: it would coincide with the seabed horizon and z-fight
+    const noBottom = new THREE.MeshBasicMaterial({ visible: false });
+    this.waterColumn = new THREE.Mesh(bg, [bm, bm, bm, noBottom, bm, bm]);
     this.waterColumn.position.set(cx, -wd / 2, -cn);
     this.waterColumn.renderOrder = 3;
     this.waterColumn.userData = { kind: 'sea' };

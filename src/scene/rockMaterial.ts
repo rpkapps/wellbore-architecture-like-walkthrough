@@ -32,7 +32,8 @@ export function createRockMaterial(litho: number, color: string): THREE.MeshStan
     roughness: 0.9,
     metalness: 0,
     envMapIntensity: 0.35,
-    side: THREE.FrontSide,
+    // double-sided so the block stays closed when the camera is inside it
+    side: THREE.DoubleSide,
   }) as THREE.MeshStandardMaterial & { userData: { uniforms: RockUniforms } };
   const uniforms: RockUniforms = {
     uLitho: { value: litho },

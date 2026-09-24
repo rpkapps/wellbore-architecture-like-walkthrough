@@ -146,11 +146,36 @@ export class GeologyModel {
       mat.transparent = transparent;
       mat.opacity = op;
       mat.depthWrite = !transparent;
-      m.renderOrder = transparent ? 2 : 0;
+      m.userData.transparent = transparent;
     }
     if (this.highlight) this.setHighlight(this.highlight);
+    this.sortForCamera(this.lastCamY, true);
+  }
+
+  private lastCamY = 0;
+
+  /**
+   * Stable back-to-front order for the (horizontally stacked) transparent slabs:
+   * units farther from the camera's elevation draw first. Avoids the popping of
+   * three.js' per-object distance sort while zooming.
+   */
+  sortForCamera(camY: number, force = false) {
+    if (!force && Math.abs(camY - this.lastCamY) < 1) return;
+    this.lastCamY = camY;
+    const list = [...this.meshes.values()].filter((m) => m.userData.transparent);
+    for (const m of list) {
+      const bb = m.geometry.boundingBox ?? (m.geometry.computeBoundingBox(), m.geometry.boundingBox!);
+      const top = bb.max.y;
+      const bot = bb.min.y;
+      m.userData.sortKey = camY > top ? camY - (top + bot) / 2 : camY < bot ? (top + bot) / 2 - camY : 0;
+    }
+    list.sort((a, b) => b.userData.sortKey - a.userData.sortKey);
+    list.forEach((m, i) => (m.renderOrder = 2 + i * 0.01));
+    for (const m of this.meshes.values()) if (!m.userData.transparent) m.renderOrder = 0;
   }
 }
+
+const BASE_GAP = 0.25; // m
 
 /** Build a closed slab between two horizon grids clipped to the section box. */
 function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number, box: SectionBox): THREE.BufferGeometry | null {
@@ -193,7 +218,8 @@ function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number
       const n = box.nMin + (iz / (nz - 1)) * H;
       const t = topD(x, n);
       const b = baseD(x, n);
-      push(x, -b, n, b - t);
+      // sit the base a hair below the next unit's top so coincident horizons never z-fight
+      push(x, -b - BASE_GAP, n, b - t);
     }
   for (let iz = 0; iz < nz - 1; iz++)
     for (let ix = 0; ix < nx - 1; ix++) {

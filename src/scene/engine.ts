@@ -215,28 +215,29 @@ export class Engine {
   private frameTimes: number[] = [];
   private prScale = 1;
   private adapt(dt: number) {
-    if (this.quality === 'low') return;
+    if (this.quality === 'low' || this.prScale <= 0.55) return;
     this.frameTimes.push(dt);
-    if (this.frameTimes.length < 90) return;
+    if (this.frameTimes.length < 120) return;
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
     this.frameTimes = [];
-    const base = Math.min(window.devicePixelRatio, 1.75);
-    let next = this.prScale;
-    if (avg > 1 / 32 && this.prScale > 0.55) next = Math.max(0.55, this.prScale - 0.15);
-    else if (avg < 1 / 55 && this.prScale < 1) next = Math.min(1, this.prScale + 0.1);
-    if (next !== this.prScale) {
-      this.prScale = next;
-      this.renderer.setPixelRatio(base * next);
-      this.composer.setPixelRatio(base * next);
-      this.resize();
-    }
+    // step down only, and only after two consecutive slow windows: never oscillates
+    this.slowWindows = avg > 1 / 28 ? this.slowWindows + 1 : 0;
+    if (this.slowWindows < 2) return;
+    this.slowWindows = 0;
+    this.prScale = Math.max(0.55, this.prScale - 0.15);
+    const pr = Math.min(window.devicePixelRatio, 1.75) * this.prScale;
+    this.renderer.setPixelRatio(pr);
+    this.composer.setPixelRatio(pr);
+    this.resize();
   }
+  private slowWindows = 0;
 
   private tick(dt: number) {
     const t = this.timer.getElapsed();
     this.adapt(dt);
     this.rig.update(dt);
     const cam = this.camera.position;
+    this.geology.sortForCamera(cam.y);
     const wb = this.wellbore;
     if (wb) {
       wb.setCursor(this.rig.md);
