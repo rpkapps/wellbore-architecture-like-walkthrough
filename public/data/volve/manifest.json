@@ -1,0 +1,78 @@
+{
+  "field": {
+    "name": "Volve",
+    "block": "PL046 / 15/9",
+    "country": "Norway — North Sea",
+    "operator": "Equinor (Statoil)",
+    "facility": "Maersk Inspirer (jack-up production unit)",
+    "crs": "ED50 / UTM zone 31N",
+    "originE": 435050.03,
+    "originN": 6478563.55,
+    "datum": "Drill floor (DF)",
+    "datumElevation": 54.9,
+    "waterDepth": 91.1,
+    "licence": "Equinor Open Data Licence — https://www.equinor.com/energy/volve-data-sharing",
+    "sources": [
+      "Equinor Volve Data Village (2018 release)",
+      "github.com/andymcdgeo/Petrophysics-Python-Series (LAS, F-12 survey)",
+      "github.com/yohanesnuwara/volve-machine-learning (well picks, production workbook)",
+      "github.com/orkahub/PEG_Python (Equinor CPI petrophysical output LAS)",
+      "github.com/jczettl/wellbore-trajectory-uncertainty (F-11 A survey)"
+    ]
+  },
+  "picks": "Volve_well_picks.csv",
+  "productionMonthly": "production_monthly.csv",
+  "contextTrajectories": "context_trajectories.csv",
+  "wells": [
+    {
+      "id": "F-11B",
+      "name": "15/9-F-11 B",
+      "primary": true,
+      "las": "15_9-F-11B.las",
+      "survey": "15_9-F-11B_survey.csv",
+      "surveyStatus": "reconstructed",
+      "surveyNote": "Definitive 15/9-F-11 A survey to the 2585 m MD sidetrack point; below it a smooth path through the 33 official formation-pick coordinates of this wellbore.",
+      "picksWell": "NO 15/9-F-11 B",
+      "production": "production_daily_F-11.csv",
+      "productionWell": "15/9-F-11",
+      "kickoffMD": 2585.0,
+      "sister": "F-11A",
+      "summary": "Horizontal Hugin Fm producer. Shares the upper hole with 15/9-F-11 A and was sidetracked from it at ~2585 m MD, then landed near-horizontal and weaves through the thin Hugin reservoir seven times."
+    },
+    {
+      "id": "F-11A",
+      "name": "15/9-F-11 A",
+      "las": "15_9-F-11A.las",
+      "cpi": "15_9-F-11A_CPI.las",
+      "survey": "15_9-F-11A_survey.csv",
+      "surveyStatus": "definitive",
+      "surveyNote": "Definitive directional survey (323 stations).",
+      "picksWell": "NO 15/9-F-11 A",
+      "summary": "Deviated (≈40°) pilot wellbore with a full reservoir log suite including compressional and shear sonic, plus Equinor's computed petrophysical interpretation (CPI)."
+    },
+    {
+      "id": "F-1C",
+      "name": "15/9-F-1 C",
+      "las": "15_9-F-1C.las",
+      "cpi": "15_9-F-1C_CPI.las",
+      "survey": "15_9-F-1C_survey.csv",
+      "surveyStatus": "reconstructed",
+      "surveyNote": "No public definitive survey: smooth path through the 16 official formation-pick coordinates.",
+      "picksWell": "NO 15/9-F-1 C",
+      "production": "production_daily_F-1C.csv",
+      "productionWell": "15/9-F-1 C",
+      "summary": "High-angle producer (later converted to water injector) with Equinor CPI and daily production 2014–2016."
+    },
+    {
+      "id": "F-12",
+      "name": "15/9-F-12",
+      "survey": "15_9-F-12_survey.csv",
+      "surveyStatus": "measured",
+      "surveyNote": "Public MD/INC/AZI survey file; positions by minimum curvature. Deviates by up to ~29 m from the official pick coordinates (datum/version differences), so shown as context only.",
+      "picksWell": "NO 15/9-F-12",
+      "production": "production_daily_F-12.csv",
+      "productionWell": "15/9-F-12",
+      "summary": "Volve's most prolific producer (≈4.6 million Sm³ oil). Survey, tops and production are public; logs are not included in this demo package."
+    }
+  ]
+}
