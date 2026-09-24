@@ -12,11 +12,13 @@ A web-based 3D wellbore visualization that works like an architectural walkthrou
 
 ## Quick start
 
+Requires Node 22+ and pnpm (the version is pinned in `package.json` via `packageManager`; `corepack enable` picks it up).
+
 ```bash
-npm install
-npm run dev        # http://localhost:5173
-npm test           # unit tests against the real Volve files
-npm run build      # static site in dist/ (deploy anywhere, relative paths)
+pnpm install
+pnpm dev           # http://localhost:5173
+pnpm test          # unit tests against the real Volve files
+pnpm build         # static site in dist/ (deploy anywhere, relative paths)
 ```
 
 The app needs no backend. All data is served as static files from `public/data/volve/`, and anything you upload is parsed in the browser and never leaves it. Add `?q=low` to the URL on very weak GPUs.
