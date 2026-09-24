@@ -198,6 +198,11 @@ export class Engine {
   }
 
   /** Re-upload log/interpretation textures after parameters or data changed. */
+  /** Interpretation changed only: update data textures in place. */
+  refreshInterpretation() {
+    if (this.wellbore) this.wellbore.updateTextures(buildWellTextures(this.activeWell));
+  }
+
   refreshWellData() {
     if (!this.wellbore) return;
     const md = this.rig.md;

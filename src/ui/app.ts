@@ -157,9 +157,10 @@ export class App {
     const w = this.engine.activeWell;
     w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
     this.zoneCache = null;
-    this.engine.refreshWellData();
+    this.engine.refreshInterpretation();
     this.logs.invalidate();
     this.renderTimelineStatic();
+    this.updateLegend();
   }
 
   zoneSummaries(): ZoneSummary[] {

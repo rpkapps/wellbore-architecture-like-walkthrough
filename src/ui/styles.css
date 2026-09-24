@@ -1636,3 +1636,64 @@ body.right-collapsed .inspector {
     gap: 2px;
   }
 }
+
+/* ------------------------------------------------------------------ interpretation drawer */
+.drawer.left {
+  right: auto;
+  left: var(--gap);
+  width: 520px;
+}
+.drawer.left.hidden {
+  transform: translateX(-30px);
+}
+.interp-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(11, 14, 19, 0.96);
+  backdrop-filter: blur(12px);
+}
+.interp-summary .stat {
+  position: relative;
+}
+.interp-summary .stat .v small {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-left: 3px;
+}
+.interp-summary .dl {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  margin-top: 2px;
+}
+.interp-summary .dl.up {
+  color: #7fd8b4;
+}
+.interp-summary .dl.down {
+  color: #ff9b8a;
+}
+.interp-summary.flash .stat {
+  animation: statflash 0.9s var(--ease);
+}
+@keyframes statflash {
+  0% {
+    border-color: rgba(255, 181, 71, 0.8);
+    box-shadow: 0 0 0 3px rgba(255, 181, 71, 0.15);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: none;
+  }
+}
+.param-grid .prange {
+  grid-column: 1 / -1;
+  margin: -4px 0 2px;
+}
+.param-grid .prange input {
+  width: 100%;
+}
+body.interp-open .narrative {
+  opacity: 0;
+  pointer-events: none;
+}

@@ -1,8 +1,16 @@
-import { DEFAULT_PARAMS, PARAM_NOTES, autoGrLimits, type PetroParams } from '../data/petro';
+import { DEFAULT_PARAMS, PARAM_NOTES, autoGrLimits, payIntervals, type PetroParams } from '../data/petro';
 import { sampleCurve } from '../data/las';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
 import type { App } from './app';
-import { chip, fmt, h, download } from './dom';
+import { chip, fmt, h, download, setRangeFill } from './dom';
+
+interface Summary {
+  pay: number;
+  phi: number;
+  sw: number;
+  hc: number;
+  ints: number;
+}
 import { I } from './icons';
 
 interface ParamDef {
@@ -12,22 +20,24 @@ interface ParamDef {
   step: number;
   kind?: 'select';
   options?: [string, string][];
+  range?: [number, number];
+  log?: boolean; // logarithmic slider
 }
 
 const GROUPS: { title: string; params: ParamDef[] }[] = [
   {
     title: 'Shale volume',
     params: [
-      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1 },
-      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1 },
+      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1, range: [0, 80] },
+      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1, range: [50, 200] },
       { key: 'vshMethod', label: 'Vsh transform', step: 0, kind: 'select', options: [['linear', 'Linear IGR'], ['larionov-older', 'Larionov (older rocks)'], ['larionov-tertiary', 'Larionov (Tertiary)']] },
     ],
   },
   {
     title: 'Porosity',
     params: [
-      { key: 'rhoMa', label: 'Matrix density ρma', unit: 'g/cm³', step: 0.01 },
-      { key: 'rhoFl', label: 'Fluid density ρfl', unit: 'g/cm³', step: 0.01 },
+      { key: 'rhoMa', label: 'Matrix density ρma', unit: 'g/cm³', step: 0.01, range: [2.6, 2.75] },
+      { key: 'rhoFl', label: 'Fluid density ρfl', unit: 'g/cm³', step: 0.01, range: [0.8, 1.2] },
       { key: 'porosityMethod', label: 'Method', step: 0, kind: 'select', options: [['density', 'Density'], ['neutron-density', 'Neutron–density (RMS)']] },
     ],
   },
@@ -35,20 +45,20 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
     title: 'Saturation',
     params: [
       { key: 'satModel', label: 'Model', step: 0, kind: 'select', options: [['archie', 'Archie'], ['simandoux', 'Modified Simandoux']] },
-      { key: 'rw', label: 'Rw', unit: 'Ω·m', step: 0.001 },
-      { key: 'rwTemp', label: 'Rw reference temp.', unit: '°C', step: 1 },
-      { key: 'a', label: 'Tortuosity a', step: 0.05 },
-      { key: 'm', label: 'Cementation m', step: 0.05 },
-      { key: 'n', label: 'Saturation n', step: 0.05 },
-      { key: 'rsh', label: 'Rsh (Simandoux)', unit: 'Ω·m', step: 0.1 },
+      { key: 'rw', label: 'Rw', unit: 'Ω·m', step: 0.001, range: [0.005, 0.5], log: true },
+      { key: 'rwTemp', label: 'Rw reference temp.', unit: '°C', step: 1, range: [20, 150] },
+      { key: 'a', label: 'Tortuosity a', step: 0.05, range: [0.5, 1.5] },
+      { key: 'm', label: 'Cementation m', step: 0.05, range: [1.5, 2.6] },
+      { key: 'n', label: 'Saturation n', step: 0.05, range: [1.5, 3] },
+      { key: 'rsh', label: 'Rsh (Simandoux)', unit: 'Ω·m', step: 0.1, range: [0.5, 10] },
     ],
   },
   {
     title: 'Net pay cut-offs',
     params: [
-      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01 },
-      { key: 'cutPhi', label: 'φ ≥', step: 0.01 },
-      { key: 'cutSw', label: 'Sw ≤', step: 0.01 },
+      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01, range: [0, 1] },
+      { key: 'cutPhi', label: 'φ ≥', step: 0.01, range: [0, 0.3] },
+      { key: 'cutSw', label: 'Sw ≤', step: 0.01, range: [0, 1] },
     ],
   },
 ];
@@ -62,11 +72,11 @@ export class InterpretationDrawer {
     this.body = h('div', { class: 'panel-body' });
     this.el = h(
       'div',
-      { class: 'drawer glass hidden' },
+      { class: 'drawer left glass hidden' },
       h(
         'div',
         { class: 'panel-head' },
-        h('div', {}, h('h3', {}, 'Petrophysical interpretation'), h('div', { class: 'faint', style: 'font-size:11px;margin-top:2px' }, 'Hydrocarbon view inputs — all outputs are calculated')),
+        h('div', {}, h('h3', {}, 'Petrophysical interpretation'), h('div', { class: 'faint', style: 'font-size:11px;margin-top:2px' }, 'Turns measured logs into oil / water saturation — updates live')),
         h('button', { class: 'btn icon ghost', html: I.close, onclick: () => this.hide() }),
       ),
       this.body,
@@ -76,12 +86,59 @@ export class InterpretationDrawer {
   get open() {
     return !this.el.classList.contains('hidden');
   }
+  private baseline: Summary | null = null;
+  private summaryEl = h('div', { class: 'interp-summary' });
+
   show() {
+    this.baseline = this.summary();
+    if (this.app.engine.mode !== 'hydrocarbon') {
+      this.app.setProperty('hydrocarbon');
+      this.app.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
+    }
     this.render();
     this.el.classList.remove('hidden');
+    document.body.classList.add('interp-open');
+  }
+
+  private summary(): Summary {
+    const sums = this.app.zoneSummaries();
+    let pay = 0, phi = 0, pv = 0, swpv = 0, hc = 0;
+    for (const s of sums) {
+      if (!(s.pay > 0)) continue;
+      pay += s.pay;
+      phi += s.phiAvg * s.pay;
+      pv += s.phiAvg * s.pay;
+      swpv += s.swAvg * s.phiAvg * s.pay;
+      hc += s.hcColumn;
+    }
+    const w = this.app.engine.activeWell;
+    const ints = w.logs && w.petro ? payIntervals(w.logs.depth, w.petro.pay, 1.0).length : 0;
+    return { pay, phi: pay > 0 ? phi / pay : NaN, sw: pv > 0 ? swpv / pv : NaN, hc, ints };
+  }
+
+  private renderSummary() {
+    const cur = this.summary();
+    const b = this.baseline;
+    const w = this.app.engine.activeWell;
+    const delta = (now: number, was: number | undefined, f: (v: number) => string, higherIsMore = true) => {
+      if (was === undefined || !Number.isFinite(was) || !Number.isFinite(now) || Math.abs(now - was) < 1e-6) return '';
+      const up = now > was;
+      return `<span class="dl ${up === higherIsMore ? 'up' : 'down'}">${up ? '▲' : '▼'} was ${f(was)}</span>`;
+    };
+    const tile = (k: string, v: string, d: string) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${d}</div>`;
+    this.summaryEl.innerHTML = w.petro?.available
+      ? `<div class="stat-row" style="padding:0">${[
+          tile('Net pay (MD)', `${fmt.n(cur.pay, 1)}<small>m</small>`, delta(cur.pay, b?.pay, (v) => `${fmt.n(v, 1)} m`)),
+          tile('Avg φ in pay', fmt.pct(cur.phi, 1), delta(cur.phi, b?.phi, (v) => fmt.pct(v, 1))),
+          tile('Avg Sw in pay', fmt.pct(cur.sw, 0), delta(cur.sw, b?.sw, (v) => fmt.pct(v, 0), false)),
+          tile('HC column Σφ·So·h', `${fmt.n(cur.hc, 2)}<small>m</small>`, delta(cur.hc, b?.hc, (v) => `${fmt.n(v, 2)} m`)),
+        ].join('')}</div>
+        <div class="faint" style="font-size:10.5px;margin-top:6px">${cur.ints} pay intervals ≥ 1 m · changes are relative to when this panel was opened · watch the Saturation / Vsh·Porosity log tracks and the amber oil volume in 3D.</div>`
+      : `<div style="color:var(--danger);font-size:11.5px">${w.name} has no density + resistivity logs, so saturation cannot be calculated. Switch to 15/9-F-11 B, F-11 A or F-1 C.</div>`;
   }
   hide() {
     this.el.classList.add('hidden');
+    document.body.classList.remove('interp-open');
   }
   toggle() {
     if (this.open) this.hide();
@@ -93,7 +150,11 @@ export class InterpretationDrawer {
     this.timer = window.setTimeout(() => {
       this.app.reinterpret();
       this.renderResults();
-    }, 250);
+      this.renderSummary();
+      this.summaryEl.classList.remove('flash');
+      void this.summaryEl.offsetWidth;
+      this.summaryEl.classList.add('flash');
+    }, 90);
   }
 
   private resultsEl = h('div');
@@ -103,6 +164,19 @@ export class InterpretationDrawer {
     const p = w.params;
     this.body.innerHTML = '';
     const inputs = w.petro?.inputs;
+    this.renderSummary();
+    this.body.append(
+      h('div', { class: 'section interp-top' }, this.summaryEl),
+      h(
+        'div',
+        { class: 'section muted', style: 'font-size:11.5px;line-height:1.55' },
+        h('b', { style: 'color:var(--text)' }, 'What this does. '),
+        'The measured logs (gamma ray, density, deep resistivity) are converted into shale volume, porosity and water saturation with the equations below. Those calculated results drive the ',
+        h('b', { style: 'color:var(--oil)' }, 'Hydrocarbons'),
+        ' 3D view (oil vs water in the pore space), the Vsh · Porosity and Saturation log tracks, the pay flags on the timeline and in the logs, and the zone table. The measured Resistivity view never changes. ',
+        h('span', { class: 'faint' }, 'Try: Rw 0.025 → 0.08 (saltier → fresher brine) and watch pay shrink; or the Sw cut-off 0.6 → 0.3.'),
+      ),
+    );
     this.body.append(
       h(
         'div',
@@ -131,14 +205,44 @@ export class InterpretationDrawer {
             this.scheduleApply();
           };
         } else {
-          input = h('input', { class: 'num', type: 'number', step: d.step, value: String(p[d.key]) }) as HTMLInputElement;
-          input.oninput = () => {
-            const v = parseFloat(input.value);
+          const num = h('input', { class: 'num', type: 'number', step: d.step, value: String(p[d.key]) }) as HTMLInputElement;
+          input = num;
+          let range: HTMLInputElement | null = null;
+          if (d.range) {
+            const [lo, hi] = d.range;
+            const toR = (v: number) => (d.log ? (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) : (v - lo) / (hi - lo)) * 1000;
+            const fromR = (r: number) => (d.log ? Math.pow(10, Math.log10(lo) + (r / 1000) * (Math.log10(hi) - Math.log10(lo))) : lo + (r / 1000) * (hi - lo));
+            const rr = h('input', { type: 'range', min: 0, max: 1000, step: 1, value: String(toR(Number(p[d.key]))) }) as HTMLInputElement;
+            range = rr;
+            setRangeFill(rr);
+            rr.oninput = () => {
+              const dec = Math.max(0, -Math.floor(Math.log10(d.step)));
+              const v = Number(fromR(+rr.value).toFixed(d.log ? 4 : dec));
+              num.value = String(v);
+              (p as unknown as Record<string, unknown>)[d.key] = v;
+              setRangeFill(rr);
+              this.scheduleApply();
+            };
+            num.addEventListener('input', () => {
+              const v = parseFloat(num.value);
+              if (Number.isFinite(v)) {
+                rr.value = String(Math.max(0, Math.min(1000, toR(v))));
+                setRangeFill(rr);
+              }
+            });
+          }
+          num.addEventListener('input', () => {
+            const v = parseFloat(num.value);
             if (Number.isFinite(v)) {
               (p as unknown as Record<string, unknown>)[d.key] = v;
               this.scheduleApply();
             }
-          };
+          });
+          grid.append(h('label', {}, d.label, d.unit ? h('small', {}, d.unit) : ''), num);
+          if (range) grid.append(h('div', { class: 'prange' }, range));
+          const note0 = PARAM_NOTES[d.key];
+          if (note0) grid.append(h('div', { class: 'note' }, note0));
+          continue;
         }
         grid.append(h('label', {}, d.label, d.unit ? h('small', {}, d.unit) : ''), input);
         const note = PARAM_NOTES[d.key];
@@ -161,6 +265,7 @@ export class InterpretationDrawer {
             }
             this.app.reinterpret();
             this.render();
+            this.app.toast('Parameters reset to the defaults calibrated against Equinor CPI.');
           },
           html: `${I.reset} Reset to calibrated defaults`,
         }),

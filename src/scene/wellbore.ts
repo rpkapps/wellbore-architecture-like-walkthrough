@@ -104,7 +104,7 @@ export class WellboreAssembly {
   private wallMat!: THREE.MeshStandardMaterial;
   private logStart = 0;
   private logEnd = 0;
-  readonly tex: WellTextures;
+  tex: WellTextures;
 
   constructor(
     readonly well: Well,
@@ -914,6 +914,24 @@ void main(){
       m.material = mode === 'hydrocarbon' ? this.shellMatFluid[i] : this.shellMatRes[i];
     });
     this.payGroup.visible = mode === 'hydrocarbon';
+  }
+
+  /**
+   * Swap in re-computed log / interpretation textures without rebuilding any
+   * geometry, so camera, cut-away and opacity settings are preserved.
+   */
+  updateTextures(tex: WellTextures) {
+    const old = this.tex;
+    this.tex = tex;
+    this.uniforms.uDataA.value = tex.a;
+    this.uniforms.uDataB.value = tex.b;
+    this.uniforms.uDataC.value = tex.c;
+    this.uniforms.uDataCount.value = tex.count;
+    this.uniforms.uDataMd0.value = tex.md0;
+    this.uniforms.uDataStep.value = tex.step;
+    for (const t of [old.a, old.b, old.c]) t.dispose();
+    this.buildPay();
+    this.payGroup.visible = this.mode === 'hydrocarbon';
   }
 
   setLut(t: THREE.Texture) {
