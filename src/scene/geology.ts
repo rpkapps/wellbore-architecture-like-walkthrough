@@ -265,6 +265,14 @@ function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number
   g.setAttribute('aStrat', new THREE.Float32BufferAttribute(strat, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
+  // pinched / stripped units produce zero-area faces whose vertices get a zero normal;
+  // a zero normal becomes NaN in the lighting and bloom spreads it into black blocks
+  const nrm = g.getAttribute('normal') as THREE.BufferAttribute;
+  for (let i = 0; i < nrm.count; i++) {
+    const x = nrm.getX(i), y = nrm.getY(i), z = nrm.getZ(i);
+    const l = x * x + y * y + z * z;
+    if (!(l > 1e-12) || !Number.isFinite(l)) nrm.setXYZ(i, 0, 1, 0);
+  }
   g.computeBoundingSphere();
   return g;
 }

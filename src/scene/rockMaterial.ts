@@ -62,7 +62,8 @@ varying vec3 vWNormal;`,
         `#include <project_vertex>
 vStrat = aStrat;
 vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
-vWNormal = normalize(mat3(modelMatrix) * objectNormal);`,
+vec3 wn0 = mat3(modelMatrix) * objectNormal;
+vWNormal = dot(wn0, wn0) > 1e-12 ? normalize(wn0) : vec3(0.0, 1.0, 0.0);`,
       );
     shader.fragmentShader = shader.fragmentShader
       .replace(

@@ -891,7 +891,7 @@ void main(){
     if (B.x > -900.0) c = mix(vec3(0.2, 0.5, 0.82), vec3(1.0, 0.62, 0.15), clamp(1.0 - B.x, 0.0, 1.0));
     if (C.x > 0.5) c = vec3(1.0, 0.75, 0.3);
   }
-  float rim = pow(1.0 - abs(vN.z), 1.5);
+  float rim = pow(clamp(1.0 - abs(vN.z), 0.0, 1.0), 1.5);
   c *= 0.75 + 0.6 * rim;
   c += vec3(0.35, 0.8, 1.0) * mdRing(vMd, uCursorMd, 12.0) * 1.2;
   gl_FragColor = vec4(c * 1.25, uFade * (0.85 + 0.15 * rim));

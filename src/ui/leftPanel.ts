@@ -236,6 +236,7 @@ export class LeftPanel {
         e.env.platform.visible = v;
       }),
       toggle('Structural contours (25 m)', true, (v) => e.geology.setContours(v)),
+      toggle('Glow & colour grade', e.quality !== 'low', (v) => e.setPostFx(v)),
     );
   }
 }

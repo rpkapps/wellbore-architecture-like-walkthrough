@@ -41,7 +41,7 @@ void main(){
   vec3 zenith = vec3(0.012, 0.018, 0.028);
   vec3 horizon = vec3(0.06, 0.075, 0.095);
   vec3 below = vec3(0.012, 0.016, 0.022);
-  vec3 c = h > 0.0 ? mix(horizon, zenith, pow(h, 0.55)) : mix(horizon * 0.5, below, pow(-h, 0.4));
+  vec3 c = h > 0.0 ? mix(horizon, zenith, pow(max(h, 0.0), 0.55)) : mix(horizon * 0.5, below, pow(max(-h, 0.0), 0.4));
   // faint warm glow toward the low sun
   float sun = max(dot(vDir, normalize(vec3(-0.5, 0.18, 0.6))), 0.0);
   c += vec3(0.35, 0.22, 0.12) * pow(sun, 18.0) * 0.6;
@@ -348,6 +348,8 @@ export class WellPaths {
       const t = w.trajectory;
       for (let i = 0; i < t.md.length; i += 5) pts.push(this.coords.toScene(t.ns[i], t.ew[i], t.tvd[i], new THREE.Vector3()));
       pts.push(this.coords.toScene(t.ns[t.md.length - 1], t.ew[t.md.length - 1], t.tvd[t.md.length - 1], v.clone()));
+      // duplicate points give zero tangents (NaN frames) in TubeGeometry
+      for (let i = pts.length - 1; i > 0; i--) if (pts[i].distanceTo(pts[i - 1]) < 0.5) pts.splice(i, 1);
       const mat = nearFade(
         new THREE.MeshStandardMaterial({
           color: accent[k % accent.length],

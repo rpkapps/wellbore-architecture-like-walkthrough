@@ -47,6 +47,19 @@ void main(){
 }`,
 };
 
+/** Replaces NaN / Inf pixels and clamps extreme HDR values before bloom can smear them. */
+const SanitizePass = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+bool bad(float v){ return !(v == v) || abs(v) > 60000.0; }
+void main(){
+  vec4 c = texture2D(tDiffuse, vUv);
+  if (bad(c.r) || bad(c.g) || bad(c.b) || bad(c.a)) c = vec4(0.0, 0.0, 0.0, 1.0);
+  gl_FragColor = vec4(clamp(c.rgb, 0.0, 48.0), clamp(c.a, 0.0, 1.0));
+}`,
+};
+
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly labelRenderer: CSS2DRenderer;
@@ -118,8 +131,10 @@ export class Engine {
     const rt = new THREE.WebGLRenderTarget(container.clientWidth, container.clientHeight, { type: THREE.HalfFloatType, samples: this.quality === 'low' ? 0 : 4 });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new ShaderPass(SanitizePass));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(container.clientWidth, container.clientHeight), 0.32, 0.55, 0.88);
-    if (this.quality !== 'low') this.composer.addPass(this.bloom);
+    this.bloom.enabled = this.quality !== 'low';
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.grade = new ShaderPass(GradePass);
     this.composer.addPass(this.grade);
@@ -143,6 +158,12 @@ export class Engine {
   setInsets(left: number, right: number) {
     this.insets = { left, right };
     this.resize();
+  }
+
+  /** Glow + film grade can be switched off from the Display panel. */
+  setPostFx(on: boolean) {
+    this.bloom.enabled = on;
+    this.grade.enabled = on;
   }
 
   resize() {

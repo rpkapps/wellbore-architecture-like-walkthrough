@@ -143,7 +143,9 @@ vec3 perturbNormalH(vec3 surf_pos, vec3 surf_norm, float hgt, float strength){
   float det = dot(sx, r1);
   vec2 dh = vec2(dFdx(hgt), dFdy(hgt)) * strength;
   vec3 grad = sign(det) * (dh.x * r1 + dh.y * r2);
-  return normalize(abs(det) * surf_norm - grad);
+  vec3 r = abs(det) * surf_norm - grad;
+  // never normalise a zero vector (NaN) at grazing angles or sub-pixel footprints
+  return dot(r, r) > 1e-20 ? normalize(r) : surf_norm;
 }
 `;
 
