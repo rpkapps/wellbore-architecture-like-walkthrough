@@ -1,9 +1,9 @@
 {
-  "name": "volve-wellbore-twin",
+  "name": "borewalk",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Photorealistic web-based 3D wellbore digital twin preloaded with real Equinor Volve field data",
+  "description": "BoreWalk — photorealistic web-based 3D wellbore walkthrough, preloaded with real Equinor Volve open data",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

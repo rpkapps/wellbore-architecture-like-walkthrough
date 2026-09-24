@@ -367,7 +367,7 @@ export class InterpretationDrawer {
     if (!w.logs || !w.petro) return;
     const p = w.petro;
     const lines = [
-      `# ${w.name} — calculated interpretation (Volve Wellbore Digital Twin). Parameters: ${JSON.stringify(w.params)}`,
+      `# ${w.name} — calculated interpretation (BoreWalk). Parameters: ${JSON.stringify(w.params)}`,
       'DEPTH_M,VSH_CALC,PHIE_CALC,SW_CALC,SO_CALC,HCPV_CALC,NET,PAY',
     ];
     const f = (v: number) => (Number.isFinite(v) ? v.toFixed(4) : '');

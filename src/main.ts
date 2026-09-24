@@ -16,8 +16,8 @@ async function boot() {
       'div',
       { class: 'loader-inner' },
       h('div', { class: 'brand-mark', style: 'width:40px;height:40px;border-radius:11px', html: LOGO.replace(/18/g, '24') }),
-      h('h1', {}, 'Volve Wellbore Digital Twin'),
-      h('p', {}, 'Loading real Equinor Volve field data — well logs, directional surveys, formation picks, operator interpretation and production history.'),
+      h('h1', {}, 'BoreWalk'),
+      h('p', {}, 'Walk a real wellbore in 3D. Loading the preloaded Equinor Volve open dataset — well logs, directional surveys, formation picks, operator interpretation and production history.'),
       h('div', { class: 'bar' }, bar),
       status,
       h(

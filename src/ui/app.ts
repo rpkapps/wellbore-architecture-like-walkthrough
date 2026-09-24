@@ -371,7 +371,7 @@ export class App {
         'div',
         { class: 'brand' },
         h('div', { class: 'brand-mark', html: LOGO }),
-        h('div', {}, h('div', { class: 'brand-title' }, 'Volve Wellbore Twin'), h('div', { class: 'brand-sub' }, `Equinor open data · ${this.field.meta.block} · North Sea`)),
+        h('div', {}, h('div', { class: 'brand-title' }, 'BoreWalk'), h('div', { class: 'brand-sub' }, `3D wellbore walkthrough · ${this.field.meta.name} open data`)),
       ),
       h('div', { class: 'divider' }),
       h('div', { class: 'well-select' }, this.wellSelect),
