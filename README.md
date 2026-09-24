@@ -10,18 +10,83 @@ A web-based 3D wellbore visualization that works like an architectural walkthrou
 
 > The screenshots were rendered with a software GPU in headless Chromium (`?q=low`: no MSAA and no bloom). On a real GPU the app renders with MSAA, bloom and adaptive resolution.
 
-## Quick start
+## Running the app
 
-Requires Node 22+ and pnpm (the version is pinned in `package.json` via `packageManager`; `corepack enable` picks it up).
+### Prerequisites
+
+- **Node.js 22 or newer**
+- **pnpm 10**. The exact version is pinned in `package.json` (`packageManager`). The easiest way to get it is `corepack enable`, which ships with Node. Alternatively run `npm install -g pnpm`.
+- A browser with **WebGL 2** and hardware acceleration enabled (current Chrome, Edge, Firefox or Safari).
+
+### 1. Install
 
 ```bash
+git clone https://github.com/rpkapps/wellbore-architecture-like-walkthrough.git
+cd wellbore-architecture-like-walkthrough
+corepack enable        # once per machine, activates the pinned pnpm
 pnpm install
-pnpm dev           # http://localhost:5173
-pnpm test          # unit tests against the real Volve files
-pnpm build         # static site in dist/ (deploy anywhere, relative paths)
 ```
 
-The app needs no backend. All data is served as static files from `public/data/volve/`, and anything you upload is parsed in the browser and never leaves it. Add `?q=low` to the URL on very weak GPUs.
+### 2. Start the development server
+
+```bash
+pnpm dev
+```
+
+Open http://localhost:5173. The app loads the preloaded Volve dataset (about 16 MB of LAS, survey, picks and production files) and then flies to the field overview. Code changes hot-reload.
+
+To open it from another device on your network (a tablet or a meeting-room screen, for example), run `pnpm dev --host` and use the network URL it prints.
+
+### 3. Build and serve a production version
+
+```bash
+pnpm build             # type-checks, then writes the static site to dist/
+pnpm preview           # serves dist/ at http://localhost:4173
+```
+
+`dist/` is a fully static site that uses relative paths, so any static host works: GitHub Pages, Netlify, S3, nginx, or a sub-folder of an existing site. It has to be served over HTTP, because opening `dist/index.html` straight from disk (`file://`) blocks the data requests. For a quick local check without Node:
+
+```bash
+cd dist && python3 -m http.server 8080    # http://localhost:8080
+```
+
+### URL options
+
+| Option | Effect |
+| --- | --- |
+| `?q=low` | Performance mode: pixel ratio 1, no MSAA, no bloom. Use it on integrated or older GPUs, remote desktops and VMs. |
+
+Even without it, the app lowers its render resolution automatically when the frame rate drops.
+
+### Tests and checks
+
+```bash
+pnpm test              # unit tests against the real Volve files (parsers, min-curvature, CPI calibration, zonation)
+pnpm typecheck         # TypeScript only
+```
+
+### Regenerating the preloaded dataset (optional)
+
+The prepared files are committed in `public/data/volve/`, so you only need this step to rebuild them from the upstream sources. It needs Python 3 with `numpy`, `pandas` and `openpyxl`, plus shallow clones of the public source repositories under the folder names the script expects:
+
+```bash
+pip install numpy pandas openpyxl
+mkdir -p ~/volve-src && cd ~/volve-src
+git clone --depth 1 https://github.com/andymcdgeo/Petrophysics-Python-Series pps
+git clone --depth 1 https://github.com/yohanesnuwara/volve-machine-learning volve-machine-learning
+git clone --depth 1 https://github.com/orkahub/PEG_Python peg
+git clone --depth 1 https://github.com/jczettl/wellbore-trajectory-uncertainty wtu
+cd -   # back to this repository
+pnpm prepare-data ~/volve-src
+```
+
+### Troubleshooting
+
+- **Blank or black viewport:** check that WebGL 2 is available (visit `chrome://gpu` or https://get.webgl.org/webgl2/) and that hardware acceleration is switched on in the browser settings.
+- **Low frame rate:** add `?q=low`, collapse the side panels, or lower *Radial exaggeration* and *Halo / fluid volume intensity* in the Scene panel.
+- **"Failed to load …" on the loading screen:** the site isn't being served from its root folder, or it was opened via `file://`. Serve `dist/` over HTTP as shown above.
+
+The app has no backend. Uploaded files are parsed in the browser and never leave it.
 
 ## What is preloaded (real data, not simulated)
 
