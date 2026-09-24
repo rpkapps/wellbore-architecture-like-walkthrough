@@ -14,7 +14,8 @@ export interface FloatingOptions {
   headExtra?: HTMLElement[];
 }
 
-const KEY = 'vwt.panels.v1';
+// v2: v1 saved positions from the first layout could land on the timeline
+const KEY = 'vwt.panels.v2';
 
 function loadPos(): Record<string, { x: number; y: number; w: number; h: number }> {
   try {
@@ -53,11 +54,43 @@ export class FloatingPanel {
     this.el.style.width = `${opts.width}px`;
     this.el.style.height = `${opts.height}px`;
     this.bindDrag();
-    new ResizeObserver(() => {
-      this.onResize?.();
-      if (this.placed && !this.el.classList.contains('hidden')) this.save();
-    }).observe(this.el);
+    // remember a size only when the user resizes it (the CSS resize grip), never from layout
+    this.el.addEventListener('pointerdown', (e) => {
+      const r = this.el.getBoundingClientRect();
+      if (e.clientX > r.right - 18 && e.clientY > r.bottom - 18) this.userResizing = true;
+    });
+    window.addEventListener('pointerup', () => {
+      if (!this.userResizing) return;
+      this.userResizing = false;
+      this.clamp();
+      this.save();
+    });
+    new ResizeObserver(() => this.onResize?.()).observe(this.el);
+    window.addEventListener('resize', () => {
+      if (this.visible) this.clamp();
+    });
     document.body.appendChild(this.el);
+  }
+
+  private userResizing = false;
+
+  /**
+   * Keep the window inside the free area between the top bar and the timeline
+   * (and on screen), so it can never cover the play button or the scrubber.
+   */
+  clamp() {
+    const W = window.innerWidth;
+    const top = (document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 64) + 8;
+    const bottom = (document.querySelector('.timeline')?.getBoundingClientRect().top ?? window.innerHeight - 104) - 8;
+    const r = this.el.getBoundingClientRect();
+    const h = Math.max(120, Math.min(r.height, bottom - top));
+    const w = Math.min(r.width, W - 16);
+    const x = Math.max(8, Math.min(W - w - 8, r.left));
+    const y = Math.max(top, Math.min(bottom - h, r.top));
+    if (h !== r.height) this.el.style.height = `${h}px`;
+    if (w !== r.width) this.el.style.width = `${w}px`;
+    this.el.style.left = `${x}px`;
+    this.el.style.top = `${y}px`;
   }
 
   get visible() {
@@ -67,6 +100,7 @@ export class FloatingPanel {
   show() {
     if (!this.placed) this.place();
     this.el.classList.remove('hidden');
+    this.clamp();
     requestAnimationFrame(() => this.onResize?.());
   }
 
@@ -165,6 +199,7 @@ export class FloatingPanel {
       if (!start) return;
       start = null;
       this.el.classList.remove('dragging');
+      this.clamp();
       this.save();
     };
     this.head.addEventListener('pointerup', end);

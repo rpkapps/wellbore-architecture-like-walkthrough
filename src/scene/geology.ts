@@ -124,6 +124,8 @@ export class GeologyModel {
   forceTransparent = false;
   /** sun shadows: opaque slabs cast, every slab receives */
   shadows = false;
+  /** called after visibility / opacity changes (e.g. to refresh the static shadow map) */
+  onStateChange?: () => void;
 
   setGuided(on: boolean) {
     if (this.forceTransparent === on) return;
@@ -154,6 +156,7 @@ export class GeologyModel {
     }
     if (this.highlight) this.setHighlight(this.highlight);
     this.sortForCamera(this.lastCamY, true);
+    this.onStateChange?.();
   }
 
   private lastCamY = 0;

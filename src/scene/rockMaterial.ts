@@ -93,7 +93,8 @@ float fw = length(fwidth(vWPos));
 vec3 rc = rockColor(uLitho, uBase, vWPos, vStrat, fw, gRough, gH);
 gReal = 0.0;
 bool seabedHere = uSeabedOn > 0.5 && vWNormal.y > 0.6 && abs(vWPos.y - uSeabedY) < 6.0;
-if (uRealistic > 0.5) {
+// photo detail is skipped on see-through "glass" units: invisible there, but the costliest overdraw
+if (uRealistic > 0.5 && (opacity > 0.45 || seabedHere)) {
   // CC0 photo texture of this lithology, tinted to the formation colour; the procedural
   // bedding still modulates it so strata read from the field view
   float layer = seabedHere ? 0.0 : uLitho;

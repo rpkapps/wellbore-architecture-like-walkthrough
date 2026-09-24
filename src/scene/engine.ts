@@ -166,10 +166,14 @@ export class Engine {
     this.geology.onBoxChange = (b) => {
       this.env.setBox(b);
       this.fitShadowCamera();
+      this.renderer.shadowMap.needsUpdate = true;
       for (const f of this.boxListeners) f(b);
     };
     this.scene.add(this.mud.points, this.sun.target);
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // the block and platform are static: render the shadow map only when something changes
+    this.renderer.shadowMap.autoUpdate = false;
+    this.geology.onStateChange = () => (this.renderer.shadowMap.needsUpdate = true);
     this.sun.shadow.mapSize.setScalar(this.quality === 'low' ? 1024 : 4096);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 1.5;
@@ -206,6 +210,7 @@ export class Engine {
       o.receiveShadow = on;
     });
     this.env.sea.receiveShadow = on;
+    this.renderer.shadowMap.needsUpdate = true;
     this.scene.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
       if (Array.isArray(m)) m.forEach((x) => (x.needsUpdate = true));
@@ -311,7 +316,9 @@ export class Engine {
     const loop = (ts: number) => {
       requestAnimationFrame(loop);
       this.timer.update(ts);
-      const dt = Math.min(0.05, this.timer.getDelta());
+      // capped so a stall cannot teleport the camera, but loose enough that playback
+      // keeps its speed at low frame rates (a 0.05 s cap halved it below 20 fps)
+      const dt = Math.min(0.2, this.timer.getDelta());
       this.tick(dt);
     };
     requestAnimationFrame(loop);

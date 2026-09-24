@@ -876,6 +876,7 @@ export class App {
 
   // ------------------------------------------------------------------ per-frame UI sync
   private lastMdShown = -1;
+  private playIconState: boolean | null = null;
   private frame(dt = 0.016) {
     for (const m of this.modules.values())
       if (m.frame && this.flags.on(m.id))
@@ -888,7 +889,12 @@ export class App {
     const rig = e.rig;
     const w = e.activeWell;
     const md = rig.md;
-    this.playBtn.innerHTML = rig.playing ? I.pause : I.play;
+    // swap the icon only when the state changes: rewriting it every frame replaces the element
+    // under the cursor between mousedown and mouseup, and the browser then drops the click
+    if (this.playIconState !== rig.playing) {
+      this.playIconState = rig.playing;
+      this.playBtn.innerHTML = rig.playing ? I.pause : I.play;
+    }
     if (Math.abs(md - this.lastMdShown) > 0.01) {
       this.lastMdShown = md;
       const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
