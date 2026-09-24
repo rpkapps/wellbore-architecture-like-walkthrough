@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { FieldModel, Well } from '../data/dataset';
 import { sameWell } from '../data/csv';
 import type { Coords } from './coords';
@@ -313,6 +314,7 @@ if (uDetail > 0.5) {
       l.position.set(p[0], p[1], p[2]);
       this.platform.add(l);
     }
+    this.mergePlatform();
     this.platform.traverse((o) => (o.userData = { kind: 'platform' }));
     const el = document.createElement('div');
     el.className = 'label3d platform';
@@ -320,6 +322,34 @@ if (uDetail > 0.5) {
     const l = new CSS2DObject(el);
     l.position.set(0, base + derrickH + 12, 0);
     this.platform.add(l);
+  }
+
+  /** Collapse the ~190 platform parts into one mesh per material: draw calls, not triangles, are its cost. */
+  private mergePlatform() {
+    this.platform.updateMatrixWorld(true);
+    const toLocal = this.platform.matrixWorld.clone().invert();
+    const parts: THREE.Mesh[] = [];
+    this.platform.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) parts.push(o as THREE.Mesh);
+    });
+    const byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+    const sources = new Set<THREE.BufferGeometry>();
+    for (const m of parts) {
+      sources.add(m.geometry);
+      const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+      g.clearGroups();
+      g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(toLocal, m.matrixWorld));
+      const mat = m.material as THREE.Material;
+      if (!byMaterial.has(mat)) byMaterial.set(mat, []);
+      byMaterial.get(mat)!.push(g);
+    }
+    this.platform.clear();
+    for (const [mat, geos] of byMaterial) {
+      const merged = mergeGeometries(geos);
+      geos.forEach((g) => g.dispose());
+      if (merged) this.platform.add(new THREE.Mesh(merged, mat));
+    }
+    sources.forEach((g) => g.dispose());
   }
 
   update(time: number, underwater: boolean) {
