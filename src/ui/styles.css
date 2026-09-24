@@ -1514,3 +1514,125 @@ body.right-collapsed .inspector {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ import guide */
+.guide details {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+.guide details[open] {
+  background: rgba(255, 255, 255, 0.035);
+}
+.guide summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  flex-wrap: wrap;
+}
+.guide summary::-webkit-details-marker {
+  display: none;
+}
+.guide summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-45deg);
+  transition: transform 0.2s var(--ease);
+  align-self: center;
+}
+.guide details[open] summary::before {
+  transform: rotate(45deg);
+}
+.guide summary b {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.guide summary .faint {
+  font-size: 11px;
+}
+.guide .gbody {
+  padding: 2px 12px 12px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.guide .grow {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.guide .gk {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding-top: 2px;
+}
+.guide code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.guide ul.src {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.guide ul.src a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.guide ul.src a:hover {
+  text-decoration: underline;
+}
+.guide ul.src a::after {
+  content: ' ↗';
+  font-size: 10px;
+  opacity: 0.7;
+}
+.guide .tag {
+  margin-left: 8px;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.guide .tag.direct {
+  color: var(--reconstructed);
+  border-color: rgba(127, 216, 180, 0.35);
+}
+.guide ul.src .faint {
+  font-size: 11px;
+  margin-top: 1px;
+}
+@media (max-width: 900px) {
+  .guide .grow {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}

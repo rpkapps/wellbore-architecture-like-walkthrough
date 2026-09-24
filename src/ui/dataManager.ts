@@ -1,5 +1,6 @@
 import { Well } from '../data/dataset';
-import { findColumn, logsFromTable, parseCSV, productionFromTable, surveyFromTable, topsFromTable, type Table } from '../data/csv';
+import { chooseWell, findColumn, COLS, logsFromTable, productionFromTable, surveyFromTable, topsFromTable, type Table } from '../data/csv';
+import { detectKind, type ImportKind } from '../data/importers';
 import { parseLAS, sampleCurve } from '../data/las';
 import { Trajectory, stationsFromSurvey } from '../data/trajectory';
 import type { LogSet } from '../data/types';
@@ -7,22 +8,96 @@ import type { App } from './app';
 import { chip, download, h } from './dom';
 import { I } from './icons';
 
-type Kind = 'las' | 'logs' | 'tops' | 'survey' | 'production';
+type Kind = ImportKind;
 type Target = 'supplement' | 'replace' | 'new';
+type DepthUnit = 'auto' | 'm' | 'ft';
 
-export function detectKind(name: string, text: string): { kind: Kind; table?: Table } {
-  if (/\.las$/i.test(name) || /^\s*~V/im.test(text.slice(0, 2000))) return { kind: 'las' };
-  const t = parseCSV(text);
-  const H = t.headers;
-  const has = (c: string[]) => findColumn(H, c) >= 0;
-  if (has(['DATEPRD', 'DATE', 'YEAR']) && has(['BOREOILVOL', 'OIL', 'OILSM3', 'QO', 'BOREWIVOL', 'WI', 'GAS'])) return { kind: 'production', table: t };
-  if (has(['INC', 'INCL', 'INCLINATION']) && has(['AZI', 'AZIMUTH', 'AZ'])) return { kind: 'survey', table: t };
-  if (has(['TVD']) && has(['NS', 'NORTH']) && has(['EW', 'EAST']) && !has(['PICKS', 'FORMATION'])) return { kind: 'survey', table: t };
-  if (has(['PICKS', 'PICK', 'FORMATION', 'TOP', 'SURFACE', 'HORIZON', 'MARKER', 'NAME'])) return { kind: 'tops', table: t };
-  if (H.length === 2 && H[0].startsWith('COL') && t.rows.every((r) => Number.isFinite(Number(r[1])) && !Number.isFinite(Number(r[0])))) return { kind: 'tops', table: t };
-  if (has(['DEPTH', 'MD', 'DEPT'])) return { kind: 'logs', table: t };
-  throw new Error('Could not recognise the file. Expected LAS, or CSV with logs (DEPTH + curves), tops (FORMATION + MD), survey (MD + INC + AZI) or production (DATE + OIL/GAS/WATER).');
+interface Source {
+  label: string;
+  url: string;
+  note: string;
+  direct?: boolean; // single-file download, no registration
 }
+
+interface GuideEntry {
+  title: string;
+  formats: string;
+  needs: string;
+  optional: string;
+  notes: string;
+  template?: string;
+  sources: Source[];
+}
+
+const GH = 'https://github.com';
+const GUIDE: GuideEntry[] = [
+  {
+    title: 'Well logs — LAS',
+    formats: '.las (LAS 1.2 / 2.0, wrapped or unwrapped)',
+    needs: 'A <code>~Curve</code> section whose first curve is depth, and an <code>~ASCII</code> data section.',
+    optional:
+      'Curves the app plots, under any common vendor mnemonic: <code>GR</code> · deep resistivity <code>RT/ILD/LLD/RDEP/AT90</code> · shallow resistivity <code>RXO/MSFL/LLS/RMED</code> · <code>RHOB/DEN/RHOZ</code> · <code>NPHI/NEU/TNPH</code> · <code>DT/DTC/AC</code> · <code>DTS</code> · <code>CALI</code> · <code>BS</code> · <code>PEF</code>. Other curves are loaded but not plotted.',
+    notes: 'Depth in feet (<code>DEPT.F</code>) is converted to metres. The <code>NULL</code> value from the header is honoured. Calculated Sw needs RT + RHOB (+ GR for Vsh). LAS 3.0 is not supported.',
+    sources: [
+      { label: 'Volve LAS files (GitHub mirror)', url: `${GH}/andymcdgeo/Petrophysics-Python-Series/tree/master/Data/Volve`, note: 'Equinor Volve wells, e.g. 15_9-F-1A.LAS, 15-9-19_SR_COMP.las — open a file, then "Download raw file".', direct: true },
+      { label: 'Equinor Volve Data Village', url: 'https://www.equinor.com/energy/volve-data-sharing', note: 'The complete Volve release (all wells, LAS/DLIS, reports). Free registration, Equinor Open Data Licence.' },
+      { label: 'Kansas Geological Survey — digital well logs', url: 'https://www.kgs.ku.edu/Magellan/Logs/index.html', note: 'Tens of thousands of LAS files from Kansas wells, searchable by location. Depths in feet.' },
+      { label: 'NLOG — Dutch oil & gas portal', url: 'https://www.nlog.nl/en', note: 'Public well logs for Netherlands onshore and North Sea wells.' },
+      { label: 'FORCE 2020 lithology competition', url: `${GH}/bolgebrygg/Force-2020-Machine-Learning-competition`, note: 'LAS and CSV for ~100 Norwegian North Sea wells (see the data links in the README).' },
+    ],
+  },
+  {
+    title: 'Well logs — CSV',
+    formats: '.csv / .txt (comma, semicolon, tab or pipe delimited)',
+    needs: 'A depth column (<code>DEPTH</code>, <code>MD</code>, <code>DEPT</code>, <code>DEPTH_MD</code>) and one column per curve.',
+    optional: 'Units in brackets — <code>GR (API)</code>, <code>RT [ohm.m]</code>. A <code>WELL</code> column for multi-well files: when adding to an existing well its rows are used; with "Create new well" the first well in the file is used.',
+    notes: 'Curve names follow the same aliases as LAS. If depths are in feet without a unit in the header, set <b>Depth units</b> to Feet below.',
+    template: 'logs_template.csv',
+    sources: [
+      { label: 'VolveWells.csv', url: `${GH}/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/VolveWells.csv`, note: 'Volve wellbores 15/9-F-1 C, F-4 and F-7 in one file (WELL, DEPTH, GR, AC, DEN, NEU, RDEP, RMED…). Supplement 15/9-F-1 C, or create a new well for F-1 C.', direct: true },
+      { label: 'SEG 2016 ML contest — facies_vectors.csv', url: `${GH}/seg/2016-ml-contest/blob/master/facies_vectors.csv`, note: 'Real Kansas (Hugoton / Panoma) wells. Depth is in feet: choose Depth units = Feet. ILD is stored as log10.', direct: true },
+      { label: 'FORCE 2020 well-log CSV', url: `${GH}/bolgebrygg/Force-2020-Machine-Learning-competition`, note: 'Semicolon-delimited, 118 Norwegian wells, DEPTH_MD in metres. Large: best split per well first.' },
+    ],
+  },
+  {
+    title: 'Formation tops',
+    formats: '.csv / .txt / .xlsx',
+    needs: 'A name column (<code>FORMATION</code>, <code>PICK(S)</code>, <code>NAME</code>, <code>SURFACE</code>, <code>MARKER</code>) and an MD column (<code>MD</code>, <code>DEPTH</code>, <code>TOP_DEPTH</code>). A headerless two-column <code>NAME,MD</code> file also works.',
+    optional: '<code>TVD</code>, and <code>WELL</code> for multi-well pick files (filtered to the target well; "NO 15/9-…" prefixes are ignored).',
+    notes: 'Known North Sea names (Utsira, Hordaland, Draupne, Hugin, Sleipner…) map to the model stratigraphy; unknown names become new formations. Tops define the zones drawn along the well.',
+    template: 'tops_template.csv',
+    sources: [
+      { label: 'Volve official well picks', url: `${GH}/yohanesnuwara/volve-machine-learning/blob/master/Volve_well_picks_modified.csv`, note: '408 picks in 34 wellbores with MD, TVD, easting, northing.', direct: true },
+      { label: 'NPD tops for 15/9-19 SR', url: `${GH}/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/Volve/15_9_19_SR_TOPS_NPD.csv`, note: 'Headerless NAME,MD format. Pair with 15-9-19_SR_COMP.las in "Create new well".', direct: true },
+      { label: 'Sodir FactPages — wellbore lithostratigraphy', url: 'https://factpages.sodir.no/en/wellbore', note: 'Official tops for every Norwegian wellbore; export the table as CSV. The FactPages columns wlbName / lsuName / lsuTopDepth are recognised.' },
+    ],
+  },
+  {
+    title: 'Directional survey',
+    formats: '.csv / .txt / .xlsx',
+    needs: '<code>MD</code> + inclination (<code>INC</code>, <code>INCL</code>, <code>DEVI</code>) + azimuth (<code>AZI</code>, <code>AZIM</code>) — positions are computed by minimum curvature. <b>Or</b> <code>MD</code> + <code>TVD</code> + <code>NS</code> + <code>EW</code> positions.',
+    optional: 'Both angles and positions (positions are then used as given).',
+    notes: 'Angles in degrees; azimuth clockwise from grid north. Distances in metres unless the header or Depth units says feet. The survey is tied to the well\'s surface slot.',
+    template: 'survey_template.csv',
+    sources: [
+      { label: 'Volve 15/9-F-11 A definitive survey', url: `${GH}/jczettl/wellbore-trajectory-uncertainty/blob/main/data/15_9_F_11_A.csv`, note: '323 stations with MD, Incl, Azi, TVD, NS, EW.', direct: true },
+      { label: 'Volve 15/9-F-12 survey', url: `${GH}/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/Volve/15_9-F-12_Survey_Data.csv`, note: 'md, inc, azi (the field\'s top producer).', direct: true },
+      { label: 'P11-A-02 (Dutch North Sea) survey', url: `${GH}/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/P11-A-02_SURV.csv`, note: 'DEPTH, DEVI, AZIM columns — a well from the NLOG archive.', direct: true },
+    ],
+  },
+  {
+    title: 'Production',
+    formats: '.csv / .txt / .xlsx (Excel is read directly)',
+    needs: 'A date (<code>DATE</code>, <code>DATEPRD</code>) or <code>YEAR</code> + <code>MONTH</code>, and at least one volume: <code>OIL</code>, <code>GAS</code>, <code>WATER</code>, <code>WATER_INJ</code> (Volve names <code>BORE_OIL_VOL</code>… also work).',
+    optional: 'Downhole pressure (bar) and temperature (°C), WHP, choke, on-stream hours. A <code>WELL</code> column for multi-well files (e.g. "15/9-F-11" is matched to wellbore 15/9-F-11 B).',
+    notes: 'Volumes per period in Sm³. Daily vs monthly is detected from the date spacing. Dates: ISO, dd/mm/yyyy or Excel dates. FactPages million/billion Sm³ columns are converted.',
+    template: 'production_template.csv',
+    sources: [
+      { label: 'Volve production data.xlsx', url: `${GH}/yohanesnuwara/volve-machine-learning/blob/master/Volve%20production%20data.xlsx`, note: 'Equinor daily + monthly production for all Volve wells, 2007–2016. Drop the workbook in as-is: the daily sheet is used.', direct: true },
+      { label: 'Sodir FactPages — field production', url: 'https://factpages.sodir.no/en/field', note: 'Monthly production for every Norwegian field (field level, not per well); export as CSV.' },
+    ],
+  },
+];
 
 const TEMPLATES: Record<string, string> = {
   'tops_template.csv': 'FORMATION,MD,TVD\nUtsira Fm.,885,882\nHordaland Gp.,1071,1065\nDraupne Fm.,3351,2846\nHugin Fm.,3467,2884\n',
@@ -121,13 +196,13 @@ export class DataManager {
     row('Casing & hole geometry', 'inferred from bit-size log', 'reconstructed');
     row('Natural fractures', 'illustrative — no image log in package', 'schematic');
 
-    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc', style: 'display:none' }) as HTMLInputElement;
+    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc,.xlsx', style: 'display:none' }) as HTMLInputElement;
     input.onchange = () => input.files && this.handleFiles([...input.files]);
     const dz = h(
       'div',
       { class: 'dropzone', onclick: () => input.click() },
-      h('b', {}, 'Drop LAS / CSV files here, or click to browse'),
-      h('p', {}, 'Logs (LAS 1.2/2.0 or CSV), formation tops, directional survey (MD/INC/AZI or MD/TVD/NS/EW) and production (daily or monthly). File type is detected automatically.'),
+      h('b', {}, 'Drop LAS / CSV / XLSX files here, or click to browse'),
+      h('p', {}, 'Several files at once is fine — the type of each is detected automatically. See "What you can import" below for the columns each file needs and where to get real data.'),
       input,
     );
     dz.addEventListener('dragenter', () => dz.classList.add('over'));
@@ -148,15 +223,33 @@ export class DataManager {
       };
       seg.append(b);
     }
-    const tmpl = h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' });
-    for (const name of Object.keys(TEMPLATES)) tmpl.append(h('button', { class: 'btn', onclick: () => download(name, TEMPLATES[name], 'text/csv'), html: `${I.download} ${name.replace('_template.csv', '')}` }));
+    const units = h('div', { class: 'seg small' });
+    for (const [u, l] of [
+      ['auto', 'Auto (from header)'],
+      ['m', 'Metres'],
+      ['ft', 'Feet'],
+    ] as [DepthUnit, string][]) {
+      const b = h('button', { class: this.depthUnit === u ? 'on' : '' }, l);
+      b.onclick = () => {
+        this.depthUnit = u;
+        units.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+      };
+      units.append(b);
+    }
 
     this.body.append(
       h('div', { class: 'section' }, h('div', { class: 'section-title' }, h('span', { class: 'micro' }, `Active dataset — ${w.name}`), h('span', { class: 'faint', style: 'font-size:10.5px' }, m.crs)), files),
-      h('div', { class: 'section' }, h('div', { class: 'section-title' }, h('span', { class: 'micro' }, 'Upload target')), seg),
+      h(
+        'div',
+        { class: 'section' },
+        h('div', { class: 'section-title' }, h('span', { class: 'micro' }, 'Upload target')),
+        seg,
+        h('div', { class: 'row', style: 'margin-top:8px' }, h('label', {}, 'Depth units for CSV / XLSX'), units),
+      ),
       dz,
       this.log,
-      h('div', { class: 'section' }, h('div', { class: 'section-title' }, h('span', { class: 'micro' }, 'Templates')), tmpl),
+      this.guide(),
       h(
         'div',
         { class: 'section faint', style: 'font-size:11px;line-height:1.6' },
@@ -165,6 +258,59 @@ export class DataManager {
         h('div', { style: 'margin-top:6px' }, m.licence),
       ),
     );
+  }
+
+  private depthUnit: DepthUnit = 'auto';
+
+  private get depthScale(): number | undefined {
+    return this.depthUnit === 'ft' ? 0.3048 : this.depthUnit === 'm' ? 1 : undefined;
+  }
+
+  /** Per-file-type instructions with links to real, openly available data. */
+  private guide(): HTMLElement {
+    const wrap = h(
+      'div',
+      { class: 'section guide' },
+      h('div', { class: 'section-title' }, h('span', { class: 'micro' }, 'What you can import'), h('span', { class: 'faint', style: 'font-size:10.5px' }, 'with open sources of real data')),
+    );
+    GUIDE.forEach((g, i) => {
+      const src = h('ul', { class: 'src' });
+      for (const s of g.sources)
+        src.append(
+          h(
+            'li',
+            {},
+            h('a', { href: s.url, target: '_blank', rel: 'noopener noreferrer' }, s.label),
+            h('span', { class: `tag ${s.direct ? 'direct' : ''}` }, s.direct ? 'direct download' : 'data portal'),
+            h('div', { class: 'faint' }, s.note),
+          ),
+        );
+      const d = h(
+        'details',
+        { open: i === 0 },
+        h('summary', {}, h('b', {}, g.title), h('span', { class: 'faint' }, g.formats)),
+        h(
+          'div',
+          { class: 'gbody' },
+          h('div', { class: 'grow' }, h('span', { class: 'gk' }, 'Required'), h('span', { html: g.needs })),
+          h('div', { class: 'grow' }, h('span', { class: 'gk' }, 'Optional'), h('span', { html: g.optional })),
+          h('div', { class: 'grow' }, h('span', { class: 'gk' }, 'Notes'), h('span', { html: g.notes })),
+          g.template
+            ? h('div', { class: 'grow' }, h('span', { class: 'gk' }, 'Template'), h('span', {}, h('button', { class: 'btn', onclick: () => download(g.template!, TEMPLATES[g.template!], 'text/csv'), html: `${I.download} ${g.template}` })))
+            : '',
+          h('div', { class: 'grow' }, h('span', { class: 'gk' }, 'Real data'), src),
+        ),
+      );
+      wrap.append(d);
+    });
+    wrap.append(
+      h(
+        'div',
+        { class: 'faint', style: 'font-size:11px;margin-top:8px;line-height:1.5' },
+        'On GitHub pages, use "Download raw file" to save the actual file. Recommended combination to try: 15-9-19_SR_COMP.las + 15_9_19_SR_TOPS_NPD.csv with target "Create new well"; or Volve production data.xlsx while 15/9-F-12 is active.',
+      ),
+    );
+    return wrap;
   }
 
   private say(msg: string, cls: 'ok' | 'err' | '' = '') {
@@ -177,11 +323,13 @@ export class DataManager {
     let well = app.engine.activeWell;
     let createdWell: Well | null = null;
     // sort so that surveys are applied before logs/tops (needed for new wells)
-    const parsed: { f: File; text: string; kind: Kind; table?: Table }[] = [];
+    const parsed: { f: File; text: string; kind: Kind; table?: Table; sheet?: string }[] = [];
     for (const f of files) {
       try {
-        const text = await f.text();
-        const d = detectKind(f.name, text);
+        const xlsx = /\.xlsx$/i.test(f.name);
+        const text = xlsx ? '' : await f.text();
+        const d = detectKind(f.name, xlsx ? await f.arrayBuffer() : text);
+        if (d.sheet) this.say(`• ${f.name}: using sheet "${d.sheet}"`, '');
         parsed.push({ f, text, ...d });
       } catch (e) {
         this.say(`✕ ${f.name}: ${(e as Error).message}`, 'err');
@@ -198,7 +346,7 @@ export class DataManager {
         const replace = this.target === 'replace' || (createdWell !== null && createdWell === well);
         switch (p.kind) {
           case 'survey': {
-            const sv = surveyFromTable(p.table!);
+            const sv = surveyFromTable(p.table!, this.depthScale);
             const tie = { tvd: 0, ns: well.trajectory.ns[0], ew: well.trajectory.ew[0] };
             const st = stationsFromSurvey(sv.stations, sv.hasPositions, tie);
             well.trajectory = new Trajectory(st, 'user', `Uploaded survey ${p.f.name} (${sv.stations.length} stations)`, p.f.name);
@@ -207,7 +355,8 @@ export class DataManager {
           }
           case 'las':
           case 'logs': {
-            const ls = p.kind === 'las' ? parseLAS(p.text, `${p.f.name} (uploaded)`, 'user') : logsFromTable(p.table!, `${p.f.name} (uploaded)`, well.name, 'user');
+            const ls = p.kind === 'las' ? parseLAS(p.text, `${p.f.name} (uploaded)`, 'user') : logsFromTable(p.table!, `${p.f.name} (uploaded)`, well.name, 'user', this.depthScale, createdWell !== well);
+            if (p.kind === 'logs' && ls.wellName && ls.wellName !== well.name) this.say(`• ${p.f.name}: using rows of well "${ls.wellName}"`, '');
             for (const c of ls.curves.values()) c.provenance = 'user';
             well.logs = !replace && well.logs ? supplementLogs(well.logs, ls) : ls;
             well.autoCalibrate();
@@ -215,15 +364,17 @@ export class DataManager {
             break;
           }
           case 'tops': {
-            const tops = topsFromTable(p.table!, p.f.name, well.name, 'user');
+            const tops = topsFromTable(p.table!, p.f.name, well.name, 'user', this.depthScale);
             if (!tops.length) throw new Error('no tops matched this well');
             well.tops = replace ? tops : [...well.tops, ...tops].sort((a, b) => a.md - b.md);
             this.say(`✓ ${p.f.name}: ${tops.length} formation tops ${replace ? 'replaced' : 'added'}`, 'ok');
             break;
           }
           case 'production': {
-            const s = productionFromTable(p.table!, `${p.f.name} (uploaded)`, undefined, 'user');
+            const target = createdWell === well ? undefined : well.productionWell ?? well.name;
+            const s = productionFromTable(p.table!, `${p.f.name} (uploaded)`, target, 'user');
             if (!s.records.length) throw new Error('no dated production records found');
+            if (s.wellName) this.say(`• ${p.f.name}: production rows for "${s.wellName}"`, '');
             well.production = s;
             this.say(`✓ ${p.f.name}: ${s.records.length} ${s.period} production records attached`, 'ok');
             break;
@@ -251,6 +402,11 @@ export class DataManager {
       const ls = parseLAS(p.text, p.f.name, 'user');
       name = ls.wellName || name;
       maxMd = ls.depth[ls.depth.length - 1];
+    } else if (p.table) {
+      // multi-well tables: name the new well after the first well in the file
+      const wi = findColumn(p.table.headers, COLS.well);
+      const first = wi >= 0 ? chooseWell(p.table.rows.map((r) => r[wi])) ?? p.table.rows[0]?.[wi] : undefined;
+      if (first) name = first.replace(/^NO\s+/, '');
     }
     // default: vertical well from the platform slot until a survey is supplied
     const st = stationsFromSurvey(

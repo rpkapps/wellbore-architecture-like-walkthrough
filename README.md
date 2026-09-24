@@ -143,7 +143,28 @@ Oil-bearing pore space is drawn as a volume around the borehole: a soft pore net
 - **Log tracks synced with 3D**: GR/caliper, resistivity with the matching colour strip, density–neutron with crossover shading, sonic, calculated Vsh/φ, and Sw with So fill plus the CPI Sw overlay. Hovering highlights the depth in 3D, clicking travels there, the wheel scrolls and Ctrl+wheel zooms.
 - **Inspector**: click the borehole, casing, a formation, a fracture, a top, a pay interval, another well or the platform to see its data with provenance.
 - **Production**: monthly rates, cumulative oil, water cut, GOR and downhole gauges.
-- **Uploads** (drag and drop anywhere): LAS 1.2/2.0 (wrapped or not, feet converted to metres, vendor mnemonics resolved through aliases), CSV logs, formation tops (including headerless `NAME,MD`), surveys as MD/INC/AZI (minimum curvature) or MD/TVD/NS/EW, and daily or monthly production. You can **supplement** the active well (curves are resampled onto its depth grid), **replace** its data, or **create a new well**. Templates can be downloaded.
+- **Uploads** (drag and drop anywhere): LAS, CSV and Excel files for logs, tops, surveys and production. Details and real open datasets are under [Importing your own data](#importing-your-own-data).
+
+## Importing your own data
+
+Open **Data** in the top bar, or drop files anywhere on the page. Choose whether to **supplement** the active well, **replace** its data, or **create a new well**. Each file's type is detected automatically. For CSV/XLSX files with depths in feet and no unit in the header, set *Depth units* to Feet. The same guide, with templates, is built into the Data manager under *What you can import*.
+
+| File type | Required | Real open data to try |
+| --- | --- | --- |
+| **Well logs (LAS 1.2/2.0)** | `~Curve` section (first curve = depth) + `~ASCII` data. Plotted curves under any vendor mnemonic: GR, RT/ILD/LLD/RDEP, RXO/MSFL/RMED, RHOB/DEN, NPHI/NEU, DT/AC, DTS, CALI, BS, PEF. Feet are converted. | [Volve LAS files (GitHub mirror)](https://github.com/andymcdgeo/Petrophysics-Python-Series/tree/master/Data/Volve) · [Equinor Volve Data Village](https://www.equinor.com/energy/volve-data-sharing) (free registration) · [Kansas Geological Survey digital logs](https://www.kgs.ku.edu/Magellan/Logs/index.html) · [NLOG (Netherlands)](https://www.nlog.nl/en) · [FORCE 2020 Norwegian wells](https://github.com/bolgebrygg/Force-2020-Machine-Learning-competition) |
+| **Well logs (CSV)** | Depth column (`DEPTH`, `MD`, `DEPT`, `DEPTH_MD`) + one column per curve; optional `WELL` column for multi-well files | [VolveWells.csv](https://github.com/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/VolveWells.csv) (15/9-F-1 C, F-4, F-7) · [SEG 2016 facies_vectors.csv](https://github.com/seg/2016-ml-contest/blob/master/facies_vectors.csv) (Kansas, depth in **feet**) · [FORCE 2020 CSV](https://github.com/bolgebrygg/Force-2020-Machine-Learning-competition) |
+| **Formation tops** | Name column (`FORMATION`, `PICK(S)`, `NAME`, `SURFACE`) + `MD`; optional `TVD`, `WELL`. Headerless `NAME,MD` also works. | [Volve official picks, 34 wellbores](https://github.com/yohanesnuwara/volve-machine-learning/blob/master/Volve_well_picks_modified.csv) · [NPD tops for 15/9-19 SR](https://github.com/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/Volve/15_9_19_SR_TOPS_NPD.csv) · [Sodir FactPages wellbore lithostratigraphy](https://factpages.sodir.no/en/wellbore) (`wlbName`/`lsuName`/`lsuTopDepth` recognised) |
+| **Directional survey** | `MD` + `INC`/`INCL`/`DEVI` + `AZI`/`AZIM` (minimum curvature), or `MD` + `TVD` + `NS` + `EW` | [Volve 15/9-F-11 A definitive survey](https://github.com/jczettl/wellbore-trajectory-uncertainty/blob/main/data/15_9_F_11_A.csv) · [Volve 15/9-F-12](https://github.com/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/Volve/15_9-F-12_Survey_Data.csv) · [P11-A-02, Dutch North Sea](https://github.com/andymcdgeo/Petrophysics-Python-Series/blob/master/Data/P11-A-02_SURV.csv) |
+| **Production (CSV or .xlsx)** | `DATE`/`DATEPRD` (or `YEAR` + `MONTH`) + any of `OIL`, `GAS`, `WATER`, `WATER_INJ` in Sm³ per period; optional downhole P/T, WHP, choke, hours, `WELL` | [Volve production data.xlsx](https://github.com/yohanesnuwara/volve-machine-learning/blob/master/Volve%20production%20data.xlsx) (drop the workbook in as-is) · [Sodir FactPages field production](https://factpages.sodir.no/en/field) (million/billion Sm³ columns converted) |
+
+On GitHub file pages, use **Download raw file** to save the actual file. Good combinations to try:
+
+- `15-9-19_SR_COMP.las` + `15_9_19_SR_TOPS_NPD.csv` with **Create new well**.
+- `Volve production data.xlsx` while 15/9-F-12 is active: the matching well's daily records are picked automatically.
+
+Multi-well files are matched to the target well by name. For example, production reported under "15/9-F-11" attaches to wellbore 15/9-F-11 B. When adding to an existing well that isn't in the file, the import fails with a clear message rather than using another well's data.
+
+The Volve, SEG, P11-A-02 and Volve-workbook imports were tested end to end with the real files. The Sodir FactPages column mapping follows the published attribute names but could not be tested from the build environment.
 
 ## Honest limitations
 

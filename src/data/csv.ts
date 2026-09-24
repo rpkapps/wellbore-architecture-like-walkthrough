@@ -86,22 +86,71 @@ const num = (s: string | undefined) => {
   return Number.isFinite(v) && v !== -999.25 && v !== -9999 ? v : NaN;
 };
 
+/** Column aliases shared by file-type detection and the importers. */
+export const COLS = {
+  depth: ['DEPTH', 'MD', 'DEPT', 'MDM', 'MEASUREDDEPTH', 'DEPTHM', 'DEPTHMD'],
+  well: ['WELL', 'WELLNAME', 'UWI', 'WELLBORE', 'WLBNAME', 'NPDWELLBORENAME', 'WELLBORENAME'],
+  topName: ['LSUNAME', 'PICKS', 'PICK', 'FORMATION', 'NAME', 'TOP', 'SURFACE', 'HORIZON', 'ZONE', 'MARKER'],
+  topMd: ['LSUTOPDEPTH', 'MD', 'DEPTH', 'TOPMD', 'MDTOP', 'TOPDEPTH', 'MEASUREDDEPTH'],
+  inc: ['INC', 'INCL', 'INCLINATION', 'DEVI', 'DEVIATION', 'ANGLE'],
+  azi: ['AZI', 'AZIM', 'AZIMUTH', 'AZ', 'HAZI', 'DIRECTION'],
+  date: ['DATEPRD', 'DATE', 'DAY', 'TIME', 'PERIOD'],
+  year: ['PRFYEAR', 'YEAR'],
+  month: ['PRFMONTH', 'MONTH'],
+  oil: ['BOREOILVOL', 'PRFPRDOILNETMILLSM3', 'OILSM3', 'OIL', 'QO', 'OILRATE', 'OILVOL'],
+  gas: ['BOREGASVOL', 'PRFPRDGASNETBILLSM3', 'GASSM3', 'GAS', 'QG', 'GASRATE', 'GASVOL'],
+  water: ['BOREWATVOL', 'PRFPRDPRODUCEDWATERINFIELDMILLSM3', 'WATERSM3', 'WATER', 'QW', 'WATERRATE', 'WATVOL'],
+  waterInj: ['BOREWIVOL', 'WATERINJSM3', 'WATERINJ', 'WI', 'INJECTION'],
+};
+
+/**
+ * Pick the rows' well that matches the target well: exact match, the only well
+ * in the file, or a name that is a prefix of the other (e.g. production reported
+ * as "15/9-F-11" for wellbore "15/9-F-11 B"). Returns null when ambiguous.
+ */
+export function chooseWell(names: string[], target?: string): string | null {
+  const uniq = [...new Set(names.filter(Boolean))];
+  if (uniq.length === 0) return null;
+  if (uniq.length === 1) return uniq[0];
+  if (!target) return null;
+  const k = (s: string) => s.toUpperCase().replace(/^NO\s+/, '').replace(/[^A-Z0-9]/g, '');
+  const tk = k(target);
+  const exact = uniq.find((n) => k(n) === tk);
+  if (exact) return exact;
+  const pref = uniq.filter((n) => tk.startsWith(k(n)) || k(n).startsWith(tk)).sort((a, b) => k(b).length - k(a).length);
+  return pref[0] ?? null;
+}
+
+function wellError(names: string[], target?: string): Error {
+  const list = [...new Set(names)].slice(0, 12).join(', ');
+  return new Error(`File contains several wells (${list}${new Set(names).size > 12 ? ', …' : ''}) and none matches "${target ?? ''}". Rename the well or use "Create new well".`);
+}
+
+/** Depth multiplier: explicit override, else from a unit in the header, else metres. */
+function depthScaleFor(header: string, override?: number): number {
+  if (override) return override;
+  return /\b(ft|feet|foot)\b/i.test(unitFromHeader(header)) ? 0.3048 : 1;
+}
+
 // --------------------------------------------------------------------------- log CSV
-export function logsFromTable(t: Table, source: string, wellName: string, provenance: Provenance = 'user'): LogSet {
-  const di = findColumn(t.headers, ['DEPTH', 'MD', 'DEPT', 'MDM', 'MEASUREDDEPTH', 'DEPTHM']);
+/**
+ * @param strict when true (adding to an existing well) a multi-well file must contain that well;
+ *               otherwise the first well in the file is used.
+ */
+export function logsFromTable(t: Table, source: string, wellName: string, provenance: Provenance = 'user', depthScale?: number, strict = false): LogSet {
+  const di = findColumn(t.headers, COLS.depth);
   if (di < 0) throw new Error('No depth column (DEPTH / MD / DEPT) found in CSV.');
-  const wi = findColumn(t.headers, ['WELL', 'WELLNAME', 'UWI']);
+  const wi = findColumn(t.headers, COLS.well);
   let rows = t.rows;
   if (wi >= 0) {
-    const names = [...new Set(rows.map((r) => r[wi]))];
-    if (names.length > 1) {
-      const pick = names.find((n) => n === wellName) ?? names[0];
-      rows = rows.filter((r) => r[wi] === pick);
-      wellName = pick;
-    } else if (names[0]) wellName = names[0];
+    const names = rows.map((r) => r[wi]);
+    const pick = chooseWell(names, wellName) ?? (strict ? null : names[0]);
+    if (!pick) throw wellError(names, wellName);
+    rows = rows.filter((r) => r[wi] === pick);
+    wellName = pick;
   }
-  const feet = /ft|feet/i.test(unitFromHeader(t.headers[di]));
-  const depth = new Float64Array(rows.map((r) => num(r[di]) * (feet ? 0.3048 : 1)));
+  const scale = depthScaleFor(t.headers[di], depthScale);
+  const depth = new Float64Array(rows.map((r) => num(r[di]) * scale));
   const curves = new Map<string, Curve>();
   t.headers.forEach((h, i) => {
     if (i === di || i === wi) return;
@@ -118,11 +167,11 @@ export function logsFromTable(t: Table, source: string, wellName: string, proven
 }
 
 // --------------------------------------------------------------------------- tops
-export function topsFromTable(t: Table, source: string, wellFilter?: string, provenance: Provenance = 'user'): Top[] {
-  let ni = findColumn(t.headers, ['PICKS', 'PICK', 'FORMATION', 'NAME', 'TOP', 'SURFACE', 'HORIZON', 'ZONE', 'MARKER']);
-  let mi = findColumn(t.headers, ['MD', 'DEPTH', 'TOPMD', 'MDTOP', 'TOPDEPTH', 'MEASUREDDEPTH']);
+export function topsFromTable(t: Table, source: string, wellFilter?: string, provenance: Provenance = 'user', depthScale?: number): Top[] {
+  let ni = findColumn(t.headers, COLS.topName);
+  let mi = findColumn(t.headers, COLS.topMd);
   const ti = findColumn(t.headers, ['TVD', 'TVDRKB', 'TVDDF']);
-  const wi = findColumn(t.headers, ['WELL', 'WELLNAME', 'WELLBORE']);
+  const wi = findColumn(t.headers, COLS.well);
   const oi = findColumn(t.headers, ['OBS', 'OBSERVATION']);
   if (ni < 0 || mi < 0) {
     // headerless "NAME,DEPTH"
@@ -136,16 +185,23 @@ export function topsFromTable(t: Table, source: string, wellFilter?: string, pro
       mi = 1;
     } else throw new Error('Tops file needs a formation name column and a depth (MD) column.');
   }
+  const scale = mi >= 0 && !t.headers[mi].startsWith('COL') ? depthScaleFor(t.headers[mi], depthScale) : depthScale ?? 1;
+  let pickWell: string | null = null;
+  if (wi >= 0) {
+    const names = t.rows.map((r) => r[wi]);
+    pickWell = chooseWell(names, wellFilter);
+    if (!pickWell) throw wellError(names, wellFilter);
+  }
   const out: Top[] = [];
   for (const r of t.rows) {
-    if (wi >= 0 && wellFilter && !sameWell(r[wi], wellFilter)) continue;
-    const md = num(r[mi]);
+    if (pickWell !== null && r[wi] !== pickWell) continue;
+    const md = num(r[mi]) * scale;
     if (!Number.isFinite(md) || !r[ni]) continue;
     out.push({
       name: r[ni],
       formationId: formationIdForPick(r[ni]),
       md,
-      tvd: ti >= 0 ? num(r[ti]) : undefined,
+      tvd: ti >= 0 ? num(r[ti]) * scale : undefined,
       obs: oi >= 0 ? num(r[oi]) : undefined,
       source,
       provenance,
@@ -191,10 +247,10 @@ export interface ParsedSurvey {
   note: string;
 }
 
-export function surveyFromTable(t: Table): ParsedSurvey {
+export function surveyFromTable(t: Table, depthScale?: number): ParsedSurvey {
   const mi = findColumn(t.headers, ['MD', 'DEPTH', 'MEASUREDDEPTH', 'DEPT']);
-  const ii = findColumn(t.headers, ['INC', 'INCL', 'INCLINATION', 'DEVI', 'ANGLE']);
-  const ai = findColumn(t.headers, ['AZI', 'AZIM', 'AZIMUTH', 'AZ', 'HAZI', 'DIRECTION']);
+  const ii = findColumn(t.headers, COLS.inc);
+  const ai = findColumn(t.headers, COLS.azi);
   const ti = findColumn(t.headers, ['TVD']);
   const nsi = findColumn(t.headers, ['NS', 'NORTH', 'DY', 'NSOFFSET', 'N', 'Y']);
   const ewi = findColumn(t.headers, ['EW', 'EAST', 'DX', 'EWOFFSET', 'E', 'X']);
@@ -202,14 +258,15 @@ export function surveyFromTable(t: Table): ParsedSurvey {
   const hasAngles = ii >= 0 && ai >= 0;
   const hasPositions = ti >= 0 && nsi >= 0 && ewi >= 0;
   if (!hasAngles && !hasPositions) throw new Error('Survey needs INC + AZI columns, or TVD + NS + EW columns.');
+  const k = depthScaleFor(t.headers[mi], depthScale);
   const stations: SurveyStation[] = t.rows
     .map((r) => ({
-      md: num(r[mi]),
+      md: num(r[mi]) * k,
       inc: hasAngles ? num(r[ii]) : NaN,
       azi: hasAngles ? num(r[ai]) : NaN,
-      tvd: ti >= 0 ? num(r[ti]) : NaN,
-      ns: nsi >= 0 ? num(r[nsi]) : NaN,
-      ew: ewi >= 0 ? num(r[ewi]) : NaN,
+      tvd: ti >= 0 ? num(r[ti]) * k : NaN,
+      ns: nsi >= 0 ? num(r[nsi]) * k : NaN,
+      ew: ewi >= 0 ? num(r[ewi]) * k : NaN,
     }))
     .filter((s) => Number.isFinite(s.md))
     .sort((a, b) => a.md - b.md);
@@ -219,14 +276,14 @@ export function surveyFromTable(t: Table): ParsedSurvey {
 // --------------------------------------------------------------------------- production
 export function productionFromTable(t: Table, source: string, wellFilter?: string, provenance: Provenance = 'user'): ProductionSeries {
   const c = (names: string[]) => findColumn(t.headers, names);
-  const di = c(['DATEPRD', 'DATE', 'DAY', 'TIME', 'PERIOD']);
-  const yi = c(['YEAR']);
-  const mo = c(['MONTH']);
-  const wi = c(['NPDWELLBORENAME', 'WELL', 'WELLBORENAME', 'WELLNAME']);
-  const oi = c(['BOREOILVOL', 'OILSM3', 'OIL', 'QO', 'OILRATE', 'OILVOL']);
-  const gi = c(['BOREGASVOL', 'GASSM3', 'GAS', 'QG', 'GASRATE', 'GASVOL']);
-  const wti = c(['BOREWATVOL', 'WATERSM3', 'WATER', 'QW', 'WATERRATE', 'WATVOL']);
-  const wii = c(['BOREWIVOL', 'WATERINJSM3', 'WI', 'WATERINJ', 'INJECTION']);
+  const di = c(COLS.date);
+  const yi = c(COLS.year);
+  const mo = c(COLS.month);
+  const wi = c(['NPDWELLBORENAME', 'WELL', 'WELLBORENAME', 'WELLNAME', 'PRFINFORMATIONCARRIER', 'FIELD']);
+  const oi = c(COLS.oil);
+  const gi = c(COLS.gas);
+  const wti = c(COLS.water);
+  const wii = c(COLS.waterInj);
   const hi = c(['ONSTREAMHRS', 'HOURS', 'ONSTREAM', 'UPTIME']);
   const pi = c(['AVGDOWNHOLEPRESSURE', 'BHP', 'PBH']);
   const ti = c(['AVGDOWNHOLETEMPERATURE', 'BHT', 'TEMPERATURE']);
@@ -234,11 +291,19 @@ export function productionFromTable(t: Table, source: string, wellFilter?: strin
   const chi = c(['AVGCHOKESIZEP', 'CHOKE']);
   if (di < 0 && (yi < 0 || mo < 0)) throw new Error('Production file needs a DATE column (or YEAR + MONTH).');
   if (oi < 0 && gi < 0 && wti < 0 && wii < 0) throw new Error('Production file needs oil, gas, water or injection columns.');
+  // FactPages-style volume columns are reported in million / billion Sm3
+  const unitScale = (i: number) => (i < 0 ? 1 : /bill/i.test(t.headers[i]) ? 1e9 : /mill/i.test(t.headers[i]) ? 1e6 : 1);
+  const [so, sg, sw, swi] = [unitScale(oi), unitScale(gi), unitScale(wti), unitScale(wii)];
+  let pickWell: string | null = null;
+  if (wi >= 0) {
+    const names = t.rows.map((r) => r[wi]).filter((n) => n && n !== 'Wellbore name');
+    pickWell = chooseWell(names, wellFilter) ?? (wellFilter ? null : names[0] ?? null);
+    if (!pickWell) throw wellError(names, wellFilter);
+  }
   const records: ProductionRecord[] = [];
-  let wellName = wellFilter ?? '';
+  const wellName = pickWell ?? wellFilter ?? '';
   for (const r of t.rows) {
-    if (wi >= 0 && wellFilter && !sameWell(r[wi], wellFilter)) continue;
-    if (wi >= 0 && !wellName) wellName = r[wi];
+    if (pickWell !== null && r[wi] !== pickWell) continue;
     let tm = NaN;
     if (di >= 0) tm = parseDate(r[di]);
     else tm = Date.UTC(num(r[yi]), num(r[mo]) - 1, 1);
@@ -247,10 +312,10 @@ export function productionFromTable(t: Table, source: string, wellFilter?: strin
     records.push({
       t: tm,
       hours: v(hi),
-      oil: v(oi) || 0,
-      gas: v(gi) || 0,
-      water: v(wti) || 0,
-      waterInj: v(wii) || 0,
+      oil: (v(oi) || 0) * so,
+      gas: (v(gi) || 0) * sg,
+      water: (v(wti) || 0) * sw,
+      waterInj: (v(wii) || 0) * swi,
       bhp: v(pi) > 0 ? v(pi) : undefined,
       bht: v(ti) > 0 ? v(ti) : undefined,
       whp: v(whi) > 0 ? v(whi) : undefined,
@@ -269,6 +334,11 @@ function median(a: number[]) {
 
 export function parseDate(s: string): number {
   if (!s) return NaN;
+  // Excel serial day numbers (dates read from .xlsx cells)
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const v = Number(s);
+    if (v > 20000 && v < 80000) return Math.round((Math.floor(v) - 25569) * 86400e3);
+  }
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
   if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
   m = /^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/.exec(s); // dd/mm/yyyy (European, as used by Volve)
