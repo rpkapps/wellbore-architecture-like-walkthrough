@@ -288,6 +288,22 @@ normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz) * (gl_FrontFacing ? 1.0 : -
   }
 }
 
+/** Fade geometry that comes close to the camera (keeps neighbouring wells from crowding close-ups). */
+function nearFade<T extends THREE.Material>(mat: T, near = 70, far = 320): T {
+  mat.transparent = true;
+  mat.depthWrite = false;
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFadeW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvFadeW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFadeW;')
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>\ngl_FragColor.a *= smoothstep(${near.toFixed(1)}, ${far.toFixed(1)}, distance(vFadeW, cameraPosition));`);
+  };
+  mat.customProgramCacheKey = () => `nearfade-${near}-${far}`;
+  return mat;
+}
+
 /** Trajectories of the other Volve wellbores (context) and of non-active detailed wells. */
 export class WellPaths {
   readonly group = new THREE.Group();
@@ -310,7 +326,7 @@ export class WellPaths {
       const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
       return new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(600, pts.length * 2), radius, 8, false), mat);
     };
-    const ctxMat = new THREE.MeshStandardMaterial({ color: 0x8795a3, roughness: 0.5, metalness: 0.4, transparent: true, opacity: 0.55, depthWrite: false });
+    const ctxMat = nearFade(new THREE.MeshStandardMaterial({ color: 0x8795a3, roughness: 0.5, metalness: 0.4, opacity: 0.55 }));
     for (const c of this.field.context) {
       const pts: THREE.Vector3[] = [];
       for (let i = 0; i < c.md.length; i++) pts.push(this.coords.toScene(c.ns[i], c.ew[i], c.tvd[i], new THREE.Vector3()));
@@ -330,14 +346,19 @@ export class WellPaths {
       const t = w.trajectory;
       for (let i = 0; i < t.md.length; i += 5) pts.push(this.coords.toScene(t.ns[i], t.ew[i], t.tvd[i], new THREE.Vector3()));
       pts.push(this.coords.toScene(t.ns[t.md.length - 1], t.ew[t.md.length - 1], t.tvd[t.md.length - 1], v.clone()));
-      const mat = new THREE.MeshStandardMaterial({
-        color: accent[k % accent.length],
-        emissive: accent[k % accent.length],
-        emissiveIntensity: 0.35,
-        roughness: 0.4,
-        metalness: 0.2,
-      });
-      const m = mkTube(pts, 4, mat);
+      const mat = nearFade(
+        new THREE.MeshStandardMaterial({
+          color: accent[k % accent.length],
+          emissive: accent[k % accent.length],
+          emissiveIntensity: 0.35,
+          roughness: 0.4,
+          metalness: 0.2,
+          opacity: 0.8,
+        }),
+        120,
+        600,
+      );
+      const m = mkTube(pts, 3.2, mat);
       m.userData = { kind: 'detailWell', wellId: w.id };
       this.group.add(m);
       this.addLabel(`<b>${w.name}</b><span>${w.logs || w.lasFile ? 'logs · ' : ''}${w.trajectory.status} survey — click to open</span>`, 'well', pts[pts.length - 1]);

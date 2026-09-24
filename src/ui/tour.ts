@@ -105,7 +105,7 @@ export function buildChapters(well: Well, field: FieldModel): Chapter[] {
     ch.push({
       md: well.kickoffMD,
       title: 'Sidetrack point — kick-off',
-      text: `${well.name} leaves the ${well.sister ? `15/9-${well.sister.replace('F-', 'F-')}` : 'parent'} wellbore just below the 13⅜" shoe and starts building angle (${f1(p.inc, 0)}° by ${f1(well.kickoffMD + 60)} m MD).`,
+      text: `${well.name} leaves the ${field.wells.find((x) => x.id === well.sister)?.name ?? 'parent'} wellbore just below the 13⅜" shoe and starts building angle (${f1(p.inc, 0)}° by ${f1(well.kickoffMD + 60)} m MD).`,
       view: 'orbit',
       facts: posFacts(well.kickoffMD),
     });
