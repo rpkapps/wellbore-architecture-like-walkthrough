@@ -445,6 +445,7 @@ export class Engine {
       this.mud.update(this.camera, t, true, Math.max(3, r * 3.2), this.renderer.domElement.height);
     } else this.mud.update(this.camera, t, false, 1, 1);
     this.onFrame?.(dt);
+    wb?.cullTubes(this.camera, this.renderer.domElement.height);
     this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);
   }

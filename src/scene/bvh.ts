@@ -23,8 +23,9 @@ export function ensureBVH(g: THREE.BufferGeometry) {
   const tree = g.boundsTree as MeshBVH | undefined;
   if (tree && g.userData.bvhVersion === pos.version) return;
   if (tree) tree.refit();
-  // indirect: leave the render geometry's index untouched
-  else g.boundsTree = new MeshBVH(g, { indirect: true });
+  // indirect: leave the render geometry's index untouched; range: the whole geometry, not the
+  // draw range, which view culling narrows every frame
+  else g.boundsTree = new MeshBVH(g, { indirect: true, range: { start: 0, count: g.index ? g.index.count : pos.count } });
   g.userData.bvhVersion = pos.version;
 }
 

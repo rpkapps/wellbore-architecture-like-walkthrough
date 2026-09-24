@@ -95,6 +95,43 @@ vec3 cylNormal(vec3 n, vec3 tn, float k){
 
 type Uniforms = Record<string, THREE.IUniform>;
 
+/** A run of consecutive tube rings: its slice of the ring-major index and its bounds. */
+interface TubeChunk {
+  start: number;
+  count: number;
+  sphere: THREE.Sphere;
+}
+const CHUNK_RINGS = 24;
+/** Below this on-screen radius (px) a tube is drawn with its coarse stand-in. */
+const LOD_RADIUS_PX = 2;
+
+const fineGeometry = (g: THREE.BufferGeometry): THREE.BufferGeometry => g.userData.fine ?? g;
+
+function disposeTube(g: THREE.BufferGeometry) {
+  const fine = fineGeometry(g);
+  fine.userData.coarse?.dispose();
+  fine.dispose();
+}
+
+function maxRadius(rings: number[], radiusAt: (i: number) => number): number {
+  let r = 0;
+  for (const i of rings) r = Math.max(r, radiusAt(i));
+  return r;
+}
+
+function tubeChunks(position: ArrayLike<number>, nr: number, segs: number): TubeChunk[] {
+  const out: TubeChunk[] = [];
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (let r0 = 0; r0 < nr - 1; r0 += CHUNK_RINGS) {
+    const r1 = Math.min(nr - 1, r0 + CHUNK_RINGS);
+    box.makeEmpty();
+    for (let k = r0 * (segs + 1); k < (r1 + 1) * (segs + 1); k++) box.expandByPoint(v.fromArray(position, k * 3));
+    out.push({ start: r0 * segs * 6, count: (r1 - r0) * segs * 6, sphere: box.getBoundingSphere(new THREE.Sphere()) });
+  }
+  return out;
+}
+
 export class WellboreAssembly {
   readonly group = new THREE.Group();
   readonly labels = new THREE.Group();
@@ -332,6 +369,7 @@ export class WellboreAssembly {
     radiusAt: (i: number) => number,
     segs: number,
     stride = 1,
+    lod = false,
   ): THREE.BufferGeometry {
     const i0 = this.idx(from);
     const i1 = Math.min(this.samples.length - 1, this.idx(to) + 1);
@@ -391,13 +429,24 @@ export class WellboreAssembly {
     g.setAttribute('aStrat', new THREE.BufferAttribute(strat, 1));
     g.setIndex(index);
     g.computeBoundingSphere();
-    g.userData = { rings, segs, radiusAt };
+    g.userData = { rings, segs, radiusAt, chunks: tubeChunks(position, nr, segs), maxRadius: maxRadius(rings, radiusAt) };
+    if (lod) {
+      // stand-in for when the whole visible tube is a few pixels wide: 1/4 of the rings and segments
+      const coarse = this.tube(from, to, radiusAt, Math.max(8, Math.round(segs / 4)), stride * 4);
+      coarse.userData.fine = g;
+      g.userData.coarse = coarse;
+    }
     return g;
   }
 
   /** Recompute vertex positions after a radial-scale change (no re-allocation). */
   private refit(mesh: THREE.Mesh) {
-    const g = mesh.geometry;
+    const fine = fineGeometry(mesh.geometry);
+    this.refitGeometry(fine);
+    if (fine.userData.coarse) this.refitGeometry(fine.userData.coarse);
+  }
+
+  private refitGeometry(g: THREE.BufferGeometry) {
     const { rings, segs, radiusAt } = g.userData as { rings: number[]; segs: number; radiusAt: (i: number) => number };
     const p = g.getAttribute('position') as THREE.BufferAttribute;
     const n = g.getAttribute('normal') as THREE.BufferAttribute;
@@ -411,6 +460,8 @@ export class WellboreAssembly {
     }
     p.needsUpdate = true;
     g.computeBoundingSphere();
+    g.userData.chunks = tubeChunks(p.array, rings.length, segs);
+    g.userData.maxRadius = maxRadius(rings, radiusAt);
   }
 
   private refitRibbon(k: number) {
@@ -545,7 +596,7 @@ diffuseColor.a = uWallOpacity;`,
     };
     mat.customProgramCacheKey = () => 'wall-v4';
     this.wallMat = mat;
-    const geo = this.tube(0, this.well.tdMD, (i) => this.rHole[i] * this.radialScale, 48);
+    const geo = this.tube(0, this.well.tdMD, (i) => this.rHole[i] * this.radialScale, 48, 1, true);
     this.wall = new THREE.Mesh(geo, mat);
     this.wall.name = 'borehole-wall';
     this.wall.userData = { kind: 'wall', wellId: this.well.id };
@@ -629,7 +680,7 @@ totalEmissiveRadiance += vec3(0.35, 0.8, 1.0) * mdRing(vMd, uCursorMd, 0.35) * 0
 
   private buildCasing() {
     for (const m of [...this.casings, ...this.cements]) {
-      m.geometry.dispose();
+      disposeTube(m.geometry);
       this.group.remove(m);
     }
     this.casings = [];
@@ -637,7 +688,7 @@ totalEmissiveRadiance += vec3(0.35, 0.8, 1.0) * mdRing(vMd, uCursorMd, 0.35) * 0
     const casing = this.well.casing;
     casing.forEach((c, k) => {
       const rOut = (c.od * IN) / 2;
-      const geo = this.tube(c.topMD, c.shoeMD, () => rOut * this.radialScale, 40, 2);
+      const geo = this.tube(c.topMD, c.shoeMD, () => rOut * this.radialScale, 40, 2, true);
       const m = new THREE.Mesh(geo, this.casingMaterial('steel', 0.42));
       m.name = `casing:${c.name}`;
       m.userData = { kind: 'casing', casing: c, index: k };
@@ -648,7 +699,7 @@ totalEmissiveRadiance += vec3(0.35, 0.8, 1.0) * mdRing(vMd, uCursorMd, 0.35) * 0
       const cementTop = k <= 1 ? Math.max(c.topMD, this.well.zones[1]?.baseMD ?? 150) : Math.max(0, c.shoeMD - 500);
       const hole = c.hole;
       const rc = ((hole * IN) / 2) * 0.97;
-      const cg = this.tube(cementTop, c.shoeMD, () => rc * this.radialScale, 32, 3);
+      const cg = this.tube(cementTop, c.shoeMD, () => rc * this.radialScale, 32, 3, true);
       const cm = new THREE.Mesh(cg, this.casingMaterial('cement', 0.3));
       cm.name = `cement:${c.name}`;
       cm.userData = { kind: 'cement', casing: c, cementTop };
@@ -674,7 +725,7 @@ void main(){
     for (let s = 0; s < SHELLS; s++) {
       const frac = s / (SHELLS - 1);
       const factor = 1.18 + frac * 2.4; // depth of investigation (schematic radial scale)
-      const geo = this.tube(this.logStart, this.logEnd, (i) => this.rHole[i] * this.radialScale * factor, 30, 2);
+      const geo = this.tube(this.logStart, this.logEnd, (i) => this.rHole[i] * this.radialScale * factor, 30, 2, true);
       const common = {
         uniforms: { ...this.uniforms, uShellFrac: { value: frac } },
         vertexShader: vert,
@@ -1033,6 +1084,50 @@ void main(){
     this.cursor.scale.setScalar(fr.radius * 1.25);
   }
 
+  private frustum = new THREE.Frustum();
+  private viewProj = new THREE.Matrix4();
+  private chunkSphere = new THREE.Sphere();
+
+  /**
+   * The tubes run the whole well (2M+ triangles together), so three's per-object culling never
+   * drops any of them. Draw only the span of each tube's chunks that lies inside the view frustum
+   * (the index is ring-major, so that span is a single draw range), and switch to the coarse
+   * stand-in when even the nearest visible chunk is only a few pixels wide.
+   */
+  cullTubes(camera: THREE.PerspectiveCamera, viewHeightPx: number) {
+    camera.updateMatrixWorld();
+    this.viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.viewProj, camera.coordinateSystem, camera.reversedDepth);
+    // on-screen pixels per metre at unit distance
+    const pxPerM = viewHeightPx / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / camera.zoom);
+    const cam = camera.position;
+    for (const m of [this.wall, this.overviewTube, ...this.casings, ...this.cements, ...this.shells]) {
+      if (!m.visible) continue;
+      const fine = fineGeometry(m.geometry);
+      const coarse = fine.userData.coarse as THREE.BufferGeometry | undefined;
+      let near = Infinity;
+      if (coarse) {
+        for (const c of fine.userData.chunks as TubeChunk[]) {
+          const s = this.chunkSphere.copy(c.sphere).applyMatrix4(m.matrixWorld);
+          if (this.frustum.intersectsSphere(s)) near = Math.min(near, Math.max(1e-3, s.distanceToPoint(cam)));
+        }
+      }
+      const g = coarse && (fine.userData.maxRadius * pxPerM) / near < LOD_RADIUS_PX ? coarse : fine;
+      if (m.geometry !== g) m.geometry = g;
+      const chunks = g.userData.chunks as TubeChunk[] | undefined;
+      if (!chunks?.length) continue;
+      let first = -1;
+      let last = -1;
+      for (let i = 0; i < chunks.length; i++) {
+        if (!this.frustum.intersectsSphere(this.chunkSphere.copy(chunks[i].sphere).applyMatrix4(m.matrixWorld))) continue;
+        if (first < 0) first = i;
+        last = i;
+      }
+      if (first < 0) g.setDrawRange(0, 0);
+      else g.setDrawRange(chunks[first].start, chunks[last].start + chunks[last].count - chunks[first].start);
+    }
+  }
+
   update(camera: THREE.Camera, time: number, labelsVisible: boolean, focusMd: number, tunnel = false) {
     this.uniforms.uTime.value = time;
     const camPos = camera.position;
@@ -1062,7 +1157,7 @@ void main(){
   dispose() {
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.geometry) m.geometry.dispose();
+      if (m.geometry) disposeTube(m.geometry);
     });
     for (const l of this.labels.children as CSS2DObject[]) l.element.remove();
   }
