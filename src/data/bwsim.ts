@@ -104,6 +104,19 @@ function decode(buf: ArrayBuffer, ref: BlockRef, n: number, nodata?: number, bas
   return out;
 }
 
+/** Gunzip if the bytes are gzip (hosts that already decoded Content-Encoding pass through). */
+export async function maybeGunzip(buf: ArrayBuffer): Promise<ArrayBuffer> {
+  const b = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+  if (b[0] !== 0x1f || b[1] !== 0x8b) return buf;
+  const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(ds).arrayBuffer();
+}
+
+/** Read a .bwsim or .bwsim.gz package. */
+export async function readBwsimAny(buf: ArrayBuffer): Promise<SimModel> {
+  return readBwsim(await maybeGunzip(buf));
+}
+
 export function isBwsim(buf: ArrayBuffer): boolean {
   if (buf.byteLength < 12) return false;
   const m = new TextDecoder().decode(new Uint8Array(buf, 0, 6));

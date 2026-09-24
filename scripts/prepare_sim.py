@@ -253,6 +253,7 @@ def main():
     ap.add_argument('--note', default='')
     ap.add_argument('--provenance', default='calculated')
     ap.add_argument('--max-steps', type=int, default=40)
+    ap.add_argument('--fields', default='SOIL,SWAT,PRESSURE', help='dynamic fields to keep')
     ap.add_argument('-o', '--out', required=True)
     a = ap.parse_args()
 
@@ -317,10 +318,13 @@ def main():
             keep = np.unique(np.round(np.linspace(0, len(steps) - 1, a.max_steps)).astype(int))
             steps = [steps[i] for i in keep]
         dates = [s.get('date', '') for s in steps]
-        soil = [np.clip(1 - s['SWAT'] - s.get('SGAS', 0), 0, 1) for s in steps]
-        dynamic.append({'key': 'SOIL', 'label': 'Oil saturation', 'unit': 'v/v', 'min': 0, 'max': 1, 'steps': [w.q8(x, 0, 1) for x in soil]})
-        dynamic.append({'key': 'SWAT', 'label': 'Water saturation', 'unit': 'v/v', 'min': 0, 'max': 1, 'steps': [w.q8(s['SWAT'], 0, 1) for s in steps]})
-        if all('PRESSURE' in s for s in steps):
+        keep = set(a.fields.split(','))
+        if 'SOIL' in keep:
+            soil = [np.clip(1 - s['SWAT'] - s.get('SGAS', 0), 0, 1) for s in steps]
+            dynamic.append({'key': 'SOIL', 'label': 'Oil saturation', 'unit': 'v/v', 'min': 0, 'max': 1, 'steps': [w.q8(x, 0, 1) for x in soil]})
+        if 'SWAT' in keep:
+            dynamic.append({'key': 'SWAT', 'label': 'Water saturation', 'unit': 'v/v', 'min': 0, 'max': 1, 'steps': [w.q8(np.clip(s['SWAT'], 0, 1), 0, 1) for s in steps]})
+        if 'PRESSURE' in keep and all('PRESSURE' in s for s in steps):
             pr = np.concatenate([s['PRESSURE'] for s in steps])
             lo, hi = float(np.floor(np.percentile(pr, 0.5))), float(np.ceil(np.percentile(pr, 99.5)))
             dynamic.append({'key': 'PRESSURE', 'label': 'Pressure', 'unit': 'bar', 'min': lo, 'max': hi, 'steps': [w.q8(s['PRESSURE'], lo, hi) for s in steps]})

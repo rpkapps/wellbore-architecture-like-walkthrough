@@ -90,9 +90,22 @@ describe('ROP by formation', () => {
 
 describe('simulation package (.bwsim)', () => {
   it('reads the preloaded Volve grid written by scripts/prepare_sim.py', async () => {
-    const { readBwsim } = await import('../src/data/bwsim');
-    const b = readFileSync('public/data/volve/sim/volve_2016.bwsim');
-    const m = readBwsim(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
+    const { readBwsimAny } = await import('../src/data/bwsim');
+    const b = readFileSync('public/data/volve/sim/volve_opm.bwsim.gz');
+    const m = await readBwsimAny(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
+    // time-lapse from the OPM Flow re-run: oil saturation falls as the field is produced
+    expect(m.header.dates.length).toBeGreaterThan(25);
+    const mean = (a: Float32Array) => {
+      let s = 0, k = 0;
+      for (const v of a) if (Number.isFinite(v)) (s += v), k++;
+      return s / k;
+    };
+    const so0 = mean(m.step('SOIL', 0)!);
+    const so1 = mean(m.step('SOIL', m.header.dates.length - 1)!);
+    expect(so1).toBeLessThan(so0 * 0.7);
+    const fopt = m.header.summary!.field.FOPT;
+    expect(fopt[fopt.length - 1]).toBeGreaterThan(9e6);
+    expect(fopt[fopt.length - 1]).toBeLessThan(12e6);
     expect(m.header.dims).toEqual([108, 100, 63]);
     expect(m.n).toBe(183545);
     const poro = m.prop('PORO')!;

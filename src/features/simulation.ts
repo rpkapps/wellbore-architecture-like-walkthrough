@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { readBwsim, type SimModel } from '../data/bwsim';
+import { readBwsimAny, type SimModel } from '../data/bwsim';
 import { colormap, type RGB } from '../data/colormap';
 import type { App } from '../ui/app';
 import { chip, fmt, h, slider, toggle } from '../ui/dom';
@@ -73,6 +73,7 @@ export class SimulationFeature implements FeatureModule {
   private loading = false;
   private offBox?: () => void;
   private measured: { t: number; oil: number }[] = [];
+  private dateSlider: { set: (v: number) => void } | null = null;
 
   constructor(private app: App) {
     this.panel = new FloatingPanel({ id: 'simulation', title: 'Reservoir simulation', badge: chip('calculated'), width: 420, height: 520, place: 'top-left', onClose: () => app.flags.set('simulation', false) });
@@ -167,7 +168,7 @@ export class SimulationFeature implements FeatureModule {
     try {
       const r = await fetch(this.app.field.baseUrl + url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      this.setModel(readBwsim(await r.arrayBuffer()));
+      this.setModel(await readBwsimAny(await r.arrayBuffer()));
     } catch (err) {
       this.info.innerHTML = `<span style="color:var(--danger)">Could not load the simulation package: ${(err as Error).message}</span>`;
     } finally {
@@ -334,12 +335,12 @@ void main(){
     this.stepIdx = i;
     this.applyProp();
     this.drawChart();
-    const lbl = this.controls.querySelector('.sim-date');
-    if (lbl && this.model) lbl.textContent = this.model.header.dates[i] ?? '';
+    this.dateSlider?.set(i);
   }
 
   private renderControls() {
     this.controls.innerHTML = '';
+    this.dateSlider = null;
     const m = this.model;
     if (!m) {
       this.info.innerHTML = this.loading
@@ -379,6 +380,7 @@ void main(){
       };
       const t = slider({ label: 'Report date', min: 0, max: hd.dates.length - 1, step: 1, value: this.stepIdx, format: (v) => hd.dates[v] ?? '', onInput: (v) => this.setStep(v) });
       t.el.querySelector('.val')?.classList.add('sim-date');
+      this.dateSlider = t;
       this.controls.append(h('div', { class: 'sim-time' }, play, t.el));
     }
     const kMax = this.kMax;

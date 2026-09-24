@@ -1,7 +1,7 @@
 import { Well } from '../data/dataset';
 import { chooseWell, findColumn, COLS, logsFromTable, productionFromTable, surveyFromTable, topsFromTable, type Table } from '../data/csv';
 import { detectKind, type ImportKind } from '../data/importers';
-import { readBwsim } from '../data/bwsim';
+import { readBwsimAny } from '../data/bwsim';
 import type { SimulationFeature } from '../features/simulation';
 import { parseLAS, sampleCurve } from '../data/las';
 import { Trajectory, stationsFromSurvey } from '../data/trajectory';
@@ -210,7 +210,7 @@ export class DataManager {
     row('Casing & hole geometry', 'inferred from bit-size log', 'reconstructed');
     row('Natural fractures', 'illustrative — no image log in package', 'schematic');
 
-    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc,.xlsx,.bwsim', style: 'display:none' }) as HTMLInputElement;
+    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc,.xlsx,.bwsim,.gz', style: 'display:none' }) as HTMLInputElement;
     input.onchange = () => input.files && this.handleFiles([...input.files]);
     const dz = h(
       'div',
@@ -335,9 +335,9 @@ export class DataManager {
     if (!this.open) this.show();
     const app = this.app;
     // reservoir-simulation packages go to the simulation feature
-    for (const f of files.filter((x) => /\.bwsim$/i.test(x.name))) {
+    for (const f of files.filter((x) => /\.bwsim(\.gz)?$/i.test(x.name))) {
       try {
-        const m = readBwsim(await f.arrayBuffer());
+        const m = await readBwsimAny(await f.arrayBuffer());
         app.flags.set('simulation', true);
         app.feature<SimulationFeature>('simulation')?.setModel(m);
         this.say(`✓ ${f.name}: simulation grid with ${m.n.toLocaleString()} cells and ${m.header.dates.length} report dates`, 'ok');
@@ -345,7 +345,7 @@ export class DataManager {
         this.say(`✕ ${f.name}: ${(e as Error).message}`, 'err');
       }
     }
-    files = files.filter((x) => !/\.bwsim$/i.test(x.name));
+    files = files.filter((x) => !/\.bwsim(\.gz)?$/i.test(x.name));
     if (!files.length) return;
     let well = app.engine.activeWell;
     let createdWell: Well | null = null;

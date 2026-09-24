@@ -20,7 +20,7 @@
       "github.com/jczettl/wellbore-trajectory-uncertainty (F-11 A survey)",
       "github.com/awgeo/Volve_field_data (definitive directional surveys, CPI)",
       "github.com/BinWang0213/Course-PETE4241_19SP_ProjectCode (F-4, F-5, F-12, F-14, F-15 D input LAS)",
-      "github.com/f0nzie/reservoir_datasets & f0nzie/rEcl (Volve 2016 Eclipse deck, grid and INIT)"
+      "github.com/dabiged/Volve2OPM (Volve Eclipse deck for OPM Flow; re-run in this project) and f0nzie/reservoir_datasets (original 2016 deck)"
     ]
   },
   "picks": "Volve_well_picks.csv",
@@ -157,5 +157,5 @@
       "productionWell": "15/9-F-5"
     }
   ],
-  "simulation": "sim/volve_2016.bwsim"
+  "simulation": "sim/volve_opm.bwsim.gz"
 }
