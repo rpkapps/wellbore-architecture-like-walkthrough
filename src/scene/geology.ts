@@ -122,6 +122,10 @@ export class GeologyModel {
   /** Global multiplier used in guided views (keeps the well visible). */
   globalOpacity = 1;
   forceTransparent = false;
+  /** sun shadows: opaque slabs cast, every slab receives */
+  shadows = false;
+  /** called after visibility / opacity changes (e.g. to refresh the static shadow map) */
+  onStateChange?: () => void;
 
   setGuided(on: boolean) {
     if (this.forceTransparent === on) return;
@@ -147,9 +151,12 @@ export class GeologyModel {
       mat.opacity = op;
       mat.depthWrite = !transparent;
       m.userData.transparent = transparent;
+      m.castShadow = this.shadows && !transparent;
+      m.receiveShadow = this.shadows;
     }
     if (this.highlight) this.setHighlight(this.highlight);
     this.sortForCamera(this.lastCamY, true);
+    this.onStateChange?.();
   }
 
   private lastCamY = 0;

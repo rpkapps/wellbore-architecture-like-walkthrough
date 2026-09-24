@@ -211,6 +211,17 @@ export class LeftPanel {
     );
   }
 
+  /** Mirrors Features → Realistic textures so it can be flipped right next to the view. */
+  private texturesToggle(): HTMLElement {
+    const flags = this.app.flags;
+    const row = toggle('Realistic textures', flags.on('textures'), (v) => flags.set('textures', v), h('span', { class: 'chip', style: 'margin-left:6px;height:15px;font-size:8px' }, 'CC0 photo'));
+    const input = row.querySelector('input') as HTMLInputElement;
+    flags.onAny((id, on) => {
+      if (id === 'textures') input.checked = on;
+    });
+    return row;
+  }
+
   private sceneOptions(): HTMLElement {
     const e = this.app.engine;
     const cm = h('select', { class: 'select' }) as HTMLSelectElement;
@@ -237,6 +248,7 @@ export class LeftPanel {
       }),
       toggle('Structural contours (25 m)', true, (v) => e.geology.setContours(v)),
       toggle('Glow & colour grade', e.quality !== 'low', (v) => e.setPostFx(v)),
+      this.texturesToggle(),
     );
   }
 }

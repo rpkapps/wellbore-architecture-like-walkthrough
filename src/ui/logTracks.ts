@@ -530,7 +530,7 @@ export class LogTracks {
     const samples = (spec: CurveSpec) => {
       const c = this.curveFor(spec);
       if (!c) return null;
-      const out = new Float32Array(Math.ceil(bodyH));
+      const out = new Float32Array(Math.max(0, Math.ceil(bodyH)));
       let any = false;
       for (let py = 0; py < out.length; py++) {
         const md = top + (py / bodyH) * (bot - top);

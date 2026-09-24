@@ -76,10 +76,12 @@ export class Inspector {
           'Volve wellbore — context',
           '#8795a3',
           [
-            ['Trajectory', 'from pick coordinates', 'reconstructed'],
+            d.status === 'definitive' ? ['Trajectory', 'definitive directional survey', 'measured'] : ['Trajectory', 'from pick coordinates', 'reconstructed'],
             ['Logs', 'not in demo package', ''],
           ],
-          'Trajectory reconstructed through the official formation-pick coordinates (MD, TVD, easting, northing) of this wellbore. Its picks also constrain the regional structural surfaces.',
+          d.status === 'definitive'
+            ? 'Equinor definitive directional survey (positions from the survey UTM coordinates). Its formation picks also constrain the regional structural surfaces.'
+            : 'Trajectory reconstructed through the official formation-pick coordinates (MD, TVD, easting, northing) of this wellbore. Its picks also constrain the regional structural surfaces.',
         );
       case 'detailWell': {
         const w = this.app.field.wells.find((x) => x.id === d.wellId)!;

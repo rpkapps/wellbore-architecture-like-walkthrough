@@ -64,6 +64,7 @@ interface ManifestWell {
   kickoffMD?: number;
   sister?: string;
   summary: string;
+  extra?: boolean;
 }
 
 export class Well {
@@ -87,6 +88,8 @@ export class Well {
   productionFile?: string;
   productionWell?: string;
   userAdded = false;
+  /** optional well from the "More Volve wells" feature */
+  extra = false;
 
   constructor(
     public id: string,
@@ -234,6 +237,8 @@ export class FieldModel {
   extent!: ModelExtent;
   productionMonthly = new Map<string, ProductionRecord[]>();
   baseUrl = '';
+  /** optional preloaded reservoir-simulation package (.bwsim), relative to baseUrl */
+  simulationFile?: string;
 
   constructor(public meta: FieldMeta) {}
 
@@ -318,9 +323,10 @@ async function fetchText(url: string): Promise<string> {
 
 export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac: number) => void): Promise<FieldModel> {
   onProgress?.('Reading dataset manifest', 0.02);
-  const manifest = JSON.parse(await fetchText(baseUrl + 'manifest.json')) as { field: FieldMeta; wells: ManifestWell[]; picks: string; productionMonthly: string; contextTrajectories: string };
+  const manifest = JSON.parse(await fetchText(baseUrl + 'manifest.json')) as { field: FieldMeta; wells: ManifestWell[]; picks: string; productionMonthly: string; contextTrajectories: string; simulation?: string };
   const field = new FieldModel(manifest.field);
   field.baseUrl = baseUrl;
+  field.simulationFile = manifest.simulation;
 
   onProgress?.('Reading formation picks (34 wellbores)', 0.08);
   const [picksTxt, ctxTxt, prodTxt] = await Promise.all([
@@ -333,14 +339,17 @@ export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac
   // context trajectories
   const ctx = parseCSV(ctxTxt);
   const byWell = new Map<string, number[][]>();
+  const ctxStatus = new Map<string, 'definitive' | 'reconstructed'>();
   for (const r of ctx.rows) {
     const k = r[0];
     if (!byWell.has(k)) byWell.set(k, []);
     byWell.get(k)!.push([+r[1], +r[2], +r[3], +r[4]]);
+    if (r[5]) ctxStatus.set(k, r[5] === 'definitive' ? 'definitive' : 'reconstructed');
   }
   for (const [name, rows] of byWell) {
     field.context.push({
       name: name.replace(/^NO\s+/, ''),
+      status: ctxStatus.get(name) ?? 'reconstructed',
       md: new Float64Array(rows.map((r) => r[0])),
       tvd: new Float64Array(rows.map((r) => r[1])),
       ns: new Float64Array(rows.map((r) => r[2])),
@@ -369,6 +378,7 @@ export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac
     w.productionWell = mw.productionWell;
     w.kickoffMD = mw.kickoffMD;
     w.sister = mw.sister;
+    w.extra = !!mw.extra;
     w.tops = field.topsForWell(mw.picksWell);
     if (mw.productionWell) w.productionMonthly = field.productionMonthly.get(mw.productionWell) ?? [];
     w.refresh(field.meta.datumElevation, field.meta.waterDepth);

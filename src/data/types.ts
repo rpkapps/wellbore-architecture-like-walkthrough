@@ -91,6 +91,7 @@ export interface PickRow {
 
 export interface ContextWell {
   name: string;
+  status: 'definitive' | 'reconstructed';
   md: Float64Array;
   tvd: Float64Array;
   ns: Float64Array;

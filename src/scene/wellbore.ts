@@ -9,8 +9,9 @@ import { RES_RANGE } from '../data/colormap';
 import type { Coords } from './coords';
 import { DATA_TEX, NOISE, ROCK } from './glsl';
 import { formationUniforms, type WellTextures } from './wellData';
+import { LAYER_CEMENT, LAYER_STEEL, REAL, REAL_GLSL } from './textures';
 
-export type PropertyMode = 'lithology' | 'resistivity' | 'hydrocarbon';
+export type PropertyMode = 'lithology' | 'resistivity' | 'hydrocarbon' | 'rop';
 const IN = 0.0254;
 const MAX_FRAC = 64;
 const SHELLS = 6;
@@ -41,6 +42,7 @@ varying vec3 vAxis;
 varying vec3 vTan;
 varying float vMd;
 varying float vStrat;
+varying float vTubeU;
 `;
 const SHARED_VERT_BODY = /* glsl */ `
 vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
@@ -48,6 +50,7 @@ vAxis = (modelMatrix * vec4(aAxis, 1.0)).xyz;
 vTan = normalize(mat3(modelMatrix) * aTan);
 vMd = uv.y;
 vStrat = aStrat;
+vTubeU = uv.x;
 `;
 const SHARED_FRAG_DECL = /* glsl */ `
 varying vec3 vWPos;
@@ -55,6 +58,7 @@ varying vec3 vAxis;
 varying vec3 vTan;
 varying float vMd;
 varying float vStrat;
+varying float vTubeU;
 uniform float uCut;
 uniform float uCutCos;
 uniform float uRadialScale;
@@ -71,6 +75,21 @@ bool cutaway(){
 }
 float mdRing(float md, float target, float halfWidth){
   return 1.0 - smoothstep(halfWidth * 0.4, halfWidth, abs(md - target));
+}
+`;
+
+/** Cylindrical texture mapping around the hole (rendered scale, isotropic) + tangent-space normals. */
+const CYL_GLSL = /* glsl */ `
+float gCylReal; vec3 gCylN;
+vec2 cylUv(float tile){
+  float circ = 6.2831853 * max(length(vWPos - vAxis), 0.01);
+  float nrep = max(1.0, floor(circ / tile + 0.5));
+  return vec2(vTubeU * nrep, vMd / (circ / nrep));
+}
+vec3 cylNormal(vec3 n, vec3 tn, float k){
+  vec3 t = normalize((viewMatrix * vec4(vTan, 0.0)).xyz);
+  vec3 b = normalize(cross(t, n));
+  return normalize(n + (tn.x * b + tn.y * t) * k);
 }
 `;
 
@@ -412,13 +431,13 @@ export class WellboreAssembly {
 
   // ------------------------------------------------------------------ materials
   private injectShared(shader: THREE.WebGLProgramParametersWithUniforms, extraFragDecl: string) {
-    Object.assign(shader.uniforms, this.uniforms);
+    Object.assign(shader.uniforms, this.uniforms, REAL);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${SHARED_VERT_DECL}`)
       .replace('#include <project_vertex>', `#include <project_vertex>\n${SHARED_VERT_BODY}`);
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
-      `#include <common>\n${SHARED_FRAG_DECL}\n${NOISE}\n${ROCK}\n${DATA_TEX}\n${extraFragDecl}`,
+      `#include <common>\n${SHARED_FRAG_DECL}\n${NOISE}\n${ROCK}\n${DATA_TEX}\n${REAL_GLSL}\n${CYL_GLSL}\n${extraFragDecl}`,
     );
   }
 
@@ -454,9 +473,31 @@ float fw = length(fwidth(vWPos));
 // bedding at true scale: vertical offset from the axis shrinks by the radial exaggeration
 float strat = vStrat + (vAxis.y - vWPos.y) / uRadialScale;
 vec3 rock = rockColor(litho, baseC, vWPos, strat, fw, gRough, gH);
+gCylReal = 0.0;
+if (uRealistic > 0.5) {
+  // CC0 photo texture of the formation's lithology, mapped around the hole
+  // world-space triplanar (not cylindrical): a repeat that runs along the hole would
+  // line up with the tunnel camera and show as rings
+  vec3 radial = vWPos - vAxis; radial -= dot(radial, vTan) * vTan;
+  vec3 alb; vec3 arm; vec3 nW;
+  realTri(litho, vWPos, normalize(radial + 1e-5), 2.5, fw, alb, arm, nW);
+  gCylN = nW;
+  float bed = dot(rock, vec3(0.299, 0.587, 0.114)) / max(dot(baseC, vec3(0.299, 0.587, 0.114)), 1e-3);
+  rock = realTint(alb, litho, baseC, 0.5) * mix(1.0, clamp(bed, 0.6, 1.4), 0.4) * mix(1.0, arm.r, 0.7);
+  gRough = clamp(arm.g, 0.35, 1.0);
+  gCylReal = 1.0;
+}
 vec3 col = rock;
 float lumR = dot(rock, vec3(0.299, 0.587, 0.114)) / max(dot(baseC, vec3(0.299, 0.587, 0.114)), 1e-3);
-if (uMode > 0.5 && uMode < 1.5) {
+if (uMode > 2.5) {
+  if (dC.w > -900.0) {
+    col = ropColor(dC.w) * (0.6 + 0.4 * clamp(lumR, 0.3, 1.7));
+    gRough = 0.7;
+  } else {
+    float hatch = step(0.5, fract((vMd + vWPos.x * 0.3) * 0.5));
+    col = mix(rock * 0.35, rock * 0.45, hatch);
+  }
+} else if (uMode > 0.5 && uMode < 1.5) {
   if (dA.x > -900.0) {
     float t = (dA.y - uResLogMin) / (uResLogMax - uResLogMin); // borehole wall reads the shallow curve
     col = lutColor(t) * (0.55 + 0.45 * clamp(lumR, 0.3, 1.7));
@@ -465,7 +506,7 @@ if (uMode > 0.5 && uMode < 1.5) {
     float hatch = step(0.5, fract((vMd + vWPos.x * 0.3) * 0.5));
     col = mix(rock * 0.35, rock * 0.45, hatch);
   }
-} else if (uMode > 1.5) {
+} else if (uMode > 1.5 && uMode < 2.5) {
   if (dB.x > -900.0 && dB.y > -900.0) {
     float so = 1.0 - dB.x;
     float hc = clamp(dB.y * so * 4.0, 0.0, 1.0);
@@ -499,10 +540,10 @@ diffuseColor.rgb = col;
 diffuseColor.a = uWallOpacity;`,
         )
         .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = gRough;')
-        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = perturbNormalH(-vViewPosition, normal, gH, 0.04);')
+        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nif (gCylReal > 0.5) normal = normalize((viewMatrix * vec4(gCylN, 0.0)).xyz) * faceDirection;\nelse normal = perturbNormalH(-vViewPosition, normal, gH, 0.04);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEmit;');
     };
-    mat.customProgramCacheKey = () => 'wall-v1';
+    mat.customProgramCacheKey = () => 'wall-v4';
     this.wallMat = mat;
     const geo = this.tube(0, this.well.tdMD, (i) => this.rHole[i] * this.radialScale, 48);
     this.wall = new THREE.Mesh(geo, mat);
@@ -536,9 +577,12 @@ diffuseColor.a = uWallOpacity;`,
             depthWrite: opacity >= 1,
           });
     mat.onBeforeCompile = (shader) => {
-      this.injectShared(shader, 'float gH2;');
+      this.injectShared(shader, 'float gH2; vec3 gCArm;');
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (cutaway()) discard;')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nif (gCylReal > 0.5) roughnessFactor = clamp(gCArm.g, 0.2, 1.0);')
+        .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\nif (gCylReal > 0.5) metalnessFactor *= ${kind === 'steel' ? 'mix(0.25, 1.0, gCArm.b)' : '1.0'};`)
+        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nif (gCylReal > 0.5) normal = cylNormal(normal, gCylN, 0.8);')
         .replace(
           '#include <color_fragment>',
           kind === 'steel'
@@ -548,11 +592,29 @@ float fw = length(fwidth(vWPos));
 float cpl = 1.0 - smoothstep(0.12, 0.2 + fw, abs(mod(vMd, 12.19) - 6.1) - 5.85);
 float mott = aaNoise(vWPos, 1.4, fw) * 0.5 + aaNoise(vec3(vWPos.x, vMd * 3.0, vWPos.z), 3.0, fw) * 0.25;
 diffuseColor.rgb *= 0.92 + 0.1 * mott;
+gCylReal = 0.0;
+if (uRealistic > 0.5) {
+  vec2 cuv = cylUv(2.0);
+  gCArm = rArm(cuv, ${LAYER_STEEL}.0);
+  gCylN = rNrm(cuv, ${LAYER_STEEL}.0);
+  // grey mill-finish steel with the photo's staining (the raw photo reads too rusty through the X-ray casing)
+  vec3 st = rAlb(cuv, ${LAYER_STEEL}.0);
+  diffuseColor.rgb = mix(vec3(dot(st, vec3(0.3, 0.59, 0.11))) * 1.25, st * 1.15, 0.45);
+  gCylReal = 1.0;
+}
 diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.7, cpl);
 gH2 = cpl;`
             : `#include <color_fragment>
 float fw = length(fwidth(vWPos));
 diffuseColor.rgb *= 0.9 + 0.12 * aaNoise(vWPos, 2.5, fw);
+gCylReal = 0.0;
+if (uRealistic > 0.5) {
+  vec2 cuv = cylUv(2.0);
+  gCArm = rArm(cuv, ${LAYER_CEMENT}.0);
+  gCylN = rNrm(cuv, ${LAYER_CEMENT}.0);
+  diffuseColor.rgb = rAlb(cuv, ${LAYER_CEMENT}.0) * gCArm.r;
+  gCylReal = 1.0;
+}
 gH2 = 0.0;`,
         )
         .replace(
@@ -561,7 +623,7 @@ gH2 = 0.0;`,
 totalEmissiveRadiance += vec3(0.35, 0.8, 1.0) * mdRing(vMd, uCursorMd, 0.35) * 0.8;`,
         );
     };
-    mat.customProgramCacheKey = () => `casing-${kind}-v1`;
+    mat.customProgramCacheKey = () => `casing-${kind}-v2`;
     return mat;
   }
 
@@ -886,7 +948,8 @@ void main(){
   int fi = int(B.w + 0.5);
   vec3 c = B.w < -0.5 ? vec3(0.55, 0.62, 0.7) : uFormColor[fi] * 1.4;
   if (uMode > 0.5 && uMode < 1.5 && A.x > -900.0) c = lutColor((A.x - uResLogMin) / (uResLogMax - uResLogMin));
-  if (uMode > 1.5) {
+  if (uMode > 2.5 && C.w > -900.0) c = ropColor(C.w);
+  if (uMode > 1.5 && uMode < 2.5) {
     c = vec3(0.45, 0.5, 0.56);
     if (B.x > -900.0) c = mix(vec3(0.2, 0.5, 0.82), vec3(1.0, 0.62, 0.15), clamp(1.0 - B.x, 0.0, 1.0));
     if (C.x > 0.5) c = vec3(1.0, 0.75, 0.3);
@@ -908,9 +971,9 @@ void main(){
   // ------------------------------------------------------------------ runtime state
   setMode(mode: PropertyMode) {
     this.mode = mode;
-    this.uniforms.uMode.value = mode === 'lithology' ? 0 : mode === 'resistivity' ? 1 : 2;
+    this.uniforms.uMode.value = mode === 'lithology' ? 0 : mode === 'resistivity' ? 1 : mode === 'hydrocarbon' ? 2 : 3;
     this.shells.forEach((m, i) => {
-      m.visible = mode !== 'lithology';
+      m.visible = mode === 'resistivity' || mode === 'hydrocarbon';
       m.material = mode === 'hydrocarbon' ? this.shellMatFluid[i] : this.shellMatRes[i];
     });
     this.payGroup.visible = mode === 'hydrocarbon';

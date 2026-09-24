@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { FieldModel, Well } from '../data/dataset';
+import { sameWell } from '../data/csv';
 import type { Coords } from './coords';
 import { NOISE } from './glsl';
 
@@ -11,7 +12,15 @@ export class Environment {
   waterColumn!: THREE.Mesh;
   platform = new THREE.Group();
   sky!: THREE.Mesh;
-  private seaUniforms = { uTime: { value: 0 } };
+  private seaUniforms = { uTime: { value: 0 }, uDetail: { value: 0 } };
+
+  /** Reflective multi-scale sea surface (Features → Sea surface & seabed detail). */
+  setDetail(on: boolean) {
+    this.seaUniforms.uDetail.value = on ? 1 : 0;
+    const m = this.sea.material as THREE.MeshStandardMaterial;
+    m.opacity = on ? 0.78 : 0.55;
+    m.roughness = on ? 0.38 : 0.42;
+  }
 
   constructor(private field: FieldModel) {
     this.buildSky();
@@ -118,7 +127,7 @@ void main(){
         .replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
         .replace('#include <project_vertex>', '#include <project_vertex>\nvWP = (modelMatrix*vec4(transformed,1.0)).xyz;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\nvarying vec3 vWP; uniform float uTime;\n${NOISE}`)
+        .replace('#include <common>', `#include <common>\nvarying vec3 vWP; uniform float uTime; uniform float uDetail;\n${NOISE}`)
         .replace(
           '#include <normal_fragment_maps>',
           `#include <normal_fragment_maps>
@@ -128,10 +137,39 @@ vec3 q = vec3(vWP.x * 0.012, uTime * 0.08, vWP.z * 0.012);
 float nx = snoise(q + vec3(0.7, 0.0, 0.0)) - snoise(q - vec3(0.7, 0.0, 0.0));
 float nz = snoise(q + vec3(0.0, 0.0, 0.7)) - snoise(q - vec3(0.0, 0.0, 0.7));
 vec3 wn = normalize(vec3(-nx * 0.08 * k, 1.0, -nz * 0.08 * k));
+if (uDetail > 0.5) {
+  // three octaves of travelling swell, wind waves and ripples, faded by pixel footprint
+  vec2 g = vec2(0.0);
+  float amp = 0.06; float fq = 0.008;
+  for (int o = 0; o < 4; o++) {
+    vec3 qq = vec3(vWP.x * fq + uTime * 0.05 * float(o + 1), uTime * 0.06, vWP.z * fq - uTime * 0.03);
+    float e = 0.6;
+    float fade = 1.0 - smoothstep(0.5, 3.0, fw * fq * 40.0);
+    g += vec2(snoise(qq + vec3(e, 0.0, 0.0)) - snoise(qq - vec3(e, 0.0, 0.0)), snoise(qq + vec3(0.0, 0.0, e)) - snoise(qq - vec3(0.0, 0.0, e))) * amp * fade;
+    amp *= 0.6; fq *= 2.7;
+  }
+  wn = normalize(vec3(-g.x, 1.0, -g.y));
+}
+gSeaN = wn;
 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz) * (gl_FrontFacing ? 1.0 : -1.0);`,
+        )
+        .replace('uniform float uDetail;', 'uniform float uDetail; vec3 gSeaN;')
+        .replace(
+          '#include <emissivemap_fragment>',
+          `#include <emissivemap_fragment>
+if (uDetail > 0.5) {
+  vec3 V = normalize(cameraPosition - vWP);
+  vec3 N = gl_FrontFacing ? gSeaN : -gSeaN;
+  float F = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  vec3 R = reflect(-V, N);
+  vec3 sky = mix(vec3(0.06, 0.075, 0.095), vec3(0.012, 0.018, 0.028), pow(max(R.y, 0.0), 0.55));
+  vec3 sunD = normalize(vec3(-0.46, 0.76, 0.38));
+  float glint = pow(max(dot(R, sunD), 0.0), 900.0) * 2.5 + pow(max(dot(R, sunD), 0.0), 120.0) * 0.025;
+  totalEmissiveRadiance += sky * F * 1.6 + vec3(1.0, 0.86, 0.66) * glint * step(0.0, V.y);
+}`,
         );
     };
-    m.customProgramCacheKey = () => 'sea-v1';
+    m.customProgramCacheKey = () => 'sea-v2';
     this.sea = new THREE.Mesh(g, m);
     this.sea.renderOrder = 40;
     this.sea.userData = { kind: 'sea' };
@@ -310,6 +348,9 @@ function nearFade<T extends THREE.Material>(mat: T, near = 70, far = 320): T {
 export class WellPaths {
   readonly group = new THREE.Group();
   readonly labels = new THREE.Group();
+  /** show the optional extra wells as detailed wells (else they appear as context) */
+  showExtra = false;
+  private activeId = '';
   constructor(
     private field: FieldModel,
     private coords: Coords,
@@ -317,7 +358,13 @@ export class WellPaths {
     this.group.add(this.labels);
   }
 
+  rebuild() {
+    if (this.activeId) this.build(this.activeId);
+  }
+
   build(activeId: string) {
+    this.activeId = activeId;
+    const detailed = this.field.wells.filter((w) => !w.extra || this.showExtra);
     for (const c of [...this.group.children]) if (c !== this.labels) this.group.remove(c);
     for (const l of [...this.labels.children]) {
       (l as CSS2DObject).element.remove();
@@ -330,19 +377,20 @@ export class WellPaths {
     };
     const ctxMat = nearFade(new THREE.MeshStandardMaterial({ color: 0x8795a3, roughness: 0.5, metalness: 0.4, opacity: 0.55 }));
     for (const c of this.field.context) {
+      if (detailed.some((w) => sameWell(w.name, c.name))) continue;
       const pts: THREE.Vector3[] = [];
       for (let i = 0; i < c.md.length; i++) pts.push(this.coords.toScene(c.ns[i], c.ew[i], c.tvd[i], new THREE.Vector3()));
       const clean = pts.filter((p, i) => i === 0 || p.distanceTo(pts[i - 1]) > 0.5);
       if (clean.length < 2) continue;
       const m = mkTube(clean, 2.2, ctxMat);
-      m.userData = { kind: 'contextWell', name: c.name, status: 'reconstructed' };
+      m.userData = { kind: 'contextWell', name: c.name, status: c.status };
       m.renderOrder = 4;
       this.group.add(m);
       const end = clean[clean.length - 1];
       this.addLabel(`${c.name}`, 'ctx', end);
     }
     const accent = [0x5fd4ff, 0xa78bfa, 0x7ee0a1, 0xf5b971];
-    this.field.wells.forEach((w: Well, k) => {
+    detailed.forEach((w: Well, k) => {
       if (w.id === activeId) return;
       const pts: THREE.Vector3[] = [];
       const t = w.trajectory;

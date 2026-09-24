@@ -16,6 +16,12 @@ import { InterpretationDrawer } from './interpretation';
 import { ProductionDrawer } from './production';
 import { DataManager } from './dataManager';
 import { buildChapters, type Chapter } from './tour';
+import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
+import { FeaturesPanel } from './featuresPanel';
+import { createFeatureModules } from '../features';
+import { ropByZone, ROP_RANGE } from '../data/drilling';
+
+const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 export class App {
   readonly root: HTMLElement;
@@ -25,6 +31,15 @@ export class App {
   interp!: InterpretationDrawer;
   prod!: ProductionDrawer;
   data!: DataManager;
+  flags!: FeatureFlags;
+  modules = new Map<FeatureId, FeatureModule>();
+  featuresPanel!: FeaturesPanel;
+  /** slot in the top bar where tool features add their buttons */
+  toolSlot!: HTMLElement;
+  /** slot under the compass HUD for feature read-outs */
+  hudSlot!: HTMLElement;
+  /** click interceptors (e.g. the measure tool); returning true consumes the click */
+  clickHandlers: ((p: ReturnType<Engine['pick']>, ev: PointerEvent) => boolean)[] = [];
   chapters: Chapter[] = [];
   private zoneCache: ZoneSummary[] | null = null;
   private tl!: { canvas: HTMLCanvasElement; head: HTMLElement; marks: HTMLElement; scale: HTMLElement; wrap: HTMLElement };
@@ -45,6 +60,7 @@ export class App {
   onSectionPreset?: (b: { xMin: number; xMax: number; nMin: number; nMax: number; stripTo: number }) => void;
   onWallOpacity?: (v: number) => void;
   onColormap?: (n: ColormapName) => void;
+  onTexturesChanged?: (on: boolean) => void;
   colormapName: ColormapName = 'resistivity';
 
   constructor(
@@ -59,6 +75,9 @@ export class App {
 
   init() {
     const e = this.engine;
+    this.flags = new FeatureFlags(e.quality === 'low');
+    this.toolSlot = h('div', { class: 'tool-slot' });
+    this.hudSlot = h('div', { class: 'hud-slot' });
     this.left = new LeftPanel(this);
     this.logs = new LogTracks();
     this.inspector = new Inspector(this);
@@ -91,15 +110,29 @@ export class App {
       e.rig.setMd(md);
     };
     e.rig.onUserInput = () => this.stopTour();
-    e.onFrame = () => this.frame();
+    e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
+    for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
+    this.featuresPanel = new FeaturesPanel(this.flags, this.modules, e.quality === 'low');
+    document.body.append(this.featuresPanel.el);
     this.ready = this.loadWell(this.field.primary.id, false).then(() => {
       const w = this.engine.activeWell;
       const hug = w.zones.find((z) => z.formationId === 'hugin');
       this.engine.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
       this.chapterIdx = -1;
       this.sectionAlongWell();
+      // features start once the first well is on screen
+      for (const m of this.modules.values())
+        this.flags.watch(m.id, (on) => {
+          try {
+            if (on) m.enable();
+            else m.disable();
+          } catch (err) {
+            console.error(`feature ${m.id}`, err);
+            this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`);
+          }
+        });
     });
     this.applyInsets();
     window.addEventListener('resize', () => this.applyInsets());
@@ -130,6 +163,7 @@ export class App {
     this.inspector.hide();
     if (this.interp.open) this.interp.render();
     if (this.prod.open) this.prod.render();
+    this.notifyFeatures();
     if (fly) {
       this.engine.rig.setMd(0);
       this.overview();
@@ -139,6 +173,10 @@ export class App {
 
   selectWell(id: string) {
     void this.loadWell(id, true);
+  }
+
+  loadWellAsync(id: string, fly = false) {
+    return this.loadWell(id, fly);
   }
 
   /** Called after uploads change the active well's data. */
@@ -151,6 +189,22 @@ export class App {
     this.refreshWellOptions();
     if (this.interp.open) this.interp.render();
     if (this.prod.open) this.prod.render();
+    this.notifyFeatures();
+  }
+
+  /** Tell enabled features that the active well or its data changed. */
+  notifyFeatures() {
+    for (const m of this.modules.values())
+      if (this.flags?.on(m.id))
+        try {
+          m.onWell?.();
+        } catch (err) {
+          console.error(`feature ${m.id}`, err);
+        }
+  }
+
+  feature<T extends FeatureModule>(id: FeatureId): T | undefined {
+    return this.modules.get(id) as T | undefined;
   }
 
   reinterpret() {
@@ -161,6 +215,7 @@ export class App {
     this.logs.invalidate();
     this.renderTimelineStatic();
     this.updateLegend();
+    this.notifyFeatures();
   }
 
   zoneSummaries(): ZoneSummary[] {
@@ -203,6 +258,12 @@ export class App {
     if (m === 'hydrocarbon' && this.engine.rig.guidedView === 'tunnel' && this.engine.rig.mode === 'guided') this.setWallOpacity(0.55);
     else if (m !== 'hydrocarbon') this.setWallOpacity(1);
     this.updateLegend();
+  }
+
+  /** Show or hide an optional property button (e.g. ROP from the Features panel). */
+  setPropertyAvailable(m: PropertyMode, on: boolean) {
+    const b = this.propSeg.querySelector(`button[data-v="${m}"]`) as HTMLElement | null;
+    if (b) b.style.display = on ? '' : 'none';
   }
 
   setColormap(n: ColormapName) {
@@ -358,10 +419,12 @@ export class App {
         ['resistivity', 'Resistivity<small class="seg-sub">measured</small>', '#7fe3ff'],
         ['hydrocarbon', 'Hydrocarbons<small class="seg-sub">calculated</small>', '#ffb547'],
         ['lithology', 'Lithology', '#a28e67'],
+        ['rop', 'ROP<small class="seg-sub">drilling</small>', '#f28a3c'],
       ],
       'resistivity',
       (v) => this.setProperty(v as PropertyMode),
     );
+    this.setPropertyAvailable('rop', false);
     const btn = (icon: string, title: string, fn: () => void, label?: string) =>
       h('button', { class: `btn ${label ? 'lbl' : 'icon'} ghost`, title, html: `${icon}${label ? `<span class="hide-md">${label}</span>` : ''}`, onclick: fn });
     return h(
@@ -388,7 +451,9 @@ export class App {
         this.prod.toggle();
       }, 'Production'),
       btn(I.upload, 'Data manager & uploads', () => this.data.show(), 'Data'),
+      btn(I.sliders, 'Switch features on and off', () => this.featuresPanel.toggle(), 'Features'),
       h('div', { class: 'divider' }),
+      this.toolSlot,
       btn(I.panelLeft, 'Toggle scene panel', () => this.togglePanel('left')),
       btn(I.panelRight, 'Toggle log tracks', () => this.togglePanel('right')),
       btn(I.home, 'Field overview', () => this.overview()),
@@ -400,6 +465,7 @@ export class App {
   refreshWellOptions() {
     this.wellSelect.innerHTML = '';
     for (const w of this.field.wells) {
+      if (w.extra && !this.flags?.on('extraWells') && w !== this.engine.activeWell) continue;
       const tag = w.userAdded ? ' · uploaded' : w.lasFile ? '' : ' · survey + production';
       this.wellSelect.append(h('option', { value: w.id }, `${w.name}${tag}`));
     }
@@ -613,6 +679,35 @@ export class App {
         ticks,
         h('div', { class: 'note' }, `Log scale ${RES_RANGE.min}–${RES_RANGE.max} Ω·m. Borehole wall shows the shallow reading; the halo grades outward to the deep reading (RT). Radial scale ×${this.engine.radialScale}; investigation depth schematic.`),
       );
+    } else if (m === 'rop') {
+      const stops = Array.from({ length: 16 }, (_, i) => {
+        const t = i / 15;
+        const c = t < 0.33 ? mix([0.13, 0.04, 0.32], [0.72, 0.16, 0.42], t / 0.33) : t < 0.66 ? mix([0.72, 0.16, 0.42], [0.98, 0.55, 0.2], (t - 0.33) / 0.33) : mix([0.98, 0.55, 0.2], [0.99, 0.95, 0.62], (t - 0.66) / 0.34);
+        return `${toCss(c)} ${(t * 100).toFixed(1)}%`;
+      }).join(',');
+      const ticks = h('div', { class: 'ticks' });
+      for (const v of [1, 3, 10, 30, 100]) ticks.append(h('span', { style: `left:${(Math.log10(v) / Math.log10(ROP_RANGE.max)) * 100}%` }, String(v)));
+      const zones = w.logs ? ropByZone(w.logs, w.zones) : [];
+      const byF = new Map<string, { name: string; h: number; f: number }>();
+      for (const z of zones) {
+        const a = byF.get(z.formationId) ?? { name: z.name, h: 0, f: 0 };
+        a.h += z.hours;
+        a.f += z.footage;
+        byF.set(z.formationId, a);
+      }
+      const tbl = h('div', { class: 'rop-table' });
+      let tot = 0;
+      for (const [id, a] of byF) {
+        tot += a.h;
+        tbl.append(h('div', {}, h('i', { style: `background:${FORMATION_BY_ID.get(id)?.color ?? '#666'}` }), h('span', {}, a.name.replace(/ \(.*\)| –.*/, '')), h('b', {}, `${(a.f / a.h).toFixed(0)} m/h`), h('small', {}, `${a.h.toFixed(0)} h`)));
+      }
+      L.append(
+        h('div', { class: 'row', style: 'min-height:0' }, h('b', { style: 'font-size:12px' }, 'Rate of penetration · m/h'), h('span', { html: chip('measured') })),
+        h('div', { class: 'bar', style: `background:linear-gradient(90deg,${stops})` }),
+        ticks,
+        zones.length ? tbl : h('div', { class: 'note' }, 'No ROP curve in this well’s logs.'),
+        h('div', { class: 'note' }, zones.length ? `On-bottom drilling time Σ ΔMD / ROP ≈ ${tot.toFixed(0)} h for the logged footage (connections, trips and casing runs excluded). Averages are footage-weighted.` : ''),
+      );
     } else if (m === 'hydrocarbon') {
       const p = w.params;
       L.append(
@@ -653,7 +748,7 @@ export class App {
     const needle = wrap.querySelector('#needle') as SVGElement;
     void svgNs;
     const loc = h('div', { class: 'loc' });
-    const el = h('div', { class: 'hud glass' }, wrap, loc);
+    const el = h('div', { class: 'hud glass' }, h('div', { class: 'hud-row' }, wrap, loc), this.hudSlot);
     this.hud = { el, needle, loc };
     return el;
   }
@@ -713,6 +808,10 @@ export class App {
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       if (moved < 5 && performance.now() - down.t < 500) {
         const p = this.engine.pick(e.clientX, e.clientY);
+        if (this.clickHandlers.some((fn) => fn(p, e))) {
+          down = null;
+          return;
+        }
         if (p) {
           this.inspector.show(p);
           if (p.md !== undefined) this.logs.setCursor(p.md);
@@ -763,9 +862,10 @@ export class App {
       else if (e.key === ']') rig.setMd(rig.md + 10);
       else if (e.key === '[') rig.setMd(rig.md - 10);
       else if (e.key === 'v' || e.key === 'V') {
-        const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology'];
-        this.setProperty(order[(order.indexOf(this.engine.mode) + 1) % 3]);
+        const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.flags.on('rop') ? (['rop'] as PropertyMode[]) : [])];
+        this.setProperty(order[(order.indexOf(this.engine.mode) + 1) % order.length]);
       } else if (e.key === 'Escape') {
+        this.featuresPanel.hide();
         this.interp.hide();
         this.prod.hide();
         this.data.hide();
@@ -776,12 +876,25 @@ export class App {
 
   // ------------------------------------------------------------------ per-frame UI sync
   private lastMdShown = -1;
-  private frame() {
+  private playIconState: boolean | null = null;
+  private frame(dt = 0.016) {
+    for (const m of this.modules.values())
+      if (m.frame && this.flags.on(m.id))
+        try {
+          m.frame(dt);
+        } catch (err) {
+          console.error(`feature ${m.id}`, err);
+        }
     const e = this.engine;
     const rig = e.rig;
     const w = e.activeWell;
     const md = rig.md;
-    this.playBtn.innerHTML = rig.playing ? I.pause : I.play;
+    // swap the icon only when the state changes: rewriting it every frame replaces the element
+    // under the cursor between mousedown and mouseup, and the browser then drops the click
+    if (this.playIconState !== rig.playing) {
+      this.playIconState = rig.playing;
+      this.playBtn.innerHTML = rig.playing ? I.pause : I.play;
+    }
     if (Math.abs(md - this.lastMdShown) > 0.01) {
       this.lastMdShown = md;
       const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
