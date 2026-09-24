@@ -7,11 +7,14 @@ export type FeatureId =
   | 'geosteer'
   | 'curtain'
   | 'section'
+  | 'correlation'
+  | 'crossplot'
   | 'owc'
   | 'rop'
   | 'uncertainty'
   | 'extraWells'
   | 'simulation'
+  | 'mapview'
   | 'textures'
   | 'shadows'
   | 'tunnelFx'
@@ -60,6 +63,22 @@ export const FEATURES: FeatureDef[] = [
     desc: '2D vertical section that follows the well path: formations from the picks model, the trajectory, casing shoes, tops and a log along the path. Click it to travel.',
   },
   {
+    id: 'correlation',
+    name: 'Well correlation',
+    group: 'Geoscience',
+    prov: 'measured',
+    default: false,
+    desc: 'Log tracks of every logged well side by side, flattened on a formation top, with the formation intervals and the same tops joined between neighbouring wells. Click a track to travel there.',
+  },
+  {
+    id: 'crossplot',
+    name: 'Crossplots linked to 3D',
+    group: 'Geoscience',
+    prov: 'calculated',
+    default: false,
+    desc: 'Density–neutron, Pickett and Buckles plots of the active well, with the matrix line, iso-Sw and bulk-volume-water lines from the interpretation parameters. Drag a box to mark those samples along the well in 3D.',
+  },
+  {
     id: 'owc',
     name: 'Oil–water contact',
     group: 'Geoscience',
@@ -98,6 +117,14 @@ export const FEATURES: FeatureDef[] = [
     prov: 'calculated',
     default: false,
     desc: 'Eclipse grid and restart results (saturation, pressure) on a time slider synced to production. Needs the Volve simulation files — import them in Data.',
+  },
+  {
+    id: 'mapview',
+    name: 'Map view',
+    group: 'Reservoir model',
+    prov: 'interpreted',
+    default: false,
+    desc: 'Plan view: structure map of a horizon with contours, all well paths and where they meet it, the camera, the oil–water contact line and production bubbles on a date slider.',
   },
   {
     id: 'textures',

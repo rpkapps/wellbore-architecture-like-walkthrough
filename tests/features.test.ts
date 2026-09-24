@@ -5,6 +5,12 @@ import { steerProfile } from '../src/data/geosteer';
 import { combineContacts, contactEvidence } from '../src/data/contacts';
 import { uncertaintyAlong } from '../src/data/uncertainty';
 import { ropByZone } from '../src/data/drilling';
+import { corrAxis, corrDatum, corrTrack, corrZones } from '../src/data/correlation';
+import { bvwLine, crossplotPoints, mdIntervals, pickettLine } from '../src/data/crossplot';
+import { contourSegments, horizonCrossing, horizonRange, productionAt, productionSpan } from '../src/data/mapview';
+import { waterSaturation } from '../src/data/petro';
+import { findCurve } from '../src/data/las';
+import { sampleHorizon } from '../src/data/surfaces';
 
 // serve public/ through fetch so the real loader runs unchanged
 globalThis.fetch = (async (url: string) => {
@@ -139,5 +145,96 @@ describe('simulation package (.bwsim)', () => {
     expect(m.prop('PORO')![1]).toBeCloseTo(0.3, 2);
     expect(m.step('SOIL', 1)![0]).toBeCloseTo(0.4, 2);
     expect(Number.isNaN(m.step('SOIL', 1)![1])).toBe(true);
+  });
+});
+
+describe('well correlation', () => {
+  it('flattens on the Hugin top at the official pick depth', () => {
+    const w = field.wells.find((x) => x.id === 'F-11A')!;
+    const axis = corrAxis(w.trajectory, 'tvdss', field.meta.datumElevation);
+    const zones = corrZones(w.zones, axis);
+    // Volve picks: F-11 A Hugin Fm. top at 2943.3 m TVDSS
+    expect(corrDatum(zones, 'hugin')).toBeCloseTo(2943.3, 0);
+    for (let i = 1; i < zones.length; i++) expect(zones[i].top).toBeGreaterThanOrEqual(zones[i - 1].base - 0.01);
+  });
+
+  it('keeps only the first downward pass of a horizontal well in TVDSS', () => {
+    const w = field.wells.find((x) => x.id === 'F-11B')!;
+    const gr = findCurve(w.logs, 'GR')!;
+    const tv = corrTrack(w.logs!.depth, gr.values, corrAxis(w.trajectory, 'tvdss', field.meta.datumElevation), 0.5);
+    const md = corrTrack(w.logs!.depth, gr.values, corrAxis(w.trajectory, 'md', field.meta.datumElevation), 0.5);
+    for (let i = 1; i < tv.length; i++) expect(tv[i].d).toBeGreaterThan(tv[i - 1].d);
+    // the ~1500 m lateral undulates within a few tens of metres of TVD, so most of it folds away
+    expect(md.length).toBeGreaterThan(tv.length + 1500);
+    expect(md[md.length - 1].d).toBeCloseTo(md[md.length - 1].md, 6);
+  });
+});
+
+describe('crossplots', () => {
+  it('Pickett iso-Sw lines satisfy Archie with the well parameters', () => {
+    const w = field.wells.find((x) => x.id === 'F-11A')!;
+    const p = { ...w.params, satModel: 'archie' as const };
+    for (const sw of [1, 0.5, 0.2])
+      for (const [rt, phi] of pickettLine(p, sw, 0.02, 0.4)) expect(waterSaturation(rt, phi, 0, p)).toBeCloseTo(Math.min(1, sw), 3);
+    for (const [sw, phi] of bvwLine(0.05)) expect(sw * phi).toBeCloseTo(0.05, 6);
+  });
+
+  it('builds Hugin points for the calculated and measured plots', () => {
+    const w = field.wells.find((x) => x.id === 'F-11A')!;
+    const pk = crossplotPoints('pickett', w.logs!, w.petro, w.zones, { formationId: 'hugin' });
+    const nd = crossplotPoints('nd', w.logs!, w.petro, w.zones, { formationId: 'hugin' });
+    expect(pk.length).toBeGreaterThan(100);
+    expect(nd.length).toBeGreaterThan(100);
+    expect(pk.every((q) => q.formationId === 'hugin' && q.x > 0 && q.y > 0)).toBe(true);
+    // Hugin sandstone: bulk density mostly 2.0–2.7 g/cm³
+    const rhob = nd.map((q) => q.y).sort((a, b) => a - b);
+    expect(rhob[Math.floor(rhob.length / 2)]).toBeGreaterThan(2.0);
+    expect(rhob[Math.floor(rhob.length / 2)]).toBeLessThan(2.7);
+  });
+
+  it('groups selected depths into intervals', () => {
+    expect(mdIntervals([10, 10.5, 11, 30, 30.5, 11.5])).toEqual([
+      { top: 10, base: 11.5, n: 4 },
+      { top: 30, base: 30.5, n: 2 },
+    ]);
+  });
+});
+
+describe('map view', () => {
+  it('contours lie on the horizon at their level', () => {
+    const g = field.horizons.find((x) => x.id === 'hugin')!;
+    const r = horizonRange(g);
+    const level = Math.round((r.min + r.max) / 2);
+    const seg = contourSegments(g, level);
+    expect(seg.length).toBeGreaterThan(40);
+    for (let i = 0; i < seg.length; i += 2) expect(sampleHorizon(g, seg[i], seg[i + 1])).toBeCloseTo(level, 1);
+  });
+
+  it('finds where a well meets the Hugin top', () => {
+    const g = field.horizons.find((x) => x.id === 'hugin')!;
+    const w = field.wells.find((x) => x.id === 'F-11A')!;
+    const c = horizonCrossing(w.trajectory, g, field.meta.datumElevation)!;
+    expect(c).not.toBeNull();
+    expect(Math.abs(c.tvdss - sampleHorizon(g, c.ew, c.ns))).toBeLessThan(2);
+    // the model surface honours the F-11 A pick (3594.6 m MD) closely
+    expect(Math.abs(c.md - 3594.6)).toBeLessThan(30);
+  });
+
+  it('accumulates monthly production up to a date', () => {
+    const rs = field.productionMonthly.get('15/9-F-12')!;
+    const total = rs.reduce((s, r) => s + r.oil, 0);
+    expect(productionAt(rs, Infinity).cumOil).toBeCloseTo(total, 3);
+    expect(productionAt(rs, rs[0].t - 1).started).toBe(false);
+    // mid-month: the month's volume divided by its days
+    const k = rs.findIndex((r) => r.oil > 0);
+    const r = rs[k];
+    const next = rs[k + 1];
+    const days = Math.round((next.t - r.t) / 86400000);
+    const s = productionAt(rs, r.t + 10 * 86400000);
+    expect(s.oilRate).toBeCloseTo(r.oil / days, 6);
+    expect(s.cumOil).toBeCloseTo(rs.slice(0, k + 1).reduce((a, q) => a + q.oil, 0), 3);
+    const span = productionSpan(field.productionMonthly.values())!;
+    expect(new Date(span.t0).getUTCFullYear()).toBe(2008);
+    expect(new Date(span.t1).getUTCFullYear()).toBe(2016);
   });
 });

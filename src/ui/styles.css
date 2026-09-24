@@ -1975,6 +1975,46 @@ canvas.gl.measuring {
   font-family: var(--mono);
   font-size: 11px;
 }
+/* correlation, crossplot and map panels */
+.fp-readout {
+  flex: none;
+  padding: 5px 12px;
+  min-height: 24px;
+  font-size: 10.5px;
+  color: var(--text-2);
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fp-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  border-top: 1px solid var(--line);
+}
+.fp-foot:empty {
+  display: none;
+}
+.btn.xs {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+}
+.fp-foot .slider-row.map-date {
+  flex: 1;
+  margin: 0;
+  min-width: 160px;
+}
+.fp-foot .slider-row.map-date .val {
+  font-family: var(--mono);
+  font-size: 11px;
+}
 .gs-foot {
   display: flex;
   gap: 12px;
