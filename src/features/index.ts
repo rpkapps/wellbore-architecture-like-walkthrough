@@ -1,7 +1,10 @@
 import type { App } from '../ui/app';
 import { ContactsFeature } from './contacts';
+import { CorrelationFeature } from './correlation';
+import { CrossplotFeature } from './crossplot';
 import { CurtainFeature } from './curtain';
 import { GeosteerFeature } from './geosteer';
+import { MapViewFeature } from './mapview';
 import { MeasureFeature } from './measure';
 import type { FeatureModule } from './registry';
 import { SectionFeature } from './section';
@@ -17,11 +20,14 @@ export function createFeatureModules(app: App): FeatureModule[] {
     new GeosteerFeature(app),
     new CurtainFeature(app),
     new SectionFeature(app),
+    new CorrelationFeature(app),
+    new CrossplotFeature(app),
     new ContactsFeature(app),
     new RopFeature(app),
     new UncertaintyFeature(app),
     new ExtraWellsFeature(app),
     new SimulationFeature(app),
+    new MapViewFeature(app),
     new TexturesFeature(app),
     new ShadowsFeature(app),
     new TunnelFxFeature(app),
