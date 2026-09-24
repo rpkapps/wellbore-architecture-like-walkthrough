@@ -18,6 +18,7 @@ import { buildWellTextures, makeLutTexture } from './wellData';
 import { FOCUS, SEABED } from './rockMaterial';
 import { LensBlurShader, LogDepthAOPass, MudParticles } from './postfx';
 import type { SectionBox } from './geology';
+import { ensureBVHFor } from './bvh';
 
 export interface PickResult {
   kind: string;
@@ -280,6 +281,14 @@ export class Engine {
     this.rig.wellbore = this.wellbore;
     this.rig.mdMax = well.tdMD;
     this.paths.build(well.id);
+    // build the picking BVH for the heavy wall geometry off the critical path, not on the first hover
+    const wb = this.wellbore;
+    const build = () => {
+      if (this.wellbore === wb) ensureBVHFor([wb.wall, wb.overviewTube, ...wb.casings]);
+    };
+    // the render loop can keep the browser from ever going idle: cap the wait
+    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: 1500 });
+    else setTimeout(build, 500);
   }
 
   /** Re-upload log/interpretation textures after parameters or data changed. */
@@ -445,6 +454,7 @@ export class Engine {
       if (this.paths.group.visible) targets.push(...this.paths.group.children.filter((c) => c.type === 'Mesh'));
       targets.push(this.env.platform);
     }
+    ensureBVHFor(targets);
     const hits = this.raycaster.intersectObjects(targets, true);
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;
