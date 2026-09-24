@@ -650,6 +650,189 @@ input[type='range']::-moz-range-thumb {
   height: 100%;
   cursor: crosshair;
 }
+/* log track editor */
+.track-menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 6;
+  width: min(330px, calc(100% - 12px));
+  max-height: calc(100% - 12px);
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 11.5px;
+}
+.track-menu.hidden {
+  display: none;
+}
+.tm-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tm-head h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tm-body {
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+  scrollbar-width: thin;
+}
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 0;
+}
+.tm-row.off .tm-name span:first-of-type {
+  color: var(--text-3);
+}
+.tm-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tm-name span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tm-tag {
+  flex: none;
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-2);
+}
+.btn.icon.xs {
+  width: 22px;
+  height: 22px;
+}
+.btn.icon.xs svg {
+  width: 12px;
+  height: 12px;
+}
+.track-menu .btn:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+.tm-rot svg {
+  transform: rotate(90deg);
+}
+.tm-spacer {
+  width: 22px;
+  flex: none;
+}
+.tm-editor {
+  margin: 2px 0 8px 22px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tm-editor .select {
+  max-width: none;
+  width: 100%;
+  height: 26px;
+  font-size: 11px;
+}
+.tm-field {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+.tm-text {
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0 7px;
+  min-width: 0;
+}
+.tm-curve {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.tm-curve b {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-curve input[type='color'] {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.tm-scale {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.tm-scale .num {
+  width: 72px;
+  height: 24px;
+  font-size: 11px;
+}
+.tm-log {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.tm-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.tm-add .select {
+  flex: 1;
+  max-width: none;
+  min-width: 0;
+  height: 26px;
+  font-size: 11px;
+}
+.tm-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.tm-note {
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
 .logs-readout {
   position: absolute;
   pointer-events: none;

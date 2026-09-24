@@ -11,6 +11,7 @@ import { contourSegments, horizonCrossing, horizonRange, productionAt, productio
 import { waterSaturation } from '../src/data/petro';
 import { findCurve } from '../src/data/las';
 import { sampleHorizon } from '../src/data/surfaces';
+import { autoScale, availableCurves, defaultLayout, moveTrack, newTrack, parseLayout, resolveCurve, visibleTracks } from '../src/data/trackLayout';
 
 // serve public/ through fetch so the real loader runs unchanged
 globalThis.fetch = (async (url: string) => {
@@ -236,5 +237,65 @@ describe('map view', () => {
     const span = productionSpan(field.productionMonthly.values())!;
     expect(new Date(span.t0).getUTCFullYear()).toBe(2008);
     expect(new Date(span.t1).getUTCFullYear()).toBe(2016);
+  });
+});
+
+describe('log track layout', () => {
+  it('offers every curve of a well, from logs, CPI and the calculation', () => {
+    const w = field.wells.find((x) => x.id === 'F-11A')!;
+    const opts = availableCurves(w);
+    const ids = opts.map((o) => o.id);
+    for (const id of ['logs:PEF', 'logs:DRHO', 'logs:ROP', 'logs:RACEHM', 'cpi:KLOGH', 'cpi:PHIF', 'petro:bvw']) expect(ids).toContain(id);
+    // DEPTH is the index, not a curve
+    expect(ids.some((i) => /DEPT/.test(i))).toBe(false);
+  });
+
+  it('picks conventional scales for known curves and data-driven ones otherwise', () => {
+    expect(autoScale('PEF', 'B/E', [])).toEqual({ min: 0, max: 10 });
+    expect(autoScale('RACEHM', 'OHMM', [])).toMatchObject({ log: true, min: 0.2, max: 2000 });
+    expect(autoScale('KLOGH', 'mD', [])).toMatchObject({ log: true });
+    expect(autoScale('PHIF', 'v/v', [])).toEqual({ min: 0.5, max: 0 });
+    expect(autoScale('SAND_FLAG.UNKNOWN', '', [])).toEqual({ min: 0, max: 1 });
+    // unknown linear curve: rounded P2–P98
+    const lin = Float32Array.from({ length: 1000 }, (_, i) => 20 + (i / 999) * 60);
+    expect(autoScale('XYZ', '', lin)).toEqual({ min: 20, max: 80 });
+    // unknown positive curve spanning decades: log scale on decade bounds
+    const lg = Float32Array.from({ length: 1000 }, (_, i) => 10 ** (-1 + (i / 999) * 4));
+    expect(autoScale('XYZ', '', lg)).toEqual({ min: 0.1, max: 1000, log: true });
+    expect(autoScale('XYZ', '', [NaN, NaN])).toEqual({ min: 0, max: 1 });
+  });
+
+  it('adds a track that resolves on wells with the curve and is skipped elsewhere', () => {
+    const a = field.wells.find((x) => x.id === 'F-11A')!;
+    const b = field.wells.find((x) => x.id === 'F-11B')!;
+    const layout = defaultLayout();
+    const opt = availableCurves(a).find((o) => o.id === 'cpi:KLOGH')!;
+    const t = newTrack(a, opt, layout);
+    expect(t.custom).toBe(true);
+    expect(t.curves[0].scale.log).toBe(true);
+    const full = [...layout, t];
+    expect(resolveCurve(a, t.curves[0])!.values.length).toBeGreaterThan(100);
+    expect(visibleTracks(full, a).map((q) => q.id)).toContain(t.id);
+    // F-11 B has no CPI: the added track is skipped, the built-in Sonic track stays (it says "Not acquired")
+    expect(b.cpi).toBeUndefined();
+    expect(visibleTracks(full, b).map((q) => q.id)).not.toContain(t.id);
+    expect(visibleTracks(full, b).map((q) => q.id)).toContain('dt');
+    expect(visibleTracks(full, b, true).map((q) => q.id)).not.toContain('dt');
+  });
+
+  it('round-trips a stored layout and rejects malformed ones', () => {
+    const a = field.wells.find((x) => x.id === 'F-11A')!;
+    let layout = defaultLayout();
+    layout[3].hidden = true;
+    layout = moveTrack(layout, 'sw', -1);
+    layout.push(newTrack(a, availableCurves(a).find((o) => o.id === 'logs:PEF')!, layout));
+    const back = parseLayout(JSON.parse(JSON.stringify(layout)));
+    expect(back.map((t) => t.id)).toEqual(layout.map((t) => t.id));
+    expect(back[3].hidden).toBe(true);
+    expect(parseLayout({ nope: 1 }).map((t) => t.id)).toEqual(['gr', 'res', 'nd', 'dt', 'vp', 'sw']);
+    expect(parseLayout([{ id: 'x', title: 'X', curves: [{ key: 'GR', color: '#fff', scale: { min: 0, max: 0 } }] }]).length).toBe(6);
+    // a stored layout that lost a built-in track gets it back, hidden
+    const partial = parseLayout(JSON.parse(JSON.stringify(layout.filter((t) => t.id !== 'res'))));
+    expect(partial.find((t) => t.id === 'res')?.hidden).toBe(true);
   });
 });

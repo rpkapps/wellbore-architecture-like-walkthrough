@@ -1,107 +1,14 @@
 import type { Well } from '../data/dataset';
 import { findCurve, sampleCurve } from '../data/las';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
-import { colormap, resToT, RES_RANGE, type ColormapName } from '../data/colormap';
+import { colormap, resToT, type ColormapName } from '../data/colormap';
+import { DEFAULT_TRACKS, defaultLayout, parseLayout, resolveCurve, visibleTracks, type CurveSpec, type Scale, type TrackSpec } from '../data/trackLayout';
 import type { Curve } from '../data/types';
 import { h, fmt } from './dom';
+import { I } from './icons';
+import { TrackMenu } from './trackMenu';
 
-interface Scale {
-  min: number;
-  max: number;
-  log?: boolean;
-}
-
-interface CurveSpec {
-  key: string; // alias key or mnemonic
-  label: string;
-  color: string;
-  scale: Scale;
-  dash?: number[];
-  width?: number;
-  source?: 'logs' | 'petro' | 'cpi';
-  petroKey?: 'vsh' | 'phie' | 'sw';
-  cpiKey?: string;
-}
-
-interface TrackSpec {
-  id: string;
-  title: string;
-  flex: number;
-  prov: 'measured' | 'calculated' | 'interpreted' | 'mixed';
-  curves: CurveSpec[];
-  grid?: 'linear' | 'log';
-  fill?: 'gr' | 'nd' | 'sw' | 'vsh-phi' | 'res-strip';
-}
-
-const TRACKS: TrackSpec[] = [
-  {
-    id: 'gr',
-    title: 'Gamma · Caliper',
-    flex: 1,
-    prov: 'measured',
-    fill: 'gr',
-    curves: [
-      { key: 'GR', label: 'GR', color: '#9be27a', scale: { min: 0, max: 150 } },
-      { key: 'CALI', label: 'CALI', color: '#d9dde2', scale: { min: 6, max: 16 }, dash: [3, 2], width: 1 },
-      { key: 'BS', label: 'BS', color: '#6d7986', scale: { min: 6, max: 16 }, dash: [1, 2], width: 1 },
-    ],
-  },
-  {
-    id: 'res',
-    title: 'Resistivity',
-    flex: 1.2,
-    prov: 'measured',
-    grid: 'log',
-    fill: 'res-strip',
-    curves: [
-      { key: 'RT', label: 'RT deep', color: '#ff8a65', scale: { min: RES_RANGE.min, max: RES_RANGE.max, log: true }, width: 1.6 },
-      { key: 'RSHAL', label: 'R shallow', color: '#ffd166', scale: { min: RES_RANGE.min, max: RES_RANGE.max, log: true }, dash: [3, 2], width: 1 },
-    ],
-  },
-  {
-    id: 'nd',
-    title: 'Density · Neutron',
-    flex: 1.05,
-    prov: 'measured',
-    fill: 'nd',
-    curves: [
-      { key: 'RHOB', label: 'RHOB', color: '#ff6b81', scale: { min: 1.95, max: 2.95 } },
-      { key: 'NPHI', label: 'NPHI', color: '#5aa9e6', scale: { min: 0.45, max: -0.15 }, dash: [4, 2] },
-    ],
-  },
-  {
-    id: 'dt',
-    title: 'Sonic',
-    flex: 0.8,
-    prov: 'measured',
-    curves: [
-      { key: 'DT', label: 'DTC', color: '#c792ea', scale: { min: 140, max: 40 } },
-      { key: 'DTS', label: 'DTS', color: '#82aaff', scale: { min: 340, max: 90 }, dash: [3, 2], width: 1 },
-    ],
-  },
-  {
-    id: 'vp',
-    title: 'Vsh · Porosity',
-    flex: 0.95,
-    prov: 'calculated',
-    fill: 'vsh-phi',
-    curves: [
-      { key: 'VSH_CALC', label: 'VSH', color: '#b8bec6', scale: { min: 0, max: 1 }, source: 'petro', petroKey: 'vsh', width: 1 },
-      { key: 'PHIE_CALC', label: 'PHIE', color: '#7fe3ff', scale: { min: 0.5, max: 0 }, source: 'petro', petroKey: 'phie' },
-    ],
-  },
-  {
-    id: 'sw',
-    title: 'Saturation',
-    flex: 1.05,
-    prov: 'mixed',
-    fill: 'sw',
-    curves: [
-      { key: 'SW_CALC', label: 'Sw calc', color: '#6fb6ff', scale: { min: 0, max: 1 }, source: 'petro', petroKey: 'sw', width: 1.5 },
-      { key: 'SW', label: 'Sw CPI', color: '#b8a2ff', scale: { min: 0, max: 1 }, source: 'cpi', cpiKey: 'SW', dash: [3, 2], width: 1.2 },
-    ],
-  },
-];
+const LAYOUT_KEY = 'vwt.logtracks.v1';
 
 const HEADER_H = 86;
 const DEPTH_W = 46;
@@ -129,6 +36,10 @@ export class LogTracks {
   onScroll?: (md: number) => void;
   private winLabel: HTMLElement;
   private layout: { x: number; w: number; spec?: TrackSpec; kind: string }[] = [];
+  /** user-editable track layout (built-in tracks + added ones), saved per browser */
+  tracks: TrackSpec[] = defaultLayout();
+  hideEmpty = false;
+  private menu: TrackMenu;
 
   constructor() {
     this.canvas = h('canvas');
@@ -139,7 +50,36 @@ export class LogTracks {
       this.window = Math.max(20, Math.min(4000, this.window * f));
       this.dirty = true;
     };
-    const wrap = h('div', { class: 'logs-canvas-wrap' }, this.canvas, this.readout);
+    this.loadLayout();
+    const self = this;
+    this.menu = new TrackMenu({
+      get layout() {
+        return self.tracks;
+      },
+      set layout(v) {
+        self.tracks = v;
+      },
+      get hideEmpty() {
+        return self.hideEmpty;
+      },
+      set hideEmpty(v) {
+        self.hideEmpty = v;
+      },
+      get well() {
+        return self.well;
+      },
+      commit: () => {
+        this.saveLayout();
+        this.dirty = true;
+      },
+      reset: () => {
+        this.tracks = defaultLayout();
+        this.hideEmpty = false;
+        this.saveLayout();
+        this.dirty = true;
+      },
+    });
+    const wrap = h('div', { class: 'logs-canvas-wrap' }, this.canvas, this.readout, this.menu.el);
     this.el = h(
       'div',
       { class: 'panel right glass', id: 'logs-panel' },
@@ -151,6 +91,7 @@ export class LogTracks {
         h('span', { class: 'chip calculated', title: 'Computed live in this app from measured inputs' }, 'C'),
         h('span', { class: 'chip interpreted', title: "Operator's published interpretation (Equinor CPI)" }, 'I'),
         h('div', { style: 'flex:1' }),
+        h('button', { class: 'btn icon ghost', title: 'Add, remove and edit tracks', html: I.sliders, onclick: () => this.menu.toggle() }),
         h('button', { class: 'btn icon ghost', title: 'Zoom out', onclick: () => zoom(1.6) }, '−'),
         this.winLabel,
         h('button', { class: 'btn icon ghost', title: 'Zoom in', onclick: () => zoom(1 / 1.6) }, '+'),
@@ -191,6 +132,27 @@ export class LogTracks {
   setWell(w: Well) {
     this.well = w;
     this.dirty = true;
+    this.menu.refresh();
+  }
+
+  private loadLayout() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? 'null') as { tracks?: unknown; hideEmpty?: unknown } | null;
+      if (raw) {
+        this.tracks = parseLayout(raw.tracks);
+        this.hideEmpty = raw.hideEmpty === true;
+      }
+    } catch {
+      this.tracks = defaultLayout();
+    }
+  }
+
+  private saveLayout() {
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ tracks: this.tracks, hideEmpty: this.hideEmpty }));
+    } catch {
+      /* private mode: keep in memory only */
+    }
   }
   invalidate() {
     this.dirty = true;
@@ -266,24 +228,24 @@ export class LogTracks {
         if (c) s += row('Sw CPI', fmt.pct(sampleCurve(w.cpi.depth, c.values, md)), 'i');
         if (ph) s += row('PHIF CPI', fmt.pct(sampleCurve(w.cpi.depth, ph.values, md), 1), 'i');
       }
+      // curves the user added to the layout
+      const extra = visibleTracks(this.tracks, w, this.hideEmpty)
+        .flatMap((t) => t.curves.map((c) => ({ c, t })))
+        .filter(({ c }) => !STANDARD_CURVES.has(curveId(c)));
+      if (extra.length) s += '<div style="height:4px"></div>';
+      for (const { c, t } of extra) {
+        const d = resolveCurve(w, c);
+        if (!d) continue;
+        const v = sampleCurve(d.depth, d.values, md);
+        const cls = c.source === 'petro' ? 'c' : c.source === 'cpi' ? 'i' : t.prov === 'calculated' ? 'c' : 'm';
+        s += row(escapeHtml(c.label).slice(0, 10), `${fmtVal(v)}${c.unit ? ` ${escapeHtml(c.unit)}` : ''}`, cls);
+      }
     }
     return s;
   }
 
   private curveFor(spec: CurveSpec): { depth: Float64Array; values: Float32Array } | null {
-    const w = this.well;
-    if (!w?.logs) return null;
-    if (spec.source === 'petro') {
-      const p = w.petro;
-      if (!p || !spec.petroKey) return null;
-      return { depth: w.logs.depth, values: p[spec.petroKey].values };
-    }
-    if (spec.source === 'cpi') {
-      const c = w.cpi?.curves.get(spec.cpiKey!);
-      return c ? { depth: w.cpi!.depth, values: c.values } : null;
-    }
-    const c = findCurve(w.logs, spec.key);
-    return c ? { depth: w.logs.depth, values: c.values } : null;
+    return this.well ? resolveCurve(this.well, spec) : null;
   }
 
   private draw() {
@@ -308,7 +270,8 @@ export class LogTracks {
 
     // layout
     const fixed = DEPTH_W + ZONE_W + HOLE_W + PAY_W + 6;
-    const flexTotal = TRACKS.reduce((s, t) => s + t.flex, 0);
+    const shown = visibleTracks(this.tracks, w, this.hideEmpty);
+    const flexTotal = shown.reduce((s, t) => s + t.flex, 0) || 1;
     const avail = W - fixed - 4;
     let x = 2;
     this.layout = [];
@@ -318,7 +281,7 @@ export class LogTracks {
     x += ZONE_W + 1;
     this.layout.push({ x, w: HOLE_W, kind: 'hole' });
     x += HOLE_W + 2;
-    for (const t of TRACKS) {
+    for (const t of shown) {
       const tw = (t.flex / flexTotal) * avail;
       this.layout.push({ x, w: tw, spec: t, kind: 'track' });
       x += tw;
@@ -497,14 +460,17 @@ export class LogTracks {
     g.strokeRect(x + 1.5, 2.5, w - 3, H - 4);
     // vertical grid
     g.strokeStyle = 'rgba(255,255,255,0.045)';
-    if (t.grid === 'log') {
-      const a = Math.log10(RES_RANGE.min);
-      const b = Math.log10(RES_RANGE.max);
+    const s0 = t.curves[0].scale;
+    if (t.grid === 'log' && s0.log) {
+      const a = Math.log10(Math.min(s0.min, s0.max));
+      const b = Math.log10(Math.max(s0.min, s0.max));
+      const rev = s0.min > s0.max;
       for (let e = Math.ceil(a); e <= b; e++) {
         for (let k = 1; k < 10; k++) {
           const v = Math.log10(k * Math.pow(10, e));
           if (v < a || v > b) continue;
-          const gx = x + 1 + ((v - a) / (b - a)) * (w - 2);
+          const f = (v - a) / (b - a);
+          const gx = x + 1 + (rev ? 1 - f : f) * (w - 2);
           g.strokeStyle = k === 1 ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.03)';
           g.beginPath();
           g.moveTo(gx, bodyTop);
@@ -561,6 +527,15 @@ export class LogTracks {
         g.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.42)`;
         g.fillRect(x + 1, bodyTop + py, xv(s, v) - x - 1, 1);
       }
+    }
+    if (t.fill === 'shade' && data[0]) {
+      g.fillStyle = t.curves[0].color;
+      g.globalAlpha = 0.22;
+      for (let py = 0; py < data[0].vals.length; py++) {
+        const v = data[0].vals[py];
+        if (Number.isFinite(v)) g.fillRect(x + 1, bodyTop + py, xv(t.curves[0].scale, v) - x - 1, 1);
+      }
+      g.globalAlpha = 1;
     }
     if (t.fill === 'res-strip' && data[0]) {
       for (let py = 0; py < data[0].vals.length; py++) {
@@ -688,11 +663,24 @@ export class LogTracks {
   }
 }
 
+const curveId = (c: CurveSpec) => `${c.source ?? 'logs'}:${c.petroKey ?? c.cpiKey ?? c.key}`;
+const STANDARD_CURVES = new Set(DEFAULT_TRACKS.flatMap((t) => t.curves.map(curveId)));
+
+/** curve labels and units come from uploaded files: never insert them as HTML */
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+}
+
+function fmtVal(v: number) {
+  if (!Number.isFinite(v)) return '—';
+  const a = Math.abs(v);
+  return a >= 1000 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+
+/** compact scale label: no trailing zeros, so narrow tracks keep both ends readable */
 function fmtNum(v: number) {
-  if (Math.abs(v) >= 100) return v.toFixed(0);
-  if (Math.abs(v) >= 10) return v.toFixed(0);
-  if (Math.abs(v) >= 1) return v.toFixed(v % 1 ? 2 : 0);
-  return v.toFixed(2);
+  if (Math.abs(v) >= 10 || Number.isInteger(v)) return v.toFixed(0);
+  return String(+v.toPrecision(Math.abs(v) >= 1 ? 3 : 2));
 }
 
 function niceStep(raw: number) {
