@@ -1,6 +1,8 @@
 import { Well } from '../data/dataset';
 import { chooseWell, findColumn, COLS, logsFromTable, productionFromTable, surveyFromTable, topsFromTable, type Table } from '../data/csv';
 import { detectKind, type ImportKind } from '../data/importers';
+import { readBwsim } from '../data/bwsim';
+import type { SimulationFeature } from '../features/simulation';
 import { parseLAS, sampleCurve } from '../data/las';
 import { Trajectory, stationsFromSurvey } from '../data/trajectory';
 import type { LogSet } from '../data/types';
@@ -95,6 +97,18 @@ const GUIDE: GuideEntry[] = [
     sources: [
       { label: 'Volve production data.xlsx', url: `${GH}/yohanesnuwara/volve-machine-learning/blob/master/Volve%20production%20data.xlsx`, note: 'Equinor daily + monthly production for all Volve wells, 2007–2016. Drop the workbook in as-is: the daily sheet is used.', direct: true },
       { label: 'Sodir FactPages — field production', url: 'https://factpages.sodir.no/en/field', note: 'Monthly production for every Norwegian field (field level, not per well); export as CSV.' },
+    ],
+  },
+  {
+    title: 'Reservoir simulation — Eclipse / OPM',
+    formats: '.bwsim (BoreWalk simulation package)',
+    needs: 'Convert simulator output first: <code>python3 scripts/prepare_sim.py DECK.EGRID DECK.INIT DECK.UNRST [DECK.UNSMRY] -o model.bwsim</code>. A GRDECL grid (COORD / ZCORN / ACTNUM) also works in place of the EGRID.',
+    optional: 'Restart arrays <code>SWAT</code>, <code>SGAS</code>, <code>PRESSURE</code> per report date; INIT arrays <code>PORO</code>, <code>PERMX</code>, <code>NTG</code>, <code>SWATINIT</code>; summary vectors <code>FOPR</code>, <code>FWPR</code> for the history-match chart.',
+    notes: 'The grid is placed with its <code>MAPAXES</code> (UTM), so it lines up with the wells if both use the same datum. Cells are drawn as boxes (centre + size).',
+    sources: [
+      { label: 'Equinor Volve Data Village', url: 'https://www.equinor.com/energy/volve-data-sharing', note: 'The Volve Eclipse reservoir model (grid, properties, schedule and results). Free registration.' },
+      { label: 'Volve deck adapted for OPM Flow', url: `${GH}/dabiged/Volve2OPM`, note: 'Run it with the open-source OPM Flow simulator to produce EGRID / INIT / UNRST.', direct: true },
+      { label: 'OPM open datasets (Norne)', url: `${GH}/OPM/opm-data`, note: 'The Norne field benchmark model — another complete public North Sea simulation model.', direct: true },
     ],
   },
 ];
@@ -196,7 +210,7 @@ export class DataManager {
     row('Casing & hole geometry', 'inferred from bit-size log', 'reconstructed');
     row('Natural fractures', 'illustrative — no image log in package', 'schematic');
 
-    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc,.xlsx', style: 'display:none' }) as HTMLInputElement;
+    const input = h('input', { type: 'file', multiple: true, accept: '.las,.LAS,.csv,.txt,.asc,.xlsx,.bwsim', style: 'display:none' }) as HTMLInputElement;
     input.onchange = () => input.files && this.handleFiles([...input.files]);
     const dz = h(
       'div',
@@ -320,6 +334,19 @@ export class DataManager {
   async handleFiles(files: File[]) {
     if (!this.open) this.show();
     const app = this.app;
+    // reservoir-simulation packages go to the simulation feature
+    for (const f of files.filter((x) => /\.bwsim$/i.test(x.name))) {
+      try {
+        const m = readBwsim(await f.arrayBuffer());
+        app.flags.set('simulation', true);
+        app.feature<SimulationFeature>('simulation')?.setModel(m);
+        this.say(`✓ ${f.name}: simulation grid with ${m.n.toLocaleString()} cells and ${m.header.dates.length} report dates`, 'ok');
+      } catch (e) {
+        this.say(`✕ ${f.name}: ${(e as Error).message}`, 'err');
+      }
+    }
+    files = files.filter((x) => !/\.bwsim$/i.test(x.name));
+    if (!files.length) return;
     let well = app.engine.activeWell;
     let createdWell: Well | null = null;
     // sort so that surveys are applied before logs/tops (needed for new wells)

@@ -21,6 +21,12 @@ export const FOCUS = {
   uFocusOn: { value: 0 },
 };
 
+/** Seabed detail (sand ripples) on the up-facing top of the shallowest unit. */
+export const SEABED = {
+  uSeabedOn: { value: 0 },
+  uSeabedY: { value: -91.1 },
+};
+
 /**
  * PBR rock for the regional formation slabs: MeshStandardMaterial with
  * procedural lithology albedo / roughness / bump injected into the shader, and
@@ -44,6 +50,7 @@ export function createRockMaterial(litho: number, color: string): THREE.MeshStan
     uTime: { value: 0 },
     uFade: { value: 0 },
     ...FOCUS,
+    ...SEABED,
   };
   mat.userData.uniforms = uniforms;
   mat.onBeforeCompile = (shader) => {
@@ -70,7 +77,7 @@ vWNormal = dot(wn0, wn0) > 1e-12 ? normalize(wn0) : vec3(0.0, 1.0, 0.0);`,
         '#include <common>',
         `#include <common>
 uniform float uLitho; uniform vec3 uBase; uniform float uHighlight; uniform float uContours; uniform float uBump; uniform float uFade;
-uniform vec3 uFocus; uniform float uFocusR; uniform float uFocusOn;
+uniform vec3 uFocus; uniform float uFocusR; uniform float uFocusOn; uniform float uSeabedOn; uniform float uSeabedY;
 varying float vStrat; varying vec3 vWPos; varying vec3 vWNormal;
 float gRough; float gH;
 ${NOISE}
@@ -89,6 +96,24 @@ if (uContours > 0.5 && vWNormal.y > 0.6) {
   float line = 1.0 - smoothstep(w * 0.5, w * 1.5, dl);
   float major = step(abs(fract(depth / 100.0 + 0.5) - 0.5) * 100.0, 12.5);
   rc = mix(rc, rc * (major > 0.5 ? 0.45 : 0.7), line * 0.7);
+}
+// seabed: wave-built sand ripples, megaripples and darker shell-hash patches where the water meets the rock
+if (uSeabedOn > 0.5 && vWNormal.y > 0.6 && abs(vWPos.y - uSeabedY) < 6.0) {
+  vec2 q = vWPos.xz;
+  float warp = snoise(vec3(q * 0.02, 1.7)) * 4.0;
+  float rip = sin((dot(q, vec2(0.83, 0.56)) + warp) * 6.2831853 / 0.9);
+  float mega = sin((dot(q, vec2(0.6, -0.8)) + warp * 3.0) * 6.2831853 / 18.0);
+  float aaR = 1.0 - smoothstep(0.08, 0.35, fw);
+  float aaM = 1.0 - smoothstep(1.5, 6.0, fw);
+  float patchN = smoothstep(0.1, 0.6, snoise(vec3(q * 0.006, 3.1)));
+  vec3 sand = vec3(0.47, 0.42, 0.33);
+  vec3 hash = vec3(0.33, 0.31, 0.27);
+  vec3 sb = mix(sand, hash, patchN * 0.8);
+  sb *= 0.9 + 0.1 * rip * aaR + 0.08 * mega * aaM;
+  sb *= 0.92 + 0.16 * aaNoise(vWPos * 0.5, 1.0, fw);
+  rc = mix(rc, sb, 0.85);
+  gH += (rip * 0.25 * aaR + mega * 0.6 * aaM);
+  gRough = 0.95;
 }
 // cut faces (vertical walls) read slightly cooler, like a sawn section
 rc *= mix(1.0, 0.92, step(abs(vWNormal.y), 0.3));
@@ -124,6 +149,6 @@ normal = perturbNormalH(-vViewPosition, normal, gH, uBump);`,
 totalEmissiveRadiance += vec3(0.9, 0.7, 0.3) * uHighlight * 0.08;`,
       );
   };
-  mat.customProgramCacheKey = () => 'rock-v1';
+  mat.customProgramCacheKey = () => 'rock-v2';
   return mat;
 }

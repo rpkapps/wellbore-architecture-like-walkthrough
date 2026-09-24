@@ -15,7 +15,9 @@ import { WellboreAssembly, type PropertyMode } from './wellbore';
 import { Environment, WellPaths } from './environment';
 import { CameraRig } from './cameraRig';
 import { buildWellTextures, makeLutTexture } from './wellData';
-import { FOCUS } from './rockMaterial';
+import { FOCUS, SEABED } from './rockMaterial';
+import { LensBlurShader, LogDepthAOPass, MudParticles } from './postfx';
+import type { SectionBox } from './geology';
 
 export interface PickResult {
   kind: string;
@@ -89,6 +91,13 @@ export class Engine {
   onFrame?: (dt: number) => void;
   radialScale = 25;
   private fog: THREE.FogExp2;
+  private aoPass: LogDepthAOPass;
+  private lensPass: ShaderPass;
+  readonly mud = new MudParticles();
+  /** optional-feature switches (see src/features) */
+  fx = { shadows: false, tunnel: false, sea: false };
+  /** listeners for section-box changes (geology rebuilds) */
+  boxListeners: ((b: SectionBox) => void)[] = [];
 
   readonly quality: 'high' | 'low';
 
@@ -129,12 +138,20 @@ export class Engine {
     this.camera.add(this.headlight);
 
     const rt = new THREE.WebGLRenderTarget(container.clientWidth, container.clientHeight, { type: THREE.HalfFloatType, samples: this.quality === 'low' ? 0 : 4 });
+    // depth is sampled by the ambient-occlusion pass (log-depth aware)
+    rt.depthTexture = new THREE.DepthTexture(container.clientWidth, container.clientHeight, THREE.FloatType);
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.aoPass = new LogDepthAOPass(this.camera);
+    this.aoPass.enabled = false;
+    this.composer.addPass(this.aoPass);
     this.composer.addPass(new ShaderPass(SanitizePass));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(container.clientWidth, container.clientHeight), 0.32, 0.55, 0.88);
     this.bloom.enabled = this.quality !== 'low';
     this.composer.addPass(this.bloom);
+    this.lensPass = new ShaderPass(LensBlurShader);
+    this.lensPass.enabled = false;
+    this.composer.addPass(this.lensPass);
     this.composer.addPass(new OutputPass());
     this.grade = new ShaderPass(GradePass);
     this.composer.addPass(this.grade);
@@ -146,7 +163,17 @@ export class Engine {
     this.scene.add(this.env.group);
     this.geology = new GeologyModel(field);
     this.scene.add(this.geology.group);
-    this.geology.onBoxChange = (b) => this.env.setBox(b);
+    this.geology.onBoxChange = (b) => {
+      this.env.setBox(b);
+      this.fitShadowCamera();
+      for (const f of this.boxListeners) f(b);
+    };
+    this.scene.add(this.mud.points, this.sun.target);
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.sun.shadow.mapSize.setScalar(this.quality === 'low' ? 1024 : 4096);
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 1.5;
+    this.fitShadowCamera();
     this.paths = new WellPaths(field, this.coords);
     this.scene.add(this.paths.group);
 
@@ -166,6 +193,56 @@ export class Engine {
     this.grade.enabled = on;
   }
 
+  /** Sun shadows on the platform, sea and geological block. */
+  setShadows(on: boolean) {
+    this.fx.shadows = on;
+    this.renderer.shadowMap.enabled = on;
+    this.sun.castShadow = on;
+    this.aoPass.enabled = on;
+    this.geology.shadows = on;
+    this.geology.applyState();
+    this.env.platform.traverse((o) => {
+      o.castShadow = on;
+      o.receiveShadow = on;
+    });
+    this.env.sea.receiveShadow = on;
+    this.scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(m)) m.forEach((x) => (x.needsUpdate = true));
+      else if (m) m.needsUpdate = true;
+    });
+  }
+
+  setTunnelFx(on: boolean) {
+    this.fx.tunnel = on;
+    if (!on) this.lensPass.enabled = false;
+  }
+
+  setSeaFx(on: boolean) {
+    this.fx.sea = on;
+    this.env.setDetail(on);
+    SEABED.uSeabedOn.value = on ? 1 : 0;
+  }
+
+  private fitShadowCamera() {
+    const b = this.geology.box;
+    const cx = (b.xMin + b.xMax) / 2;
+    const cz = -(b.nMin + b.nMax) / 2;
+    const half = Math.max(b.xMax - b.xMin, b.nMax - b.nMin) * 0.78;
+    const dir = new THREE.Vector3(-3000, 5000, 2500).normalize();
+    this.sun.target.position.set(cx, -1400, cz);
+    this.sun.position.copy(this.sun.target.position).addScaledVector(dir, 9000);
+    const c = this.sun.shadow.camera;
+    c.left = -half;
+    c.right = half;
+    c.top = half;
+    c.bottom = -half;
+    c.near = 1000;
+    c.far = 18000;
+    c.updateProjectionMatrix();
+    this.sun.shadow.needsUpdate = true;
+  }
+
   resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -178,6 +255,9 @@ export class Engine {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    const pr = this.renderer.getPixelRatio();
+    this.aoPass.setSize(w * pr, h * pr);
+    (this.lensPass.uniforms as Record<string, THREE.IUniform>).uAspect.value = w / h;
     this.labelRenderer.setSize(w, h);
   }
 
@@ -319,9 +399,21 @@ export class Engine {
     this.hemi.intensity = this.tunnel ? 0.05 : 0.55;
     this.scene.environmentIntensity = this.tunnel ? 0.12 : 0.55;
     (this.grade.uniforms as Record<string, THREE.IUniform>).uTime.value = t;
+    // inside-the-hole atmosphere: lens blur and drifting fluid particles
+    const tfx = this.fx.tunnel && this.tunnel;
+    this.lensPass.enabled = tfx && this.quality !== 'low';
+    if (wb && tfx) {
+      const r = wb.innerRadiusAt(this.rig.md);
+      this.mud.update(this.camera, t, true, Math.max(3, r * 3.2), this.renderer.domElement.height);
+    } else this.mud.update(this.camera, t, false, 1, 1);
     this.onFrame?.(dt);
     this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);
+  }
+
+  /** Render one frame immediately (used by the snapshot export). */
+  renderFrame() {
+    this.composer.render();
   }
 
   /** Raycast the scene at client coordinates. */

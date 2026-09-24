@@ -45,6 +45,7 @@ export function buildWellTextures(well: Well): WellTextures {
   const bs = findCurve(logs, 'BS');
   const rhob = findCurve(logs, 'RHOB');
   const nphi = findCurve(logs, 'NPHI');
+  const rop = findCurve(logs, 'ROP');
   const p = well.petro;
   const d = logs?.depth;
   let zi = 0;
@@ -78,6 +79,8 @@ export function buildWellTextures(well: Well): WellTextures {
       }
       C[o + 1] = Number.isFinite(s(rhob)) ? s(rhob) : MISSING;
       C[o + 2] = Number.isFinite(s(nphi)) ? s(nphi) : MISSING;
+      const r = s(rop);
+      C[o + 3] = r > 0.05 && r < 1000 ? r : MISSING;
     }
     B[o + 3] = fidx;
   }

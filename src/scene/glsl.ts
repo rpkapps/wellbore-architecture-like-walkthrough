@@ -153,7 +153,7 @@ vec3 perturbNormalH(vec3 surf_pos, vec3 surf_norm, float hgt, float strength){
 export const DATA_TEX = /* glsl */ `
 uniform sampler2D uDataA; // log10 Rdeep, log10 Rshallow, GR, caliper(in)
 uniform sampler2D uDataB; // Sw, PHIE, Vsh, formation index
-uniform sampler2D uDataC; // pay flag, RHOB, NPHI, provenance flags
+uniform sampler2D uDataC; // pay flag, RHOB, NPHI, ROP (m/h)
 uniform sampler2D uLut;
 uniform float uDataStep;
 uniform float uDataMd0;
@@ -177,4 +177,10 @@ vec4 fetchNearest(sampler2D tex, float md){
   return texelFetch(tex, ivec2(int(mod(i0, uDataWidth)), int(i0 / uDataWidth)), 0);
 }
 vec3 lutColor(float t){ return texture2D(uLut, vec2(clamp(t, 0.002, 0.998), 0.5)).rgb; }
+// drilling-speed palette (slow = deep violet, fast = pale yellow), log scale 1–100 m/h
+vec3 ropColor(float rop){
+  float t = clamp(log(max(rop, 0.01)) / log(10.0) * 0.5, 0.0, 1.0);
+  vec3 a = vec3(0.13, 0.04, 0.32); vec3 b = vec3(0.72, 0.16, 0.42); vec3 c = vec3(0.98, 0.55, 0.2); vec3 d = vec3(0.99, 0.95, 0.62);
+  return t < 0.33 ? mix(a, b, t / 0.33) : t < 0.66 ? mix(b, c, (t - 0.33) / 0.33) : mix(c, d, (t - 0.66) / 0.34);
+}
 `;

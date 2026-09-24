@@ -5,7 +5,7 @@
  */
 export type ColormapName = 'turbo' | 'viridis' | 'inferno' | 'resistivity';
 
-type RGB = [number, number, number];
+export type RGB = [number, number, number];
 
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 

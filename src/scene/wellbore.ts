@@ -10,7 +10,7 @@ import type { Coords } from './coords';
 import { DATA_TEX, NOISE, ROCK } from './glsl';
 import { formationUniforms, type WellTextures } from './wellData';
 
-export type PropertyMode = 'lithology' | 'resistivity' | 'hydrocarbon';
+export type PropertyMode = 'lithology' | 'resistivity' | 'hydrocarbon' | 'rop';
 const IN = 0.0254;
 const MAX_FRAC = 64;
 const SHELLS = 6;
@@ -456,7 +456,15 @@ float strat = vStrat + (vAxis.y - vWPos.y) / uRadialScale;
 vec3 rock = rockColor(litho, baseC, vWPos, strat, fw, gRough, gH);
 vec3 col = rock;
 float lumR = dot(rock, vec3(0.299, 0.587, 0.114)) / max(dot(baseC, vec3(0.299, 0.587, 0.114)), 1e-3);
-if (uMode > 0.5 && uMode < 1.5) {
+if (uMode > 2.5) {
+  if (dC.w > -900.0) {
+    col = ropColor(dC.w) * (0.6 + 0.4 * clamp(lumR, 0.3, 1.7));
+    gRough = 0.7;
+  } else {
+    float hatch = step(0.5, fract((vMd + vWPos.x * 0.3) * 0.5));
+    col = mix(rock * 0.35, rock * 0.45, hatch);
+  }
+} else if (uMode > 0.5 && uMode < 1.5) {
   if (dA.x > -900.0) {
     float t = (dA.y - uResLogMin) / (uResLogMax - uResLogMin); // borehole wall reads the shallow curve
     col = lutColor(t) * (0.55 + 0.45 * clamp(lumR, 0.3, 1.7));
@@ -465,7 +473,7 @@ if (uMode > 0.5 && uMode < 1.5) {
     float hatch = step(0.5, fract((vMd + vWPos.x * 0.3) * 0.5));
     col = mix(rock * 0.35, rock * 0.45, hatch);
   }
-} else if (uMode > 1.5) {
+} else if (uMode > 1.5 && uMode < 2.5) {
   if (dB.x > -900.0 && dB.y > -900.0) {
     float so = 1.0 - dB.x;
     float hc = clamp(dB.y * so * 4.0, 0.0, 1.0);
@@ -502,7 +510,7 @@ diffuseColor.a = uWallOpacity;`,
         .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = perturbNormalH(-vViewPosition, normal, gH, 0.04);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEmit;');
     };
-    mat.customProgramCacheKey = () => 'wall-v1';
+    mat.customProgramCacheKey = () => 'wall-v2';
     this.wallMat = mat;
     const geo = this.tube(0, this.well.tdMD, (i) => this.rHole[i] * this.radialScale, 48);
     this.wall = new THREE.Mesh(geo, mat);
@@ -886,7 +894,8 @@ void main(){
   int fi = int(B.w + 0.5);
   vec3 c = B.w < -0.5 ? vec3(0.55, 0.62, 0.7) : uFormColor[fi] * 1.4;
   if (uMode > 0.5 && uMode < 1.5 && A.x > -900.0) c = lutColor((A.x - uResLogMin) / (uResLogMax - uResLogMin));
-  if (uMode > 1.5) {
+  if (uMode > 2.5 && C.w > -900.0) c = ropColor(C.w);
+  if (uMode > 1.5 && uMode < 2.5) {
     c = vec3(0.45, 0.5, 0.56);
     if (B.x > -900.0) c = mix(vec3(0.2, 0.5, 0.82), vec3(1.0, 0.62, 0.15), clamp(1.0 - B.x, 0.0, 1.0));
     if (C.x > 0.5) c = vec3(1.0, 0.75, 0.3);
@@ -908,9 +917,9 @@ void main(){
   // ------------------------------------------------------------------ runtime state
   setMode(mode: PropertyMode) {
     this.mode = mode;
-    this.uniforms.uMode.value = mode === 'lithology' ? 0 : mode === 'resistivity' ? 1 : 2;
+    this.uniforms.uMode.value = mode === 'lithology' ? 0 : mode === 'resistivity' ? 1 : mode === 'hydrocarbon' ? 2 : 3;
     this.shells.forEach((m, i) => {
-      m.visible = mode !== 'lithology';
+      m.visible = mode === 'resistivity' || mode === 'hydrocarbon';
       m.material = mode === 'hydrocarbon' ? this.shellMatFluid[i] : this.shellMatRes[i];
     });
     this.payGroup.visible = mode === 'hydrocarbon';
