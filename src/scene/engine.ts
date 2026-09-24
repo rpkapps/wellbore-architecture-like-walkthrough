@@ -18,6 +18,7 @@ import { buildWellTextures, makeLutTexture } from './wellData';
 import { FOCUS, SEABED } from './rockMaterial';
 import { LensBlurShader, LogDepthAOPass, MudParticles } from './postfx';
 import type { SectionBox } from './geology';
+import { ensureBVHFor } from './bvh';
 
 export interface PickResult {
   kind: string;
@@ -62,6 +63,18 @@ void main(){
 }`,
 };
 
+/** Reversed depth needs EXT_clip_control (WebGL2); probed on a throwaway context. */
+function supportsReversedDepth(): boolean {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const ok = !!gl?.getExtension('EXT_clip_control');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly labelRenderer: CSS2DRenderer;
@@ -100,6 +113,7 @@ export class Engine {
   boxListeners: ((b: SectionBox) => void)[] = [];
 
   readonly quality: 'high' | 'low';
+  readonly depthMode: 'reversed' | 'log';
 
   constructor(
     private container: HTMLElement,
@@ -107,7 +121,16 @@ export class Engine {
   ) {
     this.quality = /[?&]q=low/.test(location.search) ? 'low' : 'high';
     this.coords = new Coords(field.meta.datumElevation);
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+    // The scene spans 5 cm to 90 km. A reversed float depth buffer covers that range while keeping the GPU's
+    // early depth test; the logarithmic buffer writes depth per fragment, which disables it, so every hidden
+    // pixel of the rock / fracture / pore shaders is shaded anyway. Log depth stays as the fallback.
+    this.depthMode = /[?&]depth=log/.test(location.search) || !supportsReversedDepth() ? 'log' : 'reversed';
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      reversedDepthBuffer: this.depthMode === 'reversed',
+      logarithmicDepthBuffer: this.depthMode === 'log',
+      powerPreference: 'high-performance',
+    });
     this.renderer.setPixelRatio(this.quality === 'low' ? 1 : Math.min(window.devicePixelRatio, 1.75));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -280,6 +303,14 @@ export class Engine {
     this.rig.wellbore = this.wellbore;
     this.rig.mdMax = well.tdMD;
     this.paths.build(well.id);
+    // build the picking BVH for the heavy wall geometry off the critical path, not on the first hover
+    const wb = this.wellbore;
+    const build = () => {
+      if (this.wellbore === wb) ensureBVHFor([wb.wall, wb.overviewTube, ...wb.casings]);
+    };
+    // the render loop can keep the browser from ever going idle: cap the wait
+    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: 1500 });
+    else setTimeout(build, 500);
   }
 
   /** Re-upload log/interpretation textures after parameters or data changed. */
@@ -414,6 +445,7 @@ export class Engine {
       this.mud.update(this.camera, t, true, Math.max(3, r * 3.2), this.renderer.domElement.height);
     } else this.mud.update(this.camera, t, false, 1, 1);
     this.onFrame?.(dt);
+    wb?.cullTubes(this.camera, this.renderer.domElement.height);
     this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);
   }
@@ -445,6 +477,7 @@ export class Engine {
       if (this.paths.group.visible) targets.push(...this.paths.group.children.filter((c) => c.type === 'Mesh'));
       targets.push(this.env.platform);
     }
+    ensureBVHFor(targets);
     const hits = this.raycaster.intersectObjects(targets, true);
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;

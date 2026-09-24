@@ -4,10 +4,11 @@ import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 const VERT = /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
 /**
- * Screen-space ambient occlusion that understands three.js' logarithmic depth
- * buffer (the stock SSAO / SAO / GTAO passes assume a perspective depth and
- * break with it). View distance is recovered from the log depth as
- * w = 2^(d · log2(far + 1)) − 1, view position from the projection matrix
+ * Screen-space ambient occlusion that understands three.js' logarithmic and
+ * reversed depth buffers (the stock SSAO / SAO / GTAO passes assume a standard
+ * perspective depth and break with both). View distance is recovered from the
+ * log depth as w = 2^(d · log2(far + 1)) − 1, or from the reversed depth as
+ * w = near · far / (d · (far − near) + near); view position from the projection matrix
  * (including the side-panel view offset). The sampling radius scales with
  * distance so creases read at every zoom level, from casing couplings to the
  * edges of the geological block.
@@ -24,6 +25,8 @@ export class LogDepthAOPass extends Pass {
         tDepth: { value: null },
         uProj: { value: new THREE.Matrix4() },
         uLogFar: { value: 1 },
+        uReversed: { value: 0 },
+        uNearFar: { value: new THREE.Vector2(0.1, 1000) },
         uRes: { value: new THREE.Vector2(1, 1) },
         uStrength: { value: 1.1 },
         uRadius: { value: 0.022 },
@@ -31,9 +34,13 @@ export class LogDepthAOPass extends Pass {
       vertexShader: VERT,
       fragmentShader: /* glsl */ `
 uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform mat4 uProj; uniform float uLogFar; uniform vec2 uRes;
-uniform float uStrength; uniform float uRadius;
+uniform float uStrength; uniform float uRadius; uniform float uReversed; uniform vec2 uNearFar;
 varying vec2 vUv;
-float viewW(vec2 uv){ float d = texture2D(tDepth, uv).x; return exp2(d * uLogFar) - 1.0; }
+float viewW(vec2 uv){
+  float d = texture2D(tDepth, uv).x;
+  if (uReversed > 0.5) return uNearFar.x * uNearFar.y / (d * (uNearFar.y - uNearFar.x) + uNearFar.x);
+  return exp2(d * uLogFar) - 1.0;
+}
 vec3 viewPos(vec2 uv){
   float w = viewW(uv);
   vec2 ndc = uv * 2.0 - 1.0;
@@ -43,7 +50,8 @@ float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.005
 void main(){
   vec4 col = texture2D(tDiffuse, vUv);
   float d0 = texture2D(tDepth, vUv).x;
-  if (d0 >= 0.99999) { gl_FragColor = col; return; }
+  // background: the depth clear value (far plane) of either encoding
+  if (uReversed > 0.5 ? d0 <= 0.0 : d0 >= 0.99999) { gl_FragColor = col; return; }
   vec2 px = 1.0 / uRes;
   vec3 p = viewPos(vUv);
   // normal from the flatter neighbour on each axis (avoids halos at silhouettes)
@@ -87,6 +95,8 @@ void main(){
     u.tDepth.value = readBuffer.depthTexture;
     u.uProj.value.copy(this.camera.projectionMatrix);
     u.uLogFar.value = Math.log2(this.camera.far + 1);
+    u.uReversed.value = renderer.state.buffers.depth.getReversed() ? 1 : 0;
+    u.uNearFar.value.set(this.camera.near, this.camera.far);
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }
