@@ -202,7 +202,7 @@ export const ALIASES: Record<string, string[]> = {
   BS: ['BS', 'BIT', 'BITSIZE'],
   PEF: ['PEF', 'PE', 'PEFZ'],
   DRHO: ['DRHO', 'DCOR', 'HDRA'],
-  ROP: ['ROP', 'ROPA'],
+  ROP: ['ROP', 'ROPA', 'ROP5_RM', 'ROP5'],
 };
 
 export function findCurve(set: LogSet | undefined, key: keyof typeof ALIASES | string): Curve | undefined {
