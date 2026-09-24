@@ -5,7 +5,7 @@ import { GeosteerFeature } from './geosteer';
 import { MeasureFeature } from './measure';
 import type { FeatureModule } from './registry';
 import { SectionFeature } from './section';
-import { ExtraWellsFeature, RopFeature, SeaFxFeature, ShadowsFeature, TunnelFxFeature } from './simple';
+import { ExtraWellsFeature, RopFeature, SeaFxFeature, ShadowsFeature, TexturesFeature, TunnelFxFeature } from './simple';
 import { SimulationFeature } from './simulation';
 import { SnapshotFeature } from './snapshot';
 import { UncertaintyFeature } from './uncertainty';
@@ -22,6 +22,7 @@ export function createFeatureModules(app: App): FeatureModule[] {
     new UncertaintyFeature(app),
     new ExtraWellsFeature(app),
     new SimulationFeature(app),
+    new TexturesFeature(app),
     new ShadowsFeature(app),
     new TunnelFxFeature(app),
     new SeaFxFeature(app),

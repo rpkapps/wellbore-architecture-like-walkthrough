@@ -60,6 +60,7 @@ export class App {
   onSectionPreset?: (b: { xMin: number; xMax: number; nMin: number; nMax: number; stripTo: number }) => void;
   onWallOpacity?: (v: number) => void;
   onColormap?: (n: ColormapName) => void;
+  onTexturesChanged?: (on: boolean) => void;
   colormapName: ColormapName = 'resistivity';
 
   constructor(

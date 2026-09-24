@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { NOISE, ROCK } from './glsl';
+import { REAL, REAL_GLSL } from './textures';
 
 export interface RockUniforms {
   uLitho: { value: number };
@@ -52,9 +53,10 @@ export function createRockMaterial(litho: number, color: string): THREE.MeshStan
     ...FOCUS,
     ...SEABED,
   };
+  const shaderUniforms = { ...uniforms, ...REAL };
   mat.userData.uniforms = uniforms;
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, uniforms);
+    Object.assign(shader.uniforms, shaderUniforms);
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -79,15 +81,31 @@ vWNormal = dot(wn0, wn0) > 1e-12 ? normalize(wn0) : vec3(0.0, 1.0, 0.0);`,
 uniform float uLitho; uniform vec3 uBase; uniform float uHighlight; uniform float uContours; uniform float uBump; uniform float uFade;
 uniform vec3 uFocus; uniform float uFocusR; uniform float uFocusOn; uniform float uSeabedOn; uniform float uSeabedY;
 varying float vStrat; varying vec3 vWPos; varying vec3 vWNormal;
-float gRough; float gH;
+float gRough; float gH; vec3 gRealN; float gReal;
 ${NOISE}
-${ROCK}`,
+${ROCK}
+${REAL_GLSL}`,
       )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
 float fw = length(fwidth(vWPos));
 vec3 rc = rockColor(uLitho, uBase, vWPos, vStrat, fw, gRough, gH);
+gReal = 0.0;
+bool seabedHere = uSeabedOn > 0.5 && vWNormal.y > 0.6 && abs(vWPos.y - uSeabedY) < 6.0;
+if (uRealistic > 0.5) {
+  // CC0 photo texture of this lithology, tinted to the formation colour; the procedural
+  // bedding still modulates it so strata read from the field view
+  float layer = seabedHere ? 0.0 : uLitho;
+  vec3 alb; vec3 arm; vec3 nW;
+  realTri(layer, vWPos, vWNormal, seabedHere ? 2.5 : 4.0, fw, alb, arm, nW);
+  float bed = dot(rc, vec3(0.299, 0.587, 0.114)) / max(dot(uBase, vec3(0.299, 0.587, 0.114)), 1e-3);
+  vec3 photo = seabedHere ? alb : realTint(alb, layer, uBase, 0.55);
+  rc = photo * mix(1.0, clamp(bed, 0.6, 1.4), 0.45) * mix(1.0, arm.r, 0.7);
+  gRough = clamp(arm.g, 0.35, 1.0);
+  gRealN = nW;
+  gReal = 1.0;
+}
 // structural contours (every 25 m TVDSS) on up-facing horizon surfaces
 if (uContours > 0.5 && vWNormal.y > 0.6) {
   float depth = -vWPos.y;
@@ -98,7 +116,7 @@ if (uContours > 0.5 && vWNormal.y > 0.6) {
   rc = mix(rc, rc * (major > 0.5 ? 0.45 : 0.7), line * 0.7);
 }
 // seabed: wave-built sand ripples, megaripples and darker shell-hash patches where the water meets the rock
-if (uSeabedOn > 0.5 && vWNormal.y > 0.6 && abs(vWPos.y - uSeabedY) < 6.0) {
+if (seabedHere) {
   vec2 q = vWPos.xz;
   float warp = snoise(vec3(q * 0.02, 1.7)) * 4.0;
   float rip = sin((dot(q, vec2(0.83, 0.56)) + warp) * 6.2831853 / 0.9);
@@ -106,14 +124,23 @@ if (uSeabedOn > 0.5 && vWNormal.y > 0.6 && abs(vWPos.y - uSeabedY) < 6.0) {
   float aaR = 1.0 - smoothstep(0.08, 0.35, fw);
   float aaM = 1.0 - smoothstep(1.5, 6.0, fw);
   float patchN = smoothstep(0.1, 0.6, snoise(vec3(q * 0.006, 3.1)));
-  vec3 sand = vec3(0.47, 0.42, 0.33);
-  vec3 hash = vec3(0.33, 0.31, 0.27);
-  vec3 sb = mix(sand, hash, patchN * 0.8);
-  sb *= 0.9 + 0.1 * rip * aaR + 0.08 * mega * aaM;
-  sb *= 0.92 + 0.16 * aaNoise(vWPos * 0.5, 1.0, fw);
-  rc = mix(rc, sb, 0.85);
-  gH += (rip * 0.25 * aaR + mega * 0.6 * aaM);
-  gRough = 0.95;
+  if (gReal > 0.5) {
+    // photo sand, shaded and bent by the same wave ripples / megaripples
+    rc *= mix(1.0, 0.7, patchN * 0.8) * (0.8 + 0.2 * rip * aaR + 0.14 * mega * aaM);
+    float ph1 = (dot(q, vec2(0.83, 0.56)) + warp) * 6.2831853 / 0.9;
+    float ph2 = (dot(q, vec2(0.6, -0.8)) + warp * 3.0) * 6.2831853 / 18.0;
+    vec2 g = vec2(0.83, 0.56) * cos(ph1) * 0.4 * aaR + vec2(0.6, -0.8) * cos(ph2) * 0.15 * aaM;
+    gRealN = normalize(gRealN + vec3(-g.x, 0.0, -g.y));
+  } else {
+    vec3 sand = vec3(0.47, 0.42, 0.33);
+    vec3 hash = vec3(0.33, 0.31, 0.27);
+    vec3 sb = mix(sand, hash, patchN * 0.8);
+    sb *= 0.9 + 0.1 * rip * aaR + 0.08 * mega * aaM;
+    sb *= 0.92 + 0.16 * aaNoise(vWPos * 0.5, 1.0, fw);
+    rc = mix(rc, sb, 0.85);
+    gH += (rip * 0.25 * aaR + mega * 0.6 * aaM);
+    gRough = 0.95;
+  }
 }
 // cut faces (vertical walls) read slightly cooler, like a sawn section
 rc *= mix(1.0, 0.92, step(abs(vWNormal.y), 0.3));
@@ -141,7 +168,8 @@ roughnessFactor = gRough;`,
       .replace(
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
-normal = perturbNormalH(-vViewPosition, normal, gH, uBump);`,
+if (gReal > 0.5) normal = normalize((viewMatrix * vec4(gRealN, 0.0)).xyz) * faceDirection;
+else normal = perturbNormalH(-vViewPosition, normal, gH, uBump);`,
       )
       .replace(
         '#include <emissivemap_fragment>',
@@ -149,6 +177,6 @@ normal = perturbNormalH(-vViewPosition, normal, gH, uBump);`,
 totalEmissiveRadiance += vec3(0.9, 0.7, 0.3) * uHighlight * 0.08;`,
       );
   };
-  mat.customProgramCacheKey = () => 'rock-v2';
+  mat.customProgramCacheKey = () => 'rock-v4';
   return mat;
 }

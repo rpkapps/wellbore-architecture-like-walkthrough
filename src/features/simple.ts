@@ -1,6 +1,7 @@
 import type { App } from '../ui/app';
 import { h } from '../ui/dom';
 import type { FeatureModule } from './registry';
+import { REAL, loadRealisticTextures, texturesLoaded } from '../scene/textures';
 
 /** Sun shadows + log-depth ambient occlusion. */
 export class ShadowsFeature implements FeatureModule {
@@ -11,6 +12,34 @@ export class ShadowsFeature implements FeatureModule {
   }
   disable() {
     this.app.engine.setShadows(false);
+  }
+}
+
+/** CC0 photo textures ⇄ procedural materials, switched live through one shared uniform. */
+export class TexturesFeature implements FeatureModule {
+  readonly id = 'textures' as const;
+  private want = false;
+  constructor(private app: App) {}
+  enable() {
+    this.want = true;
+    if (!texturesLoaded) this.app.toast('Loading photo textures …');
+    loadRealisticTextures()
+      .then(() => {
+        if (this.want) REAL.uRealistic.value = 1;
+        this.app.onTexturesChanged?.(this.want);
+      })
+      .catch((err) => this.app.toast(`Textures failed to load: ${(err as Error).message}`));
+  }
+  disable() {
+    this.want = false;
+    REAL.uRealistic.value = 0;
+    this.app.onTexturesChanged?.(false);
+  }
+  settings() {
+    return h(
+      'div',
+      { class: 'feat-note', html: 'Poly Haven CC0 textures: sandstone <i>rock_06</i>, claystone <i>excavated_soil_wall</i>, chalk and marl <i>marble_cliff_03/02</i>, shales <i>dark_rock_02 / dark_rock</i>, Sleipner <i>cliff_side</i>, red beds <i>rock_boulder_cracked</i>, seabed <i>damp_sand</i>, casing <i>rusty_metal_sheet</i>, cement <i>concrete_floor_worn_001</i>. Photos are tinted to each formation’s colour and keep the modelled bedding. Full list: <code>public/textures/CREDITS.md</code>.' },
+    );
   }
 }
 

@@ -160,6 +160,7 @@ Every feature below can be switched on or off in **Features** (top bar). The cho
 | **Survey uncertainty cones** | 1σ/2σ/3σ position ellipses swept along the path from a simplified systematic MWD model (σinc 0.1°, σazi 0.5°, 1 ‰ depth), plus an allowance on trajectories reconstructed from picks. The vertical band also appears in the geosteering strip and cross-section. Not a full ISCWSA tool-code model. | Calculated | off |
 | **More Volve wells** | Adds F-1 A, F-1 B, F-14, F-15 D, F-4 and F-5 with logs, CPI, definitive surveys and daily production. | Measured | on |
 | **Reservoir simulation** | Equinor's Volve Eclipse model on the map. Every active cell is an instanced box coloured by initial oil saturation, porosity, permeability, NTG, region or depth. Filters for layers and values, clipping to the section box, and a field oil-rate chart. Time-lapse results (saturation and pressure per report date) are shown with a date slider when the package contains restart data. Import your own `.bwsim` in Data. | Operator model / calculated | off |
+| **Realistic textures** | CC0 photo-scanned PBR textures from [Poly Haven](https://polyhaven.com) (albedo, normal, AO, roughness, metalness) for every rock type, the seabed, the borehole wall, the casing steel and the cement. Switch it on or off live, here or in *Display → Realistic textures*, to compare with the procedural look. Slabs and the borehole wall use scale-aware world-space triplanar mapping, so repetition never shows as a grid. Casing and cement use a cylindrical mapping. The photos are tinted to each formation's colour and keep the modelled bedding. Credits: [`public/textures/CREDITS.md`](public/textures/CREDITS.md). `scripts/fetch_textures.py` rebuilds them (ambientCG assets also supported). | — | on (GPU) |
 | **Shadows & ambient occlusion** | Sun shadow map, plus a screen-space AO pass written for three.js' logarithmic depth buffer (the stock SSAO/GTAO passes assume linear depth). | — | on (GPU) |
 | **Inside-the-hole atmosphere** | Radial lens depth-of-field and drifting drilling-fluid particles in the Inside view. | — | on (GPU) |
 | **Sea surface & seabed detail** | Multi-octave waves with Fresnel sky reflection and sun glint, and sand ripples with shell-hash patches on the seabed. | — | on (GPU) |
@@ -210,6 +211,7 @@ ED50 / UTM 31N. The local origin is E 435050.03, N 6478563.55, derived from the 
 scripts/prepare_volve_data.py   provenance-preserving data preparation
 scripts/add_volve_extras.py     definitive surveys, extra logged wells, daily production
 scripts/prepare_sim.py          Eclipse / OPM (GRDECL|EGRID, INIT, UNRST, UNSMRY) → .bwsim
+scripts/fetch_textures.py       CC0 PBR textures (Poly Haven / ambientCG) → public/textures
 public/data/volve/              preloaded dataset + manifest.json (+ sim/volve_2016.bwsim)
 src/features/                   optional features (registry, one module per feature)
 src/data/                       LAS/CSV parsers, minimum curvature, petrophysics, horizons, stratigraphy

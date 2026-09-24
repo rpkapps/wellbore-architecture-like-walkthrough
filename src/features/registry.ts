@@ -12,6 +12,7 @@ export type FeatureId =
   | 'uncertainty'
   | 'extraWells'
   | 'simulation'
+  | 'textures'
   | 'shadows'
   | 'tunnelFx'
   | 'seaFx'
@@ -97,6 +98,14 @@ export const FEATURES: FeatureDef[] = [
     prov: 'calculated',
     default: false,
     desc: 'Eclipse grid and restart results (saturation, pressure) on a time slider synced to production. Needs the Volve simulation files — import them in Data.',
+  },
+  {
+    id: 'textures',
+    name: 'Realistic textures',
+    group: 'Visual quality',
+    default: true,
+    gpu: true,
+    desc: 'CC0 photo-scanned PBR textures (Poly Haven) for every rock type, the seabed, the borehole wall, casing steel and cement. Switches live between the photo look and the procedural look.',
   },
   {
     id: 'shadows',
