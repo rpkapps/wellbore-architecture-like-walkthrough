@@ -10,7 +10,9 @@ import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, ty
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
-import { PRESETS, type PresetId } from '../ui/workspace/layout';
+import { locate, PRESETS, type PresetId } from '../ui/workspace/layout';
+import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
+import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
 import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema } from '../ui/selection';
 import { defineAction, type Action, type AnyAction } from './registry';
@@ -75,6 +77,14 @@ function panelPlaces(app: App): PanelPlace[] {
     else out.push({ id, title: w.title, about, keywords: w.keywords, location: 'Hidden · feature off' });
   }
   return out;
+}
+
+/** A panel to open or move: a feature's tool window (opened through its feature) or a built-in panel. */
+function panelRef(app: App, panel: string): PanelRef {
+  const tool = toolWindows.value.find((w) => w.opts.id === panel);
+  if (tool) return { id: panel, tool, open: () => showTool(app, tool) };
+  if (panel in BUILTIN_PANELS) return { id: panel };
+  throw new Error(`No panel "${panel}".`);
 }
 
 /** Every panel that can be shown now: the built-in ones and the open features' tool windows. */
@@ -411,12 +421,13 @@ export function appActions(): AnyAction<App>[] {
       title: 'Show panel',
       description: 'Opens a panel (or brings it to the front) where it was last docked.',
       category: 'Panels',
-      where: 'Top bar › Window',
+      where: 'Rail',
       input: z.object({ panel: z.string().meta({ description: 'Panel id, from the choices' }) }),
       choices: (app) => Object.entries(panelIds()).map(([panel, label]) => ({ label, input: { panel }, current: app.workspace.isShown(panel) })),
       run: (app, { panel }) => {
         const tool = toolWindows.value.find((w) => w.opts.id === panel);
-        if (tool) tool.show();
+        // a feature's window turns its feature on, as the rail does
+        if (tool) showTool(app, tool);
         else if (panel in BUILTIN_PANELS) withTransition(() => app.workspace.open(panel));
         else throw new Error(`No panel "${panel}" (is its feature on?).`);
       },
@@ -426,7 +437,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Go to panel',
       description: 'Says where a panel is (its column and tab, floating, or hidden) and brings it into view: unfolds its column, brings its tab to the front, and turns its feature on if needed.',
       category: 'Panels',
-      where: 'Top bar › Window',
+      where: 'Rail',
       keywords: ['where', 'find', 'locate', 'reveal', 'panel', 'window', 'tab'],
       input: z.object({ panel: z.string().meta({ description: 'Panel id, from the choices' }) }),
       choices: (app) =>
@@ -487,11 +498,50 @@ export function appActions(): AnyAction<App>[] {
       },
     }),
     A({
+      id: 'panels.place',
+      title: 'Move panel',
+      description: 'Moves a panel to the left, right or bottom column, undocks it into a floating window, or resets it to where it opens by default (opening it first if it is closed).',
+      category: 'Panels',
+      input: z.object({ panel: z.string(), to: z.enum(['left', 'right', 'bottom', 'float', 'default']) }),
+      choices: (app) => {
+        const where = { left: 'move to left', right: 'move to right', bottom: 'move to bottom', float: 'undock', default: 'reset location' } as const;
+        return Object.entries(panelIds())
+          .filter(([id]) => app.workspace.isOpen(id))
+          .flatMap(([panel, label]) => {
+            const at = locate(app.workspace.value, panel);
+            return (Object.keys(where) as (keyof typeof where)[])
+              .filter((to) => (to === 'float' ? at?.kind !== 'float' : to === 'default' ? !atDefault(app.workspace, panel) : !(at?.kind === 'dock' && at.zone === to)))
+              .map((to) => ({ label: `${label}: ${where[to]}`, input: { panel, to } }));
+          });
+      },
+      run: (app, { panel, to }) => withTransition(() => place(app.workspace, panelRef(app, panel), to as Placement)),
+    }),
+    A({
+      id: 'panels.maximise',
+      title: 'Maximise panel',
+      description: 'Fills the space beside the rail and above the timeline with the group of tabs a panel is in, or restores it.',
+      category: 'Panels',
+      shortcut: 'Ctrl Space',
+      input: z.object({ panel: z.string() }),
+      choices: (app) =>
+        Object.entries(panelIds())
+          .filter(([id]) => app.workspace.isOpen(id))
+          .map(([panel, label]) => ({ label, input: { panel }, current: maximised.value !== null && maximised.value === groupOf(app.workspace, panel) })),
+      run: (app, { panel }) => {
+        const g = groupOf(app.workspace, panel);
+        if (!g) throw new Error(`"${panel}" is not open.`);
+        withTransition(() => {
+          if (app.workspace.hidden.value) app.workspace.hidden.set(false);
+          toggleMaximised(g);
+        });
+      },
+    }),
+    A({
       id: 'panels.hide_all',
       title: 'Hide / show all panels',
       description: 'Clears every panel off the 3D view, or brings them back.',
       category: 'Panels',
-      where: 'Top bar › Window',
+      where: 'Rail',
       shortcut: 'Tab',
       run: (app) => withTransition(() => app.workspace.hidden.set(!app.workspace.hidden.value)),
     }),
@@ -625,7 +675,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Import data',
       description: 'Opens the import dialog for LAS, CSV and XLSX files.',
       category: 'Data',
-      where: 'Top bar › Data',
+      where: 'Rail › Data',
       keywords: ['upload', 'las', 'csv', 'xlsx'],
       run: (app) => app.dataOpen.set(true),
     }),
@@ -634,7 +684,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Production data',
       description: 'Opens the monthly production sheet of the field.',
       category: 'Data',
-      where: 'Top bar › Production',
+      where: 'Rail › Data › Production',
       run: (app) => app.productionOpen.set(true),
     }),
 
@@ -644,7 +694,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Live data',
       description: 'Shows the live and streamed data connections: their state, rate and messages.',
       category: 'Data',
-      where: 'Top bar › Live data',
+      where: 'Rail › Data › Live sources',
       keywords: ['stream', 'realtime', 'real-time', 'connections', 'sources', 'kafka', 'witsml'],
       run: (app) => app.openSources(),
     }),
@@ -662,7 +712,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Live charts',
       description: 'Shows the strip charts of readings arriving by time (drilling parameters, sensors).',
       category: 'Data',
-      where: 'Top bar › Live data',
+      where: 'Rail › Data › Live sources',
       keywords: ['strip chart', 'realtime', 'drilling parameters', 'trend'],
       run: (app) => app.openLive(),
     }),
@@ -837,7 +887,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Personalise…',
       description: 'Opens the personalisation dialog (theme, density, accent, panel glass, labels, motion).',
       category: 'Preferences',
-      where: 'Top bar › Personalise',
+      where: 'Rail › Settings',
       run: (app) => app.personaliseOpen.set(true),
     }),
     A({
@@ -845,7 +895,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Controls and data notes',
       description: 'Opens the help: keys, mouse controls and where the data comes from.',
       category: 'Help',
-      where: 'Top bar › Help',
+      where: 'Rail › Help',
       keywords: ['help', 'shortcuts', 'keys', 'keyboard', 'mouse', 'controls', 'sources', 'licence'],
       shortcut: '?',
       run: (app) => app.helpOpen.set(true),

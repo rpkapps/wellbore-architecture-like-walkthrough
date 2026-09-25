@@ -16,6 +16,7 @@ import {
   SquareMousePointerIcon,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
+import { FEATURES, type FeatureId } from '../../features/registry';
 import type { App } from '../app';
 import { ProvBadge } from '../prov';
 import { useRev, useSignal } from '../signal';
@@ -38,6 +39,47 @@ export interface PanelDef {
   body: () => ReactNode;
   /** a feature's tool window (closing it goes through the feature) */
   tool?: ToolWindow;
+  /** shows a tool window that is not open: turns its feature on first, as the Window menu did */
+  open?: () => void;
+  /** called when the rail or a menu brings the panel to the front (Interpretation switches to the Hydrocarbons colouring) */
+  onReveal?: () => void;
+}
+
+/** A workflow phase: the Views menu on the rail (and "+ Add view") lists the analysis windows under these. */
+export type ViewPhase = 'Explore' | 'Interpret' | 'Steer' | 'Model' | 'Monitor' | 'Present' | 'Other';
+
+/**
+ * Panels with an entry of their own on the rail, top to bottom, with the short
+ * label shown under the icon. A panel that does not exist (a feature, or a
+ * panel another build leaves out) is skipped; every other panel is listed in
+ * the rail's Views menu.
+ */
+export const RAIL_ENTRIES: { id: string; short: string }[] = [
+  { id: 'scene', short: 'Scene' },
+  { id: 'properties', short: 'Props.' },
+  { id: 'interpretation', short: 'Interp.' },
+  { id: 'logs', short: 'Logs' },
+  { id: 'features', short: 'Features' },
+];
+
+/** The analysis and tool windows by workflow phase; a panel named nowhere here or on the rail goes under Other. */
+export const VIEW_PHASES: { phase: ViewPhase; ids: string[] }[] = [
+  { phase: 'Explore', ids: ['mapview', 'section'] },
+  { phase: 'Interpret', ids: ['correlation', 'crossplot', 'log-tracks'] },
+  { phase: 'Steer', ids: ['geosteer'] },
+  { phase: 'Model', ids: ['simulation'] },
+  { phase: 'Monitor', ids: ['live', 'sources'] },
+  { phase: 'Present', ids: ['views'] },
+];
+
+const ON_RAIL = new Set(RAIL_ENTRIES.map((e) => e.id));
+
+/** The panels the Views menu lists, grouped by phase in order (empty phases left out). */
+export function viewGroups(panels: Map<string, PanelDef>): { phase: ViewPhase; panels: PanelDef[] }[] {
+  const named = new Set(VIEW_PHASES.flatMap((g) => g.ids));
+  const groups = VIEW_PHASES.map((g) => ({ phase: g.phase, panels: g.ids.map((id) => panels.get(id)).filter((d): d is PanelDef => !!d) }));
+  const other = [...panels.values()].filter((d) => !named.has(d.id) && !ON_RAIL.has(d.id));
+  return [...groups, { phase: 'Other' as const, panels: other }].filter((g) => g.panels.length);
 }
 
 const TOOL_ICONS: Record<string, ReactNode> = {
@@ -83,6 +125,7 @@ export function builtinPanels(app: App): PanelDef[] {
       id: 'interpretation',
       title: 'Interpretation',
       icon: <FlaskConicalIcon />,
+      onReveal: () => app.interpretationShown(),
       body: () => (
         <Scroll>
           <InterpretationPanel app={app} />
@@ -105,8 +148,17 @@ export function builtinPanels(app: App): PanelDef[] {
   ];
 }
 
-function toolPanel(w: ToolWindow): PanelDef {
-  return { id: w.opts.id, title: w.opts.title, icon: TOOL_ICONS[w.opts.id] ?? <PanelTopIcon />, tool: w, body: () => <ToolBody win={w} /> };
+const isFeature = (id: string): id is FeatureId => FEATURES.some((f) => f.id === id);
+
+/** Show a tool window; a feature's window turns its feature on (which shows it). */
+export function showTool(app: App, w: ToolWindow) {
+  const id = w.opts.id;
+  if (isFeature(id) && !app.flags.on(id)) app.flags.set(id, true);
+  else w.show();
+}
+
+function toolPanel(app: App, w: ToolWindow): PanelDef {
+  return { id: w.opts.id, title: w.opts.title, icon: TOOL_ICONS[w.opts.id] ?? <PanelTopIcon />, tool: w, open: () => showTool(app, w), body: () => <ToolBody win={w} /> };
 }
 
 /** Every panel the workspace can show right now: the built-in ones and the feature tool windows. */
@@ -117,7 +169,7 @@ export function usePanels(app: App): Map<string, PanelDef> {
   return useMemo(() => {
     const m = new Map<string, PanelDef>();
     for (const p of builtins) m.set(p.id, p);
-    for (const w of tools) m.set(w.opts.id, toolDefs.get(w) ?? toolDefs.set(w, toolPanel(w)).get(w)!);
+    for (const w of tools) m.set(w.opts.id, toolDefs.get(w) ?? toolDefs.set(w, toolPanel(app, w)).get(w)!);
     return m;
   }, [builtins, tools]);
 }

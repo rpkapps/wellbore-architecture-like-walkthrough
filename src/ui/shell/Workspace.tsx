@@ -7,6 +7,7 @@ import { activeWindow, openWindows, toolWindows } from '../toolWindow';
 import { WorkspaceFrame } from '../workspace/Frame';
 import { openPanels } from '../workspace/layout';
 import { usePanels } from '../workspace/panels';
+import { DataEntry, RailFooter } from '../workspace/Rail';
 import { HudPrompts } from './Hud';
 import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
@@ -31,6 +32,8 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
   const panels = usePanels(app);
   useToolSync(app);
   const chrome = ready && !presenting;
+  // the app's own rail entries: Data after Views, settings and help at the foot
+  const rail = useMemo(() => ({ extra: <DataEntry app={app} />, footer: <RailFooter app={app} /> }), [app]);
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
       {!presenting && <TopBar app={app} panels={panels} brand={brand} />}
@@ -38,6 +41,7 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
         ws={app.workspace}
         panels={panels}
         chromeless={!chrome}
+        rail={rail}
         viewport={<Viewport app={app} />}
         overlay={ready && <Overlays app={app} />}
         timeline={chrome && <Timeline app={app} />}

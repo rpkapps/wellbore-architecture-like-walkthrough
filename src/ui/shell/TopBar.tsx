@@ -4,28 +4,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@tecton/react/components/separator';
 import { AppShellBrand, AppShellHeader } from '@tecton/react/tecton/app-shell';
 import { Overflow, OverflowDivider, OverflowItem, OverflowLabel, OverflowSpacer } from '@tecton/react/tecton/overflow';
-import { LogCurveIcon, WellIcon } from '@tecton/react/icons';
-import {
-  AppWindowIcon,
-  ChartColumnIcon,
-  CircleHelpIcon,
-  FlaskConicalIcon,
-  LayoutDashboardIcon,
-  MaximizeIcon,
-  PaletteIcon,
-  PanelLeftIcon,
-  RadioTowerIcon,
-  SearchIcon,
-  SlidersHorizontalIcon,
-  UploadIcon,
-  type LucideIcon,
-} from 'lucide-react';
-import { memo, useSyncExternalStore, type ReactNode } from 'react';
+import { WellIcon } from '@tecton/react/icons';
+import { LayoutDashboardIcon, MaximizeIcon, SearchIcon } from 'lucide-react';
+import { memo, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { App } from '../app';
 import { IconButton, Tip } from '../icon-button';
 import { Logo } from '../logo';
-import { useWindowMenu, useWorkspaceMenu } from '../workspace/menus';
+import { useWorkspaceMenu } from '../workspace/menus';
 import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
@@ -53,9 +39,10 @@ function GroupDivider() {
 }
 
 /**
- * Brand, well selector and one row holding everything else: commands and
- * the window and panel controls (navigation and the view tools are on the
- * viewport toolbar, colour-by on the colour key). As the window
+ * Brand, well selector and one row holding the rest: search, full screen and
+ * workspaces (panels, data, settings and help are on the rail at the left of
+ * the stage, see `workspace/Rail.tsx`; navigation and the view tools on the
+ * viewport toolbar; colour-by on the colour key). As the window
  * narrows, labels collapse to icons, then controls move into the More menu
  * at the end, least used first, down to the well, search and More on a phone.
  */
@@ -80,19 +67,6 @@ export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<st
 }
 
 /**
- * Subscribes to one part of a signal (a flag, a count): the caller renders
- * again only when that part changes, not on every change of the signal.
- */
-function useSignalPart<T, R extends string | number | boolean | null>(s: Signal<T>, part: (v: T) => R): R {
-  return useSyncExternalStore(s.subscribe, () => part(s.value));
-}
-
-/** Is the panel open and showing? Re-renders the caller only when that flips, not on every layout change. */
-function useShown(app: App, id: string) {
-  return useSignalPart(app.workspace.layout, () => app.workspace.isShown(id));
-}
-
-/**
  * The row itself subscribes to nothing: every control that shows state
  * subscribes to just that state, so a layout change, a view change or a
  * dialog opening re-renders one button, not the whole row with its tooltips.
@@ -106,27 +80,9 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
       <WellSelect app={app} />
       <Divider />
       <Overflow role="group" aria-label="View and commands" className="min-w-0 flex-1 flex-nowrap justify-end gap-1">
-        {/* the spacer comes first, so the divider stays beside the commands, not before the gap */}
         <OverflowSpacer />
-        <GroupDivider />
-        <PanelItem app={app} id="interpretation" priority={6} label="Interpretation" Icon={FlaskConicalIcon} />
-        <PanelItem app={app} id="features" priority={5} label="Features" Icon={SlidersHorizontalIcon} />
-        <OverflowItem id="production" priority={4} label="Production" icon={<ChartColumnIcon />} onAction={() => app.productionOpen.set(true)}>
-          <Button variant="ghost" size="sm">
-            <ChartColumnIcon data-icon="inline-start" />
-            <OverflowLabel>Production</OverflowLabel>
-          </Button>
-        </OverflowItem>
-        <OverflowItem id="data" priority={4} label="Data" icon={<UploadIcon />} onAction={() => app.dataOpen.set(true)}>
-          <Button variant="ghost" size="sm">
-            <UploadIcon data-icon="inline-start" />
-            <OverflowLabel>Data</OverflowLabel>
-          </Button>
-        </OverflowItem>
-        <LiveItem app={app} />
-        <GroupDivider />
-        <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
-        <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
+        {/* panels, data, settings and help are on the rail at the left of the stage; navigation and
+            the view tools on the viewport toolbar; colour-by on the colour key */}
         <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
         <GroupDivider />
         <OverflowItem id="palette" priority={10} label="Command palette" icon={<SearchIcon />} shortcut={palette} onAction={() => app.paletteOpen.set(true)}>
@@ -137,10 +93,7 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
             </OverflowLabel>
           </Button>
         </OverflowItem>
-        <WindowMenu app={app} panels={panels} />
         <WorkspaceMenu app={app} panels={panels} />
-        <LeftToggle app={app} />
-        <LogsToggle app={app} />
       </Overflow>
       <Opens s={app.productionOpen}>{(isOpen, onOpenChange) => <ProductionSheet app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
       <Opens s={app.dataOpen}>{(isOpen, onOpenChange) => <DataDialog app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
@@ -193,24 +146,6 @@ function WellSelect({ app }: { app: App }) {
   );
 }
 
-/** A panel's button (Interpretation, Features): highlighted while the panel shows. */
-function PanelItem({ app, id, priority, label, Icon }: { app: App; id: 'interpretation' | 'features'; priority: number; label: string; Icon: LucideIcon }) {
-  const shown = useShown(app, id);
-  return (
-    <OverflowItem id={id} priority={priority} label={label} icon={<Icon />} onAction={() => app.showSidebar(id, true)}>
-      <Button variant={shown ? 'secondary' : 'ghost'} size="sm">
-        <Icon data-icon="inline-start" />
-        <OverflowLabel>{label}</OverflowLabel>
-      </Button>
-    </OverflowItem>
-  );
-}
-
-function WindowMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
-  const items = useWindowMenu(app, panels);
-  return <MenuItem id="window" priority={5} label="Window" icon={<AppWindowIcon />} items={items} className="min-w-56" />;
-}
-
 function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
   const menu = useWorkspaceMenu(app, panels);
   return (
@@ -219,26 +154,6 @@ function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, PanelDef
       {menu.dialogs}
     </>
   );
-}
-
-function LeftToggle({ app }: { app: App }) {
-  const open = useSignalPart(app.workspace.layout, (L) => L.left.stacks.length > 0 && !L.left.collapsed);
-  return (
-    <IconItem
-      id="left"
-      priority={7}
-      label="Left column: fold to icons / expand"
-      menuLabel={open ? 'Fold the left column' : 'Expand the left column'}
-      icon={<PanelLeftIcon />}
-      onAction={() => app.togglePanel('left')}
-      isActive={open}
-    />
-  );
-}
-
-function LogsToggle({ app }: { app: App }) {
-  const open = useShown(app, 'logs');
-  return <IconItem id="logs" priority={7} label="Well logs" menuLabel={open ? 'Hide well logs' : 'Show well logs'} icon={<LogCurveIcon />} onAction={() => app.togglePanel('right')} isActive={open} />;
 }
 
 /** A labelled menu button (Window, Workspace); in the More menu it becomes a submenu. */
@@ -301,25 +216,6 @@ function IconItem({
       <IconButton label={label} variant={isActive ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={isActive}>
         {icon}
       </IconButton>
-    </OverflowItem>
-  );
-}
-
-/** Live data: a pulsing dot while any source is streaming. */
-function LiveItem({ app }: { app: App }) {
-  // connections change with every stats report: only the count of streaming ones matters here
-  const live = useSignalPart(app.hub.connections, (list) => list.filter((c) => (c.status === 'live' || c.status === 'connecting' || c.status === 'reconnecting') && !c.paused).length);
-  const shown = useShown(app, 'sources');
-  const label = live ? `Live data (${live} streaming)` : 'Live data';
-  return (
-    <OverflowItem id="live" priority={4} label={label} icon={<RadioTowerIcon />} onAction={() => app.openSources()}>
-      <Button variant={shown ? 'secondary' : 'ghost'} size="sm" aria-label={label}>
-        <span className="relative flex" data-icon="inline-start">
-          <RadioTowerIcon className="size-4" />
-          {live > 0 && <span aria-hidden className="absolute -top-0.5 -right-0.5 size-1.5 animate-pulse rounded-full bg-success ring-2 ring-background" />}
-        </span>
-        <OverflowLabel>Live</OverflowLabel>
-      </Button>
     </OverflowItem>
   );
 }
