@@ -1169,7 +1169,9 @@ void main(){
       const cls = o.userData.cls as string;
       const maxD = cls === 'tick' ? 900 : 2600;
       o.visible = tunnel ? labelsVisible && md > focusMd - 5 && md < focusMd + 140 && cls !== 'tick' : labelsVisible && (d < maxD || (near && d < 5000));
-      o.element.style.opacity = String(Math.max(0.15, Math.min(1, 1.4 - d / maxD)));
+      // written only when it changes: every style write invalidates the label's style
+      const op = Math.round(Math.max(0.15, Math.min(1, 1.4 - d / maxD)) * 100) / 100;
+      if (o.userData.opacity !== op) o.element.style.opacity = String((o.userData.opacity = op));
     }
   }
 

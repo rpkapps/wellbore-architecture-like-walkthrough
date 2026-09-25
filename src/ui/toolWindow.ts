@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Provenance } from './prov';
-import { Rev, Signal } from './signal';
+import { Rev, SCENE, Signal } from './signal';
 
 export interface ToolWindowOptions {
   id: string;
@@ -28,7 +28,7 @@ export const activeWindow = new Signal<string | null>(null);
  */
 export class ToolWindow {
   /** bump when the body or header content changes */
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   /** body resized (and once after it is shown): redraw canvases */
   onResize?: () => void;
 

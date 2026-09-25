@@ -32,6 +32,8 @@ export const REAL = {
 
 let loading: Promise<void> | null = null;
 export let texturesLoaded = false;
+/** The engine redraws when the photo textures have arrived. */
+export const textureEvents: { loaded: (() => void) | null } = { loaded: null };
 
 async function image(url: string): Promise<HTMLImageElement> {
   const img = new Image();
@@ -88,6 +90,7 @@ export function loadRealisticTextures(base = './textures/'): Promise<void> {
       REAL[k].value = t;
     }
     texturesLoaded = true;
+    textureEvents.loaded?.();
   })();
   return loading;
 }

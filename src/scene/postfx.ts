@@ -1,28 +1,47 @@
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 const VERT = /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
 /**
- * Screen-space ambient occlusion that understands three.js' logarithmic and
- * reversed depth buffers (the stock SSAO / SAO / GTAO passes assume a standard
- * perspective depth and break with both). View distance is recovered from the
- * log depth as w = 2^(d · log2(far + 1)) − 1, or from the reversed depth as
+ * Draws the scene into its own multisampled target, then resolves it into the
+ * composer's single-sampled buffer in one full-screen pass that also applies
+ * the ambient occlusion (when on) and replaces NaN / Inf pixels before bloom
+ * can smear them. Only the scene draw pays for MSAA: every post pass reads and
+ * writes plain targets (each one used to write, and resolve, a 4× target).
+ *
+ * The occlusion understands three.js' logarithmic and reversed depth buffers
+ * (the stock SSAO / SAO / GTAO passes assume a standard perspective depth and
+ * break with both). View distance is recovered from the log depth as
+ * w = 2^(d · log2(far + 1)) − 1, or from the reversed depth as
  * w = near · far / (d · (far − near) + near); view position from the projection matrix
  * (including the side-panel view offset). The sampling radius scales with
  * distance so creases read at every zoom level, from casing couplings to the
  * edges of the geological block.
  */
-export class LogDepthAOPass extends Pass {
-  private quad: FullScreenQuad;
+export class ScenePass extends Pass {
+  readonly target: THREE.WebGLRenderTarget;
   readonly material: THREE.ShaderMaterial;
+  private quad: FullScreenQuad;
+  /** screen-space ambient occlusion (it comes with the sun shadows) */
+  ao = false;
 
-  constructor(private camera: THREE.PerspectiveCamera) {
+  constructor(
+    private scene: THREE.Scene,
+    private camera: THREE.PerspectiveCamera,
+    samples: number,
+  ) {
     super();
+    this.target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples });
+    // depth is sampled by the occlusion (log-depth aware)
+    this.target.depthTexture = new THREE.DepthTexture(1, 1, THREE.FloatType);
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         tDiffuse: { value: null },
         tDepth: { value: null },
+        uAO: { value: 0 },
         uProj: { value: new THREE.Matrix4() },
         uLogFar: { value: 1 },
         uReversed: { value: 0 },
@@ -31,9 +50,11 @@ export class LogDepthAOPass extends Pass {
         uStrength: { value: 1.1 },
         uRadius: { value: 0.022 },
       },
+      depthTest: false,
+      depthWrite: false,
       vertexShader: VERT,
       fragmentShader: /* glsl */ `
-uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform mat4 uProj; uniform float uLogFar; uniform vec2 uRes;
+uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform float uAO; uniform mat4 uProj; uniform float uLogFar; uniform vec2 uRes;
 uniform float uStrength; uniform float uRadius; uniform float uReversed; uniform vec2 uNearFar;
 varying vec2 vUv;
 float viewW(vec2 uv){
@@ -47,11 +68,10 @@ vec3 viewPos(vec2 uv){
   return vec3(w * (ndc.x + uProj[2][0]) / uProj[0][0], w * (ndc.y + uProj[2][1]) / uProj[1][1], -w);
 }
 float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
-void main(){
-  vec4 col = texture2D(tDiffuse, vUv);
+float occlusion(){
   float d0 = texture2D(tDepth, vUv).x;
   // background: the depth clear value (far plane) of either encoding
-  if (uReversed > 0.5 ? d0 <= 0.0 : d0 >= 0.99999) { gl_FragColor = col; return; }
+  if (uReversed > 0.5 ? d0 <= 0.0 : d0 >= 0.99999) return 1.0;
   vec2 px = 1.0 / uRes;
   vec3 p = viewPos(vUv);
   // normal from the flatter neighbour on each axis (avoids halos at silhouettes)
@@ -60,7 +80,7 @@ void main(){
   vec3 dx = abs(pr.z - p.z) < abs(p.z - pl.z) ? pr - p : p - pl;
   vec3 dy = abs(pu.z - p.z) < abs(p.z - pd.z) ? pu - p : p - pd;
   vec3 n = normalize(cross(dx, dy));
-  if (!(dot(n, n) > 0.5)) { gl_FragColor = col; return; }
+  if (!(dot(n, n) > 0.5)) return 1.0;
   float w = -p.z;
   float R = clamp(w * uRadius, 0.12, 45.0);
   float rPx = clamp(R * uProj[1][1] * 0.5 * uRes.y / w, 3.0, 48.0);
@@ -78,32 +98,184 @@ void main(){
     float c = max(dot(n, v) / (dist + 1e-4) - 0.08, 0.0);
     occ += c * (1.0 - smoothstep(R * 0.5, R * 1.6, dist));
   }
-  float ao = clamp(1.0 - uStrength * occ / float(N) * 1.6, 0.35, 1.0);
-  gl_FragColor = vec4(col.rgb * ao, col.a);
+  return clamp(1.0 - uStrength * occ / float(N) * 1.6, 0.35, 1.0);
+}
+bool bad(float v){ return !(v == v) || abs(v) > 60000.0; }
+void main(){
+  vec4 c = texture2D(tDiffuse, vUv);
+  if (uAO > 0.5) c.rgb *= occlusion();
+  if (bad(c.r) || bad(c.g) || bad(c.b) || bad(c.a)) c = vec4(0.0, 0.0, 0.0, 1.0);
+  gl_FragColor = vec4(clamp(c.rgb, 0.0, 48.0), clamp(c.a, 0.0, 1.0));
 }`,
     });
     this.quad = new FullScreenQuad(this.material);
   }
 
+  get samples() {
+    return this.target.samples;
+  }
+  set samples(n: number) {
+    if (this.target.samples === n) return;
+    this.target.samples = n;
+    this.target.dispose();
+  }
+
   setSize(w: number, h: number) {
+    this.target.setSize(w, h);
     this.material.uniforms.uRes.value.set(w, h);
   }
 
-  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
+  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget) {
+    // the multisampled depth is copied out only when the occlusion reads it
+    this.target.resolveDepthBuffer = this.ao;
+    renderer.setRenderTarget(this.target);
+    renderer.render(this.scene, this.camera);
     const u = this.material.uniforms;
-    u.tDiffuse.value = readBuffer.texture;
-    u.tDepth.value = readBuffer.depthTexture;
-    u.uProj.value.copy(this.camera.projectionMatrix);
-    u.uLogFar.value = Math.log2(this.camera.far + 1);
-    u.uReversed.value = renderer.state.buffers.depth.getReversed() ? 1 : 0;
-    u.uNearFar.value.set(this.camera.near, this.camera.far);
+    u.tDiffuse.value = this.target.texture;
+    u.tDepth.value = this.target.depthTexture;
+    u.uAO.value = this.ao ? 1 : 0;
+    if (this.ao) {
+      u.uProj.value.copy(this.camera.projectionMatrix);
+      u.uLogFar.value = Math.log2(this.camera.far + 1);
+      u.uReversed.value = renderer.state.buffers.depth.getReversed() ? 1 : 0;
+      u.uNearFar.value.set(this.camera.near, this.camera.far);
+    }
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }
 
   dispose() {
+    this.target.depthTexture?.dispose();
+    this.target.dispose();
     this.material.dispose();
     this.quad.dispose();
+  }
+}
+
+const BLUR_X = new THREE.Vector2(1, 0);
+const BLUR_Y = new THREE.Vector2(0, 1);
+
+/**
+ * UnrealBloomPass (half resolution, five blurred mips) without its last step:
+ * the full-resolution additive blend onto the frame. `FinalPass` adds the glow
+ * while it tone-maps, which saves a full-screen read-modify-write per frame.
+ */
+export class GlowPass extends UnrealBloomPass {
+  private quad = new FullScreenQuad();
+  private oldClear = new THREE.Color();
+
+  /** the composited glow (half resolution) */
+  get texture() {
+    return this.renderTargetsHorizontal[0].texture;
+  }
+
+  render(renderer: THREE.WebGLRenderer, _writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
+    renderer.getClearColor(this.oldClear);
+    const oldAlpha = renderer.getClearAlpha();
+    const oldAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setClearColor(this.clearColor, 0);
+    const pass = (m: THREE.Material, to: THREE.WebGLRenderTarget) => {
+      this.quad.material = m;
+      renderer.setRenderTarget(to);
+      renderer.clear();
+      this.quad.render(renderer);
+    };
+    // 1. bright areas, 2. blur every mip, 3. composite the mips
+    const hp = this.highPassUniforms as Record<string, THREE.IUniform>;
+    hp.tDiffuse.value = readBuffer.texture;
+    hp.luminosityThreshold.value = this.threshold;
+    pass(this.materialHighPassFilter, this.renderTargetBright);
+    let input = this.renderTargetBright;
+    for (let i = 0; i < this.nMips; i++) {
+      const m = this.separableBlurMaterials[i];
+      m.uniforms.colorTexture.value = input.texture;
+      m.uniforms.direction.value = BLUR_X;
+      pass(m, this.renderTargetsHorizontal[i]);
+      m.uniforms.colorTexture.value = this.renderTargetsHorizontal[i].texture;
+      m.uniforms.direction.value = BLUR_Y;
+      pass(m, this.renderTargetsVertical[i]);
+      input = this.renderTargetsVertical[i];
+    }
+    const c = this.compositeMaterial.uniforms;
+    c.bloomStrength.value = this.strength;
+    c.bloomRadius.value = this.radius;
+    c.bloomTintColors.value = this.bloomTintColors;
+    pass(this.compositeMaterial, this.renderTargetsHorizontal[0]);
+    renderer.setClearColor(this.oldClear, oldAlpha);
+    renderer.autoClear = oldAutoClear;
+  }
+
+  dispose() {
+    super.dispose();
+    this.quad.dispose();
+  }
+}
+
+/**
+ * The last pass: adds the glow, tone-maps to sRGB (three's OutputPass) and
+ * applies the film grade (vignette, split tone, grain) in the same draw.
+ */
+export class FinalPass extends OutputPass {
+  /** vignette, grade and grain (off with the glow from the Display panel) */
+  grade = true;
+
+  constructor(private glow: GlowPass) {
+    super();
+    Object.assign(this.uniforms, {
+      tBloom: { value: null },
+      uBloom: { value: 0 },
+      uGrade: { value: 1 },
+      uTime: { value: 0 },
+      uVignette: { value: 0.85 },
+      uGrain: { value: 0.035 },
+    });
+    this.material.fragmentShader = /* glsl */ `
+precision highp float;
+uniform sampler2D tDiffuse; uniform sampler2D tBloom; uniform float uBloom;
+uniform float uGrade; uniform float uTime; uniform float uVignette; uniform float uGrain;
+#include <tonemapping_pars_fragment>
+#include <colorspace_pars_fragment>
+varying vec2 vUv;
+float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
+void main(){
+  vec4 c = texture2D(tDiffuse, vUv);
+  if (uBloom > 0.5) c.rgb += texture2D(tBloom, vUv).rgb;
+  #if defined( LINEAR_TONE_MAPPING )
+    c.rgb = LinearToneMapping(c.rgb);
+  #elif defined( REINHARD_TONE_MAPPING )
+    c.rgb = ReinhardToneMapping(c.rgb);
+  #elif defined( CINEON_TONE_MAPPING )
+    c.rgb = CineonToneMapping(c.rgb);
+  #elif defined( ACES_FILMIC_TONE_MAPPING )
+    c.rgb = ACESFilmicToneMapping(c.rgb);
+  #elif defined( AGX_TONE_MAPPING )
+    c.rgb = AgXToneMapping(c.rgb);
+  #elif defined( NEUTRAL_TONE_MAPPING )
+    c.rgb = NeutralToneMapping(c.rgb);
+  #endif
+  #ifdef SRGB_TRANSFER
+    c = sRGBTransferOETF(c);
+  #endif
+  if (uGrade > 0.5) {
+    vec2 d = vUv - 0.5;
+    float v = smoothstep(0.95, 0.25, length(d * vec2(1.0, 0.85)) * uVignette * 1.2);
+    c.rgb *= mix(0.72, 1.0, v);
+    // gentle cool shadows / warm highlights grade
+    float l = dot(c.rgb, vec3(0.299,0.587,0.114));
+    c.rgb += (vec3(-0.006, 0.0, 0.012) * (1.0 - l) + vec3(0.01, 0.004, -0.008) * l);
+    c.rgb += (h(vUv * 1000.0 + uTime) - 0.5) * uGrain * (1.0 - l * 0.6);
+  }
+  gl_FragColor = c;
+}`;
+  }
+
+  render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget, deltaTime: number, maskActive: boolean) {
+    const u = this.uniforms;
+    u.tBloom.value = this.glow.texture;
+    u.uBloom.value = this.glow.enabled ? 1 : 0;
+    u.uGrade.value = this.grade ? 1 : 0;
+    super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
   }
 }
 
