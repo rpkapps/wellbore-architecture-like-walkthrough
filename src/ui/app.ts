@@ -132,6 +132,8 @@ export class App {
   readonly sceneRev = new Rev(SCENE);
   /** navigation mode, camera view, property mode or colour map changed */
   readonly viewRev = new Rev(SCENE);
+  /** a colour the tool-window canvases draw with changed (colour map, formation colour, uncertainty band): they redraw */
+  readonly paintRev = new Rev();
   /** the same position, updated at most ~15 times a second: for text read-outs that need not follow every frame */
   readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
   private poseTextAt = 0;
@@ -521,6 +523,7 @@ export class App {
     this.engine.setColormap(n);
     this.logs.colormap = n;
     this.logs.invalidate();
+    this.paintRev.bump();
     this.viewRev.bump();
   }
 
@@ -617,6 +620,7 @@ export class App {
     } catch {
       /* storage blocked */
     }
+    this.paintRev.bump();
     this.sceneRev.bump();
     this.wellRev.bump();
   }

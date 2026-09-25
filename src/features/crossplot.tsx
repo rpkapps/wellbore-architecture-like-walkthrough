@@ -50,6 +50,8 @@ export class CrossplotFeature implements FeatureModule {
   private wellId = '';
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.view.invalidate());
     this.panel = new ToolWindow({
       id: 'crossplot',
       title: 'Crossplot',

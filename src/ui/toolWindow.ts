@@ -68,11 +68,20 @@ export class ToolWindow {
 
 type Painter = (g: CanvasRenderingContext2D, W: number, H: number) => void;
 
+const cssOf = new WeakMap<HTMLCanvasElement, string>();
+
 /** Size a backing store in steps of 128 CSS px, so a continuous resize reallocates it rarely; returns whether it changed. */
 export function fitStore(cv: HTMLCanvasElement, W: number, H: number, dpr: number): boolean {
   const step = (v: number, have: number) => (have >= v && have <= v + 256 ? have : Math.ceil(v / 128) * 128);
   const w = Math.round(step(W, cv.width / dpr) * dpr);
   const h = Math.round(step(H, cv.height / dpr) * dpr);
+  // the CSS size follows the store at this density: a new DPR can keep the store and still change it
+  const css = `${w}x${h}@${dpr}`;
+  if (cssOf.get(cv) !== css) {
+    cssOf.set(cv, css);
+    cv.style.width = `${w / dpr}px`;
+    cv.style.height = `${h / dpr}px`;
+  }
   if (cv.width === w && cv.height === h) return false;
   cv.width = w;
   cv.height = h;
@@ -173,10 +182,7 @@ export class PanelCanvas {
     const dpr = Math.min(2, devicePixelRatio || 1);
     if (dpr !== this.dpr) this.stale = true;
     this.dpr = dpr;
-    if (fitStore(el, W, H, dpr)) {
-      el.style.width = `${el.width / dpr}px`;
-      el.style.height = `${el.height / dpr}px`;
-    }
+    fitStore(el, W, H, dpr);
     const g = el.getContext('2d')!;
     const { draw, cursor } = this.paint;
     if (!cursor) {

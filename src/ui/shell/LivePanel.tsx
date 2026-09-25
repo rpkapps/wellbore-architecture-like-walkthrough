@@ -206,10 +206,7 @@ const GAP = 4;
 function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], windowMs: number, hoverX: number | null) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (!W || !H) return;
-  if (fitStore(c, W, H, dpr)) {
-    c.style.width = `${c.width / dpr}px`;
-    c.style.height = `${c.height / dpr}px`;
-  }
+  fitStore(c, W, H, dpr);
   const g = c.getContext('2d')!;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, c.width, c.height);

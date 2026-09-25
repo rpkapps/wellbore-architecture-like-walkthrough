@@ -419,10 +419,7 @@ export class LogTracks {
     const cv = this.canvas!;
     const { W, H } = this;
     // grown in steps; the host clips the spare, so the canvas keeps the backing store's size in CSS px
-    if (fitStore(cv, W, H, dpr)) {
-      cv.style.width = `${cv.width / dpr}px`;
-      cv.style.height = `${cv.height / dpr}px`;
-    }
+    fitStore(cv, W, H, dpr);
     const w = this.well;
     if (!w) {
       this.strip = null;

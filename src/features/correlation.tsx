@@ -54,6 +54,8 @@ export class CorrelationFeature implements FeatureModule {
   private layout: { PL: number; PT: number; PB: number; cw: number; tw: number; Y: (d: number) => number; D: (y: number) => number } | null = null;
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.view.invalidate());
     const curves = CURVES.map((c) => ({ id: c.key, label: c.label }));
     this.panel = new ToolWindow({
       id: 'correlation',

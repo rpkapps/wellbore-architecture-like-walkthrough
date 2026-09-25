@@ -43,6 +43,8 @@ export class SectionFeature implements FeatureModule {
   private ty: ((d: number) => number) | null = null;
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.view.invalidate());
     this.panel = new ToolWindow({
       id: 'section',
       title: 'Section along the well',

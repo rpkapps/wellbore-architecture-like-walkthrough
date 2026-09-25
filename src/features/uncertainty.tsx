@@ -78,6 +78,8 @@ export class UncertaintyFeature implements FeatureModule {
   rebuild() {
     this.clear();
     this.rev.bump();
+    // the geosteering strip and the section draw the band
+    this.app.paintRev.bump();
     const e = this.app.engine;
     const w = e.activeWell;
     if (!w) return;

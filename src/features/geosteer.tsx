@@ -38,6 +38,8 @@ export class GeosteerFeature implements FeatureModule {
   private view: 'window' | 'cursor' = 'window';
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.strip.invalidate());
     this.group.name = 'geosteer';
     const targets = app.field.horizons
       .filter((hz, i) => FORMATION_BY_ID.has(hz.id) && app.field.horizons[i + 1])
