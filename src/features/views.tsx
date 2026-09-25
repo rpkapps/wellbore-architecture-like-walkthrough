@@ -356,15 +356,14 @@ export class ViewsFeature implements FeatureModule {
 function PresentCaption({ step, caption, dwell }: { step: string; caption: string; dwell: number }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
+    // ten steps a second read as smooth on a bar this size, and render React a sixth as often as every frame
     const t0 = performance.now();
-    let raf = 0;
-    const tick = () => {
+    const id = window.setInterval(() => {
       const s = (performance.now() - t0) / 1000;
       setElapsed(Math.min(dwell, s));
-      if (s < dwell) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+      if (s >= dwell) clearInterval(id);
+    }, 100);
+    return () => clearInterval(id);
   }, [dwell]);
   return (
     <Panel variant="elevated" size="lg" className="w-full">

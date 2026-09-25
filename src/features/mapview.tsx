@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, SliderField } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
 import { Live, Signal } from '../ui/signal';
 import { font, ink } from '../ui/tokens';
@@ -51,12 +51,11 @@ const WATER = toCss(WATER_RGB);
 export class MapViewFeature implements FeatureModule {
   readonly id = 'mapview' as const;
   private panel: ToolWindow;
-  private canvas: HTMLCanvasElement | null = null;
+  /** the map is cached; the camera and the cursor are drawn over it */
+  private map = new PanelCanvas({ draw: (g, W, H) => this.draw(g, W, H), cursor: (g) => this.drawCursor(g), visible: () => this.panel.visible, wheel: (e) => this.onWheel(e) });
   private readout = new Signal<ReactNode>('Hover for depth · click a well to travel');
   private foot = new Signal<ReactNode>(null);
   private footKey = '';
-  /** canvases the non-passive wheel listener is bound to */
-  private wheelBound = new WeakSet<HTMLCanvasElement>();
   private drag: { x: number; y: number; cx: number; cn: number; moved: boolean } | null = null;
   private horizonId = 'hugin';
   private bubbles: BubbleMode = 'cum';
@@ -75,6 +74,7 @@ export class MapViewFeature implements FeatureModule {
   private W = 0;
   private H = 0;
   private lastKey = '';
+  private lastBaseKey = '';
   private hoverPt: { x: number; y: number } | null = null;
 
   constructor(private app: App) {
@@ -102,7 +102,7 @@ export class MapViewFeature implements FeatureModule {
             onChange={(v) => {
               this.bubbles = v as BubbleMode;
               this.renderFoot();
-              this.draw();
+              this.map.invalidate();
               this.panel.rev.bump();
             }}
             options={[
@@ -115,10 +115,10 @@ export class MapViewFeature implements FeatureModule {
       ),
       body: () => (
         <>
-          <canvas
-            ref={this.setCanvas}
+          <CanvasBox
+            view={this.map}
             aria-label="Structure map with well paths and production bubbles: wheel zooms, drag pans, double-click resets, click a well to travel"
-            className="block min-h-0 w-full flex-1 cursor-grab"
+            className="cursor-grab"
             onPointerDown={(e) => {
               if (!this.view) return;
               this.drag = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY, cx: this.view.cx, cn: this.view.cn, moved: false };
@@ -134,12 +134,12 @@ export class MapViewFeature implements FeatureModule {
             onPointerLeave={() => {
               this.hoverPt = null;
               this.updateReadout();
-              this.draw();
+              this.map.invalidate();
             }}
             onDoubleClick={() => {
               this.userView = false;
               this.fit(this.W, this.H);
-              this.draw();
+              this.map.invalidate();
             }}
           />
           <div className="min-h-4 shrink-0 font-mono text-xs text-muted-foreground">
@@ -151,7 +151,6 @@ export class MapViewFeature implements FeatureModule {
         </>
       ),
     });
-    this.panel.onResize = () => this.draw();
     // the well list follows the "More Volve wells" feature (skip the immediate call from watch)
     let first = true;
     app.flags.watch('extraWells', () => {
@@ -172,7 +171,7 @@ export class MapViewFeature implements FeatureModule {
 
   onWell() {
     this.buildWells();
-    this.draw();
+    this.map.invalidate();
   }
 
   frame(dt: number) {
@@ -183,16 +182,22 @@ export class MapViewFeature implements FeatureModule {
         this.setPlaying(false);
       }
       this.syncSlider();
-      this.draw();
+      this.map.redraw();
       return;
     }
-    // redraw when the camera or the cursor moves
+    // the map follows the section box and the contact; the camera and the cursor only move over it
     const e = this.app.engine;
+    const b = e.geology?.box;
+    const base = `${e.activeWell?.id},${b ? `${b.xMin},${b.xMax},${b.nMin},${b.nMax}` : ''},${this.app.flags.on('owc') ? this.app.feature<ContactsFeature>('owc')?.planeDepth : ''}`;
     const p = e.camera.position;
-    const key = `${p.x.toFixed(0)},${p.z.toFixed(0)},${e.rig.md.toFixed(0)},${e.activeWell?.id}`;
-    if (key !== this.lastKey) {
+    const key = `${p.x.toFixed(0)},${p.z.toFixed(0)},${e.rig.md.toFixed(0)}`;
+    if (base !== this.lastBaseKey) {
+      this.lastBaseKey = base;
       this.lastKey = key;
-      this.draw();
+      this.map.redraw();
+    } else if (key !== this.lastKey) {
+      this.lastKey = key;
+      this.map.moveCursor();
     }
   }
 
@@ -239,7 +244,7 @@ export class MapViewFeature implements FeatureModule {
     this.buildWells();
     this.buildProduction();
     this.renderFoot();
-    this.draw();
+    this.map.invalidate();
   }
 
   private buildWells() {
@@ -336,7 +341,7 @@ export class MapViewFeature implements FeatureModule {
               this.t = this.monthT(v);
               this.renderFoot();
               this.updateReadout();
-              this.draw();
+              this.map.invalidate();
             }}
           />
         </div>
@@ -364,15 +369,6 @@ export class MapViewFeature implements FeatureModule {
     return { ew: v.cx + (x - this.W / 2) / v.s, ns: v.cn - (y - this.H / 2) / v.s };
   }
 
-  /** Canvas ref: keeps the element and binds the wheel zoom, which must be non-passive to stop the page scrolling. */
-  private setCanvas = (el: HTMLCanvasElement | null) => {
-    this.canvas = el;
-    if (el && !this.wheelBound.has(el)) {
-      this.wheelBound.add(el);
-      el.addEventListener('wheel', this.onWheel, { passive: false });
-    }
-  };
-
   private onWheel = (e: WheelEvent) => {
     if (!this.view) return;
     e.preventDefault();
@@ -382,7 +378,7 @@ export class MapViewFeature implements FeatureModule {
     const after = this.world(e.offsetX, e.offsetY);
     this.view.cx += before.ew - after.ew;
     this.view.cn += before.ns - after.ns;
-    this.draw();
+    this.map.invalidate();
   };
 
   private pointerMove(cv: HTMLCanvasElement, x: number, y: number) {
@@ -396,13 +392,13 @@ export class MapViewFeature implements FeatureModule {
         cv.style.cursor = 'grabbing';
         this.view.cx = drag.cx - dx / this.view.s;
         this.view.cn = drag.cn + dy / this.view.s;
-        this.draw();
+        this.map.invalidate();
       }
       return;
     }
+    // hovering changes only the read-out
     this.hoverPt = { x, y };
     this.updateReadout();
-    this.draw();
   }
 
   /** nearest point on a detailed well path within r pixels */
@@ -472,11 +468,7 @@ export class MapViewFeature implements FeatureModule {
   }
 
   // ------------------------------------------------------------------ drawing
-  draw() {
-    if (!this.panel.visible) return;
-    const fit = fitCanvas(this.canvas);
-    if (!fit) return;
-    const { g, W, H } = fit;
+  private draw(g: CanvasRenderingContext2D, W: number, H: number) {
     if (!this.view || (!this.userView && (W !== this.W || H !== this.H))) this.fit(W, H);
     this.W = W;
     this.H = H;
@@ -565,7 +557,13 @@ export class MapViewFeature implements FeatureModule {
     g.beginPath();
     g.arc(this.sx(0), this.sy(0), 3.5, 0, Math.PI * 2);
     g.fill();
-    // cursor on the active well and the camera
+    this.drawLegend(g, W, H, owc ?? null);
+  }
+
+  /** the cursor on the active well and the camera */
+  private drawCursor(g: CanvasRenderingContext2D) {
+    const active = this.app.engine.activeWell;
+    if (!this.view || !this.grid() || !this.image) return;
     if (active) {
       const c = active.trajectory.at(Math.min(this.app.engine.rig.md, active.trajectory.mdEnd));
       g.fillStyle = '#7fe3ff';
@@ -577,7 +575,6 @@ export class MapViewFeature implements FeatureModule {
       g.stroke();
     }
     this.drawCamera(g);
-    this.drawLegend(g, W, H, owc ?? null);
   }
 
   private drawBubbles(g: CanvasRenderingContext2D) {
