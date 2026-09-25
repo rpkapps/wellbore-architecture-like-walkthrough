@@ -13,6 +13,8 @@ import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
 import { onAnyChange, Rev, Signal } from './signal';
 import { Workspace } from './workspace/layout';
+import { prefs } from './prefs';
+import { withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
@@ -104,6 +106,9 @@ export class App {
   readonly sceneRev = new Rev();
   /** navigation mode, camera view, property mode or colour map changed */
   readonly viewRev = new Rev();
+  /** the same position, updated at most ~15 times a second: for text read-outs that need not follow every frame */
+  readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
+  private poseTextAt = 0;
   readonly pose = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
   readonly hud = new Signal<Hud>({ heading: 0, where: '', nav: '', camY: 0 });
   readonly playing = new Signal(false);
@@ -116,6 +121,9 @@ export class App {
   readonly productionOpen = new Signal(false);
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
+  readonly personaliseOpen = new Signal(false);
+  /** name of the well whose files are loading (panels show placeholders) */
+  readonly loadingWell = new Signal<string | null>(null);
   /**
    * Full-screen presentation (saved views): while set, the chrome is hidden,
    * the 3D view fills the window and this caption sits over it.
@@ -139,6 +147,16 @@ export class App {
 
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
+    // formation colours the user picked, before the geology is built from them
+    try {
+      const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
+      for (const [id, hex] of Object.entries(saved)) {
+        const f = FORMATION_BY_ID.get(id);
+        if (f && /^#[0-9a-f]{6}$/i.test(hex)) f.color = hex;
+      }
+    } catch {
+      /* storage blocked or malformed */
+    }
   }
 
   /** Create the 3D engine in the work area and load the first well. */
@@ -149,6 +167,13 @@ export class App {
     this.display.postFx = e.quality !== 'low';
     // the 3D view draws on demand: any state change the chrome shows is a reason to redraw
     onAnyChange.hook = () => e.requestRender(300);
+    // personal settings that reach into the scene
+    const personal = () => {
+      e.rig.instantMoves = prefs.value.reduceMotion;
+      e.labelDensity = prefs.value.labelDensity;
+    };
+    personal();
+    prefs.subscribe(personal);
     this.logs.onPick = (md) => this.travelTo(md);
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
@@ -181,6 +206,7 @@ export class App {
             this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
           }
         });
+      if (!prefs.value.labels) this.setDisplay({ labels: false });
       this.ready.set(true);
       this.resolveReady();
     });
@@ -213,8 +239,12 @@ export class App {
     const w = this.field.wells.find((x) => x.id === id);
     if (!w) return;
     if (!w.loaded) {
-      this.toast(`Loading ${w.name} …`);
-      await this.field.ensureLoaded(w);
+      this.loadingWell.set(w.name);
+      try {
+        await this.field.ensureLoaded(w);
+      } finally {
+        this.loadingWell.set(null);
+      }
     }
     this.engine.setActiveWell(w);
     this.applyWellboreDisplay();
@@ -228,7 +258,9 @@ export class App {
       this.engine.rig.setMd(0);
       this.overview();
     }
-    this.toast(`${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`);
+    this.toast(
+      `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
+    );
   }
 
   selectWell(id: string) {
@@ -283,7 +315,12 @@ export class App {
   zoneSummaries(): ZoneSummary[] {
     const w = this.engine.activeWell;
     if (!w.logs || !w.petro) return [];
-    if (!this.zoneCache) this.zoneCache = summariseZones(w.logs, w.petro, w.zones.filter((z) => z.formationId !== 'air' && z.formationId !== 'sea'));
+    if (!this.zoneCache)
+      this.zoneCache = summariseZones(
+        w.logs,
+        w.petro,
+        w.zones.filter((z) => z.formationId !== 'air' && z.formationId !== 'sea'),
+      );
     return this.zoneCache;
   }
 
@@ -414,6 +451,24 @@ export class App {
     this.sceneRev.bump();
   }
 
+  /** A formation's colour, everywhere it is drawn; remembered in this browser. */
+  setFormationColor(id: string, hex: string) {
+    const f = FORMATION_BY_ID.get(id);
+    if (!f) return;
+    f.color = hex;
+    this.engine.geology.setColor(id, hex);
+    this.logs.invalidate();
+    try {
+      const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
+      saved[id] = hex;
+      localStorage.setItem('bw.formationColors', JSON.stringify(saved));
+    } catch {
+      /* storage blocked */
+    }
+    this.sceneRev.bump();
+    this.wellRev.bump();
+  }
+
   isolate(id: string | null) {
     this.engine.geology.isolate(id);
     this.sceneRev.bump();
@@ -422,7 +477,20 @@ export class App {
   preset(kind: LayerPreset) {
     const geo = this.engine.geology;
     geo.isolate(null);
-    const defaults: Record<string, number> = { nordland: 0.2, utsira: 0.22, hordaland: 0.14, ty: 0.18, ekofisk: 0.3, hod: 0.26, draupne: 0.55, heather: 0.5, hugin: 0.92, sleipner: 0.75, skagerrak: 0.8, smithbank: 0.85 };
+    const defaults: Record<string, number> = {
+      nordland: 0.2,
+      utsira: 0.22,
+      hordaland: 0.14,
+      ty: 0.18,
+      ekofisk: 0.3,
+      hod: 0.26,
+      draupne: 0.55,
+      heather: 0.5,
+      hugin: 0.92,
+      sleipner: 0.75,
+      skagerrak: 0.8,
+      smithbank: 0.85,
+    };
     for (const id of geo.state.keys()) {
       if (kind === 'default') geo.setLayer(id, { visible: true, opacity: defaults[id] ?? 1 });
       else if (kind === 'solid') geo.setLayer(id, { visible: true, opacity: 1 });
@@ -462,7 +530,10 @@ export class App {
       const side = new THREE.Vector3().crossVectors(f.tan, new THREE.Vector3(0, 1, 0));
       if (side.lengthSq() < 1e-3) side.set(1, 0, 0);
       side.normalize();
-      const pos = f.pos.clone().addScaledVector(side, d).add(new THREE.Vector3(0, d * 0.35, 0));
+      const pos = f.pos
+        .clone()
+        .addScaledVector(side, d)
+        .add(new THREE.Vector3(0, d * 0.35, 0));
       rig.setMd(md);
       rig.flyTo(pos, f.pos, 1.8);
     } else {
@@ -516,8 +587,10 @@ export class App {
   // ------------------------------------------------------------------ panels
   /** The left column folds to its icons and back; the right one is the well logs. */
   togglePanel(side: 'left' | 'right') {
-    if (side === 'right') this.workspace.toggle('logs');
-    else if (!this.workspace.toggleZone('left')) this.workspace.open('scene');
+    withTransition(() => {
+      if (side === 'right') this.workspace.toggle('logs');
+      else if (!this.workspace.toggleZone('left')) this.workspace.open('scene');
+    });
   }
 
   /** Show a panel (Scene, Interpretation, Features), opening it where it was; a second call on the showing panel closes it. */
@@ -685,6 +758,11 @@ export class App {
         }
       }
     }
+    const now = performance.now();
+    if (this.poseText.value !== this.pose.value && now - this.poseTextAt > 66) {
+      this.poseTextAt = now;
+      this.poseText.set(this.pose.value);
+    }
     const dir = new THREE.Vector3();
     e.camera.getWorldDirection(dir);
     const heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI;
@@ -704,4 +782,3 @@ export class App {
     if (h.heading !== hd || h.camY !== cy || h.where !== where || h.nav !== nav) this.hud.set({ heading: hd, where, nav, camY: cy });
   }
 }
-

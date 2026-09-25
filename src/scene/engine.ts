@@ -208,6 +208,9 @@ export class Engine {
     new ResizeObserver(() => this.resize()).observe(container);
   }
 
+  /** how many scene labels to show: all, hide distant and overlapping ones, or only the essentials */
+  labelDensity: 'all' | 'near' | 'few' = 'near';
+
   private insets = { left: 0, right: 0, bottom: 0 };
   /**
    * The parts of the view covered by panels (px). The projection centre moves
@@ -490,6 +493,64 @@ export class Engine {
     wb?.cullTubes(this.camera, this.renderer.domElement.height);
     this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);
+    this.declutterLabels();
+  }
+
+  /**
+   * Scene labels must not pile up: after each draw the ones on screen are
+   * placed by importance (measurements, the well, the platform and contacts
+   * first, closer before farther) and any that would overlap one already
+   * placed is hidden. "few" keeps only the essential kinds.
+   */
+  private declutterLabels() {
+    const els = this.labelRenderer.domElement.children;
+    const mode = this.labelDensity;
+    if (mode === 'all') {
+      for (const el of els) (el as HTMLElement).style.visibility = '';
+      return;
+    }
+    const rank = (el: HTMLElement) => {
+      const c = el.classList;
+      const k = c.contains('measure')
+        ? 0
+        : c.contains('well')
+          ? 1
+          : c.contains('platform')
+            ? 2
+            : c.contains('owc')
+              ? 3
+              : c.contains('gs')
+                ? 4
+                : c.contains('shoe')
+                  ? 5
+                  : c.contains('ctx')
+                    ? 8
+                    : c.contains('tick')
+                      ? 9
+                      : 6;
+      return k * 1e6 - (parseInt(el.style.zIndex || '0', 10) || 0);
+    };
+    const shown: { el: HTMLElement; r: number; box: DOMRect }[] = [];
+    for (const n of els) {
+      const el = n as HTMLElement;
+      const label = el.classList.contains('label3d') ? el : (el.querySelector('.label3d') as HTMLElement | null);
+      if (el.style.display === 'none' || !label) continue;
+      const r = rank(label);
+      if (mode === 'few' && r >= 4e6) {
+        el.style.visibility = 'hidden';
+        continue;
+      }
+      shown.push({ el, r, box: el.getBoundingClientRect() });
+    }
+    shown.sort((a, b) => a.r - b.r);
+    const placed: DOMRect[] = [];
+    const pad = 3;
+    for (const s of shown) {
+      const b = s.box;
+      const hit = placed.some((p) => b.left < p.right + pad && b.right > p.left - pad && b.top < p.bottom + pad && b.bottom > p.top - pad);
+      s.el.style.visibility = hit ? 'hidden' : '';
+      if (!hit) placed.push(b);
+    }
   }
 
   /** Render one frame immediately (used by the snapshot export). */

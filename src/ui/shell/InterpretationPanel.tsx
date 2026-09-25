@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from '@tecton/react/components/alert';
+import { Skeleton } from '@tecton/react/components/skeleton';
 import { Button } from '@tecton/react/components/button';
 import { Popover, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@tecton/react/components/table';
@@ -14,7 +15,7 @@ import { CompactSelect, Note } from '../controls';
 import { download, fmt } from '../dom';
 import { ProvBadge } from '../prov';
 import { IconButton } from '../icon-button';
-import { useRev } from '../signal';
+import { useRev, useSignal } from '../signal';
 import { FluidDonut } from '../viz/FluidDonut';
 import { ScrubField } from '../scrub';
 import { PanelAccordion, PanelSection } from '../section';
@@ -218,6 +219,21 @@ export function InterpretationPanel({ app }: { app: App }) {
 
 function SummaryStats({ app, baseline }: { app: App; baseline: Summary }) {
   const w = app.engine.activeWell;
+  const loading = useSignal(app.loadingWell);
+  if (loading)
+    return (
+      <div role="status" aria-label={`Loading ${loading}`} className="flex items-center gap-3">
+        <Skeleton className="size-[76px] rounded-full" />
+        <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-2.5">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex flex-col gap-1">
+              <Skeleton className="h-2.5 w-16" />
+              <Skeleton className="h-4 w-12" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   if (!w.petro?.available)
     return (
       <Alert variant="destructive">
@@ -332,9 +348,14 @@ function ZoneTable({ app }: { app: App }) {
   const totHc = sums.reduce((a, s) => a + s.hcColumn, 0);
   return (
     <div className="flex flex-col gap-2">
-      <Table aria-label="Zone summary">
+      <Table
+        aria-label="Zone summary"
+        className="table-fixed text-[0.8rem]! [&_td]:px-1! [&_td]:py-1! [&_th]:h-7! [&_th]:px-1! [&_th]:text-[0.7rem]! [&_th]:font-semibold! [&_th]:tracking-wide [&_th]:text-fg-3! [&_th]:uppercase"
+      >
         <TableHeader>
-          <TableHead isRowHeader>Zone</TableHead>
+          <TableHead isRowHeader className="w-[40%]">
+            Zone
+          </TableHead>
           <TableHead className="text-right">Pay</TableHead>
           <TableHead className="text-right">N/G</TableHead>
           <TableHead className="text-right">φ</TableHead>
@@ -348,23 +369,23 @@ function ZoneTable({ app }: { app: App }) {
                 <TableCell>
                   <span className="flex items-center gap-1.5">
                     <span aria-hidden className="size-2 shrink-0 rounded-[2px]" style={{ background: f?.color }} />
-                    <span className="max-w-24 truncate">{f?.name ?? s.zone.name}</span>
+                    <span className="truncate text-fg-1">{f?.name ?? s.zone.name}</span>
                   </span>
-                  <span className="block font-mono text-xs text-muted-foreground">
-                    {fmt.n(s.zone.topMD, 0)} m · {fmt.n(s.gross, 0)} m gross
+                  <span className="type-unit block truncate">
+                    {fmt.n(s.zone.topMD, 0)} · {fmt.n(s.gross, 0)} m
                   </span>
                 </TableCell>
                 <TableCell className="text-right">
-                  <span className="font-mono">{fmt.n(s.pay, 1)}</span>
+                  <span className="type-value text-[0.8rem]!">{fmt.n(s.pay, 1)}</span>
                 </TableCell>
                 <TableCell className="text-right">
-                  <span className="font-mono">{fmt.pct(s.ntg)}</span>
+                  <span className="type-value text-[0.8rem]!">{fmt.pct(s.ntg)}</span>
                 </TableCell>
                 <TableCell className="text-right">
-                  <span className="font-mono">{fmt.pct(s.phiAvg, 1)}</span>
+                  <span className="type-value text-[0.8rem]!">{fmt.pct(s.phiAvg, 1)}</span>
                 </TableCell>
                 <TableCell className="text-right">
-                  <span className="font-mono">{fmt.pct(s.swAvg)}</span>
+                  <span className="type-value text-[0.8rem]!">{fmt.pct(s.swAvg)}</span>
                 </TableCell>
               </TableRow>
             );

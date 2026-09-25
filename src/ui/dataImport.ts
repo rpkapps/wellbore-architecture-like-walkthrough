@@ -128,12 +128,16 @@ export class DataImporter {
           }
           case 'las':
           case 'logs': {
-            const ls = p.kind === 'las' ? parseLAS(p.text, `${p.f.name} (uploaded)`, 'user') : logsFromTable(p.table!, `${p.f.name} (uploaded)`, well.name, 'user', this.depthScale, createdWell !== well);
+            const ls =
+              p.kind === 'las' ? parseLAS(p.text, `${p.f.name} (uploaded)`, 'user') : logsFromTable(p.table!, `${p.f.name} (uploaded)`, well.name, 'user', this.depthScale, createdWell !== well);
             if (p.kind === 'logs' && ls.wellName && ls.wellName !== well.name) this.say(`• ${p.f.name}: using rows of well "${ls.wellName}"`, '');
             for (const c of ls.curves.values()) c.provenance = 'user';
             well.logs = !replace && well.logs ? supplementLogs(well.logs, ls) : ls;
             well.autoCalibrate();
-            this.say(`✓ ${p.f.name}: ${ls.curves.size} curves (${[...ls.curves.keys()].slice(0, 8).join(', ')}${ls.curves.size > 8 ? '…' : ''}) ${replace ? 'loaded' : 'merged'} · ${ls.depth[0].toFixed(1)}–${ls.depth[ls.depth.length - 1].toFixed(1)} m`, 'ok');
+            this.say(
+              `✓ ${p.f.name}: ${ls.curves.size} curves (${[...ls.curves.keys()].slice(0, 8).join(', ')}${ls.curves.size > 8 ? '…' : ''}) ${replace ? 'loaded' : 'merged'} · ${ls.depth[0].toFixed(1)}–${ls.depth[ls.depth.length - 1].toFixed(1)} m`,
+              'ok',
+            );
             break;
           }
           case 'tops': {
@@ -144,7 +148,7 @@ export class DataImporter {
             break;
           }
           case 'production': {
-            const target = createdWell === well ? undefined : well.productionWell ?? well.name;
+            const target = createdWell === well ? undefined : (well.productionWell ?? well.name);
             const s = productionFromTable(p.table!, `${p.f.name} (uploaded)`, target, 'user');
             if (!s.records.length) throw new Error('no dated production records found');
             if (s.wellName) this.say(`• ${p.f.name}: production rows for "${s.wellName}"`, '');
@@ -176,7 +180,7 @@ export class DataImporter {
     } else if (p.table) {
       // multi-well tables: name the new well after the first well in the file
       const wi = findColumn(p.table.headers, COLS.well);
-      const first = wi >= 0 ? chooseWell(p.table.rows.map((r) => r[wi])) ?? p.table.rows[0]?.[wi] : undefined;
+      const first = wi >= 0 ? (chooseWell(p.table.rows.map((r) => r[wi])) ?? p.table.rows[0]?.[wi]) : undefined;
       if (first) name = first.replace(/^NO\s+/, '');
     }
     // default: vertical well from the platform slot until a survey is supplied

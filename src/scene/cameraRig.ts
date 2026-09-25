@@ -166,7 +166,11 @@ export class CameraRig {
   }
 
   /** Smooth cinematic flight to a viewpoint (works in every mode). */
+  /** reduce motion: camera moves become (almost) instant */
+  instantMoves = false;
+
   flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void) {
+    if (this.instantMoves) dur = 0.01;
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
     const curTarget = this.orbit.enabled ? this.orbit.target.clone() : this.camera.position.clone().addScaledVector(dir, pos.distanceTo(target));
@@ -228,7 +232,10 @@ export class CameraRig {
       const upPerp = up.clone().addScaledVector(f.tan, -up.dot(f.tan));
       if (upPerp.lengthSq() < 1e-3) upPerp.copy(f.nor);
       upPerp.normalize();
-      desiredPos = f.pos.clone().addScaledVector(upPerp, inner * 0.18).addScaledVector(f.tan, -inner * 0.2);
+      desiredPos = f.pos
+        .clone()
+        .addScaledVector(upPerp, inner * 0.18)
+        .addScaledVector(f.tan, -inner * 0.2);
       desiredLook = ahead.pos.clone().addScaledVector(upPerp, inner * 0.1);
     } else if (this.guidedView === 'chase') {
       const d = (30 + f.radius * 14) * this.chaseDistance;

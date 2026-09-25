@@ -2,6 +2,7 @@ import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparato
 import { ChevronsLeftRightIcon, EllipsisIcon, PanelLeftCloseIcon, PanelRightCloseIcon, PanelBottomCloseIcon, XIcon } from 'lucide-react';
 import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { IconButton } from '../icon-button';
+import { withTransition } from '../transition';
 import { Signal, useSignal } from '../signal';
 import { SURFACE } from '../shell/overlay';
 import { SIZE_LIMITS, type Column, type DropTarget, type FloatWin, type Layout, type Stack, type Workspace, type Zone } from './layout';
@@ -106,7 +107,7 @@ export function WorkspaceFrame({
       const a = document.activeElement;
       if (a && a !== document.body && a.tagName !== 'CANVAS') return;
       e.preventDefault();
-      ws.hidden.set(!ws.hidden.value);
+      withTransition(() => ws.hidden.set(!ws.hidden.value));
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
@@ -345,7 +346,12 @@ function IconStrip({
         className={`absolute flex items-center gap-0.5 p-0.5 ${SURFACE} ${horizontal ? 'flex-row' : 'flex-col'}`}
         style={{ left: rect.x, top: rect.y, width: horizontal ? rect.w : STRIP, height: horizontal ? STRIP : rect.h }}
       >
-        <IconButton label="Expand the column" size="icon-sm" placement={zone === 'left' ? 'right' : zone === 'right' ? 'left' : 'top'} onPress={() => ws.setCollapsed(zone, false)}>
+        <IconButton
+          label="Expand the column"
+          size="icon-sm"
+          placement={zone === 'left' ? 'right' : zone === 'right' ? 'left' : 'top'}
+          onPress={() => withTransition(() => ws.setCollapsed(zone, false))}
+        >
           <ChevronsLeftRightIcon className={horizontal ? 'rotate-90' : undefined} />
         </IconButton>
         {col.stacks.map((s, i) => (
@@ -418,6 +424,8 @@ function StackView({
   }, [registry, group.id, zone]);
   const active = activeOverride ?? group.active;
   const def = panels.get(active);
+  const seen = useRef(new Set<string>());
+  seen.current.add(active);
   const activate = onActivate ?? ((id: string) => ws.activate(id));
   const closePanel = (id: string) => {
     const d = panels.get(id);
@@ -425,8 +433,13 @@ function StackView({
     else ws.close(id);
   };
   return (
-    <section ref={el} aria-label={def?.title} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${SURFACE}`}>
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border-subtle pr-1 pl-1" onPointerDown={onHeaderDown}>
+    <section
+      ref={el}
+      aria-label={def?.title}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${SURFACE}`}
+      style={{ viewTransitionName: activeOverride ? undefined : `ws-${active}`, viewTransitionClass: 'ws-panel' } as CSSProperties}
+    >
+      <div className="@container flex h-8 shrink-0 items-center gap-1 border-b border-border-subtle pr-1 pl-1" onPointerDown={onHeaderDown}>
         <div ref={strip} role="tablist" aria-label="Panels" className="flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
           {group.panels.map((id) => {
             const d = panels.get(id);
@@ -453,7 +466,8 @@ function StackView({
                 }`}
               >
                 {d.icon}
-                <span className="truncate">{d.title}</span>
+                {/* in a narrow group the tabs behind show only their icon */}
+                <span className={on || group.panels.length < 3 ? 'truncate' : 'hidden truncate @[24rem]:inline'}>{d.title}</span>
                 <button
                   type="button"
                   aria-label={`Close ${d.title}`}
@@ -476,7 +490,8 @@ function StackView({
       <div className="relative flex min-h-0 flex-1 flex-col">
         {group.panels.map((id) => {
           const d = panels.get(id);
-          if (!d) return null;
+          // a panel is built the first time its tab shows; after that it keeps its state while hidden
+          if (!d || !seen.current.has(id)) return null;
           return (
             <Activity key={id} mode={id === active ? 'visible' : 'hidden'}>
               <div className="flex min-h-0 flex-1 flex-col">{d.body()}</div>
@@ -489,12 +504,13 @@ function StackView({
 }
 
 function PanelMenu({ ws, id, zone, onClose }: { ws: Workspace; id: string; zone: Zone | null; onClose: () => void }) {
-  const act = (k: string) => {
-    if (k === 'float') ws.float(id, { x: 120, y: 80, w: 380, h: 340 });
-    else if (k === 'left' || k === 'right' || k === 'bottom') ws.dock(id, k);
-    else if (k === 'fold' && zone) ws.setCollapsed(zone, true);
-    else if (k === 'close') onClose();
-  };
+  const act = (k: string) =>
+    withTransition(() => {
+      if (k === 'float') ws.float(id, { x: 120, y: 80, w: 380, h: 340 });
+      else if (k === 'left' || k === 'right' || k === 'bottom') ws.dock(id, k);
+      else if (k === 'fold' && zone) ws.setCollapsed(zone, true);
+      else if (k === 'close') onClose();
+    });
   const FoldIcon = zone === 'right' ? PanelRightCloseIcon : zone === 'bottom' ? PanelBottomCloseIcon : PanelLeftCloseIcon;
   return (
     <>
@@ -701,7 +717,10 @@ function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, reg
           if (commit) onClick();
           return;
         }
-        if (commit && d?.target) ws.move(panel, d.target);
+        if (commit && d?.target) {
+          const t = d.target;
+          withTransition(() => ws.move(panel, t));
+        }
       };
       const up = () => end(true);
       const key = (ev: KeyboardEvent) => ev.key === 'Escape' && end(false);

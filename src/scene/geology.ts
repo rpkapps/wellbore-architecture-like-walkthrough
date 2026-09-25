@@ -52,8 +52,18 @@ export class GeologyModel {
     this.modelBase = Math.ceil((max + 250) / 50) * 50;
     // default presentation: overburden as tinted glass so the wells read through it, reservoir section solid
     const defaults: Record<string, number> = {
-      nordland: 0.2, utsira: 0.22, hordaland: 0.14, ty: 0.18, ekofisk: 0.3, hod: 0.26,
-      draupne: 0.55, heather: 0.5, hugin: 0.92, sleipner: 0.75, skagerrak: 0.8, smithbank: 0.85,
+      nordland: 0.2,
+      utsira: 0.22,
+      hordaland: 0.14,
+      ty: 0.18,
+      ekofisk: 0.3,
+      hod: 0.26,
+      draupne: 0.55,
+      heather: 0.5,
+      hugin: 0.92,
+      sleipner: 0.75,
+      skagerrak: 0.8,
+      smithbank: 0.85,
     };
     for (const id of MODEL_HORIZONS) this.state.set(id, { visible: true, opacity: defaults[id] ?? 1 });
     this.rebuild();
@@ -106,6 +116,12 @@ export class GeologyModel {
 
   get isolatedId() {
     return this.isolated;
+  }
+
+  /** Recolour a formation's rock (the stratigraphy colour is changed by the caller). */
+  setColor(id: string, hex: string) {
+    const m = this.meshes.get(id);
+    if (m) (m.material as THREE.Material & { userData: { uniforms: RockUniforms } }).userData.uniforms.uBase.value.set(hex);
   }
 
   setHighlight(id: string | null) {
@@ -276,7 +292,9 @@ function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number
   // a zero normal becomes NaN in the lighting and bloom spreads it into black blocks
   const nrm = g.getAttribute('normal') as THREE.BufferAttribute;
   for (let i = 0; i < nrm.count; i++) {
-    const x = nrm.getX(i), y = nrm.getY(i), z = nrm.getZ(i);
+    const x = nrm.getX(i),
+      y = nrm.getY(i),
+      z = nrm.getZ(i);
     const l = x * x + y * y + z * z;
     if (!(l > 1e-12) || !Number.isFinite(l)) nrm.setXYZ(i, 0, 1, 0);
   }

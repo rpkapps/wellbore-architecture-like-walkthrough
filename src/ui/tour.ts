@@ -150,7 +150,10 @@ export function buildChapters(well: Well, field: FieldModel): Chapter[] {
     const ints = payIntervals(well.logs.depth, well.petro.pay, 1.0);
     let best: { top: number; base: number; hc: number; phi: number; sw: number } | null = null;
     for (const iv of ints) {
-      let hc = 0, phi = 0, sw = 0, n = 0;
+      let hc = 0,
+        phi = 0,
+        sw = 0,
+        n = 0;
       const d = well.logs.depth;
       for (let i = 1; i < d.length; i++) {
         if (d[i] < iv.top || d[i] > iv.base) continue;

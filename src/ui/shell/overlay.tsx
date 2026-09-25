@@ -1,6 +1,8 @@
 import { Panel } from '@tecton/react/tecton/panel';
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { startTransition, useEffect, useState, ViewTransition, type ReactNode } from 'react';
+import { overlayBroadcast, overlayState, prefs } from '../prefs';
+import { useSignal } from '../signal';
 import { IconButton } from '../icon-button';
 
 /**
@@ -18,13 +20,20 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
   const key = `bw.overlay.${id}`;
   const [v, setV] = useState(() => {
     try {
-      return localStorage.getItem(key) === '1';
+      const s = localStorage.getItem(key);
+      return s === null ? prefs.value.overlaysCollapsed : s === '1';
     } catch {
-      return false;
+      return prefs.value.overlaysCollapsed;
     }
   });
+  // "collapse / expand all" in the personalisation dialog
+  const broadcast = useSignal(overlayBroadcast);
+  useEffect(() => {
+    if (broadcast) startTransition(() => setV(overlayState.collapsed));
+  }, [broadcast]);
   const set = (on: boolean) => {
-    setV(on);
+    // the panel and its chip morph into each other (view transition)
+    startTransition(() => setV(on));
     try {
       localStorage.setItem(key, on ? '1' : '0');
     } catch {
@@ -32,6 +41,15 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
     }
   };
   return [v, set];
+}
+
+/** Wraps an overlay so its full and collapsed forms morph into each other. */
+export function Morph({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <ViewTransition name={`overlay-${name}`} share="overlay-morph" update="overlay-morph">
+      {children}
+    </ViewTransition>
+  );
 }
 
 export function CollapseButton({ collapsed, onChange, name }: { collapsed: boolean; onChange: (v: boolean) => void; name: string }) {

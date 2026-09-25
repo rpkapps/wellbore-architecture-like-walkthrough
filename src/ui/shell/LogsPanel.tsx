@@ -1,3 +1,4 @@
+import { Skeleton } from '@tecton/react/components/skeleton';
 import { MinusIcon, PlusIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { App } from '../app';
@@ -56,10 +57,35 @@ export function LogsBody({ app }: { app: App }) {
     logs.attach(canvas.current);
     return () => logs.attach(null);
   }, [logs]);
+  const loading = useSignal(app.loadingWell);
   return (
     <div className="relative min-h-0 flex-1">
+      {loading && <LogsSkeleton name={loading} />}
       <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute inset-0 block size-full cursor-crosshair" />
       <LogReadout logs={logs} />
+    </div>
+  );
+}
+
+/** Placeholder track columns while a well's logs load. */
+function LogsSkeleton({ name }: { name: string }) {
+  return (
+    <div role="status" aria-label={`Loading ${name} logs`} className="absolute inset-0 z-10 flex flex-col gap-2 bg-panel p-2">
+      <div className="flex gap-1.5">
+        {[0.7, 1, 1, 0.8, 1, 1].map((f, i) => (
+          <div key={i} className="flex flex-col gap-1" style={{ flex: `${f} 1 0` }}>
+            <Skeleton className="h-3 w-3/4" />
+            <Skeleton className="h-2 w-full" />
+            <Skeleton className="h-2 w-full" />
+          </div>
+        ))}
+      </div>
+      <div className="flex min-h-0 flex-1 gap-1.5">
+        {[0.7, 1, 1, 0.8, 1, 1].map((f, i) => (
+          <Skeleton key={i} className="h-full" style={{ flex: `${f} 1 0`, animationDelay: `${i * 90}ms` }} />
+        ))}
+      </div>
+      <span className="type-caption absolute inset-x-0 top-1/2 text-center">Loading {name} logs …</span>
     </div>
   );
 }

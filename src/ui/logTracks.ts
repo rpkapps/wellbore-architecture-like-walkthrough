@@ -66,6 +66,9 @@ export class LogTracks {
   /** the track layout or the active well changed (the track menu re-renders) */
   readonly rev = new Rev();
   private detach: (() => void) | null = null;
+  /** dragging a track header (reorder) or a boundary between tracks (resize) */
+  private gesture: { kind: 'move'; spec: TrackSpec; x0: number; x: number; started: boolean } | { kind: 'resize'; i: number; x0: number; f0: [number, number] } | null = null;
+  private suppressClick = false;
 
   constructor() {
     this.loadLayout();
@@ -94,9 +97,15 @@ export class LogTracks {
       this.dirty = true;
     };
     const click = (e: MouseEvent) => {
+      if (this.suppressClick) {
+        this.suppressClick = false;
+        return;
+      }
       const md = this.mdAtY(e.offsetY);
       if (md !== null) this.onPick?.(md);
     };
+    const down = (e: PointerEvent) => this.down(e);
+    const up = () => this.up();
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey || e.altKey) this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15);
@@ -105,6 +114,9 @@ export class LogTracks {
     const ro = new ResizeObserver(() => (this.dirty = true));
     ro.observe(cv);
     cv.addEventListener('pointermove', move);
+    cv.addEventListener('pointerdown', down);
+    cv.addEventListener('pointerup', up);
+    cv.addEventListener('pointercancel', up);
     cv.addEventListener('pointerleave', leave);
     cv.addEventListener('click', click);
     cv.addEventListener('wheel', wheel, { passive: false });
@@ -112,6 +124,9 @@ export class LogTracks {
     this.detach = () => {
       ro.disconnect();
       cv.removeEventListener('pointermove', move);
+      cv.removeEventListener('pointerdown', down);
+      cv.removeEventListener('pointerup', up);
+      cv.removeEventListener('pointercancel', up);
       cv.removeEventListener('pointerleave', leave);
       cv.removeEventListener('click', click);
       cv.removeEventListener('wheel', wheel);
@@ -185,7 +200,71 @@ export class LogTracks {
     return top + ((y - this.headH) / (H - this.headH)) * (bot - top);
   }
 
+  private shownTracks() {
+    return this.layout.filter((l) => l.kind === 'track' && l.spec) as { x: number; w: number; spec: TrackSpec; kind: string }[];
+  }
+
+  /** index of the track whose right edge is under x (a resize handle), or -1 */
+  private edgeAt(x: number) {
+    const t = this.shownTracks();
+    for (let i = 0; i < t.length - 1; i++) if (Math.abs(x - (t[i].x + t[i].w)) <= 4) return i;
+    return -1;
+  }
+
+  private down(e: PointerEvent) {
+    if (e.button !== 0 || !this.canvas) return;
+    const i = this.edgeAt(e.offsetX);
+    const t = this.shownTracks();
+    if (i >= 0) {
+      this.gesture = { kind: 'resize', i, x0: e.offsetX, f0: [t[i].spec.flex, t[i + 1].spec.flex] };
+    } else if (e.offsetY < this.headH) {
+      const hit = t.find((l) => e.offsetX >= l.x && e.offsetX < l.x + l.w);
+      if (!hit) return;
+      this.gesture = { kind: 'move', spec: hit.spec, x0: e.offsetX, x: e.offsetX, started: false };
+    } else return;
+    this.canvas.setPointerCapture(e.pointerId);
+  }
+
+  private up() {
+    const g = this.gesture;
+    this.gesture = null;
+    if (!g) return;
+    if (g.kind === 'resize') {
+      this.suppressClick = true;
+      this.commitLayout();
+      return;
+    }
+    if (!g.started) return;
+    this.suppressClick = true;
+    const t = this.shownTracks();
+    const before = t.find((l) => g.x < l.x + l.w / 2 && l.spec !== g.spec)?.spec ?? null;
+    const rest = this.tracks.filter((q) => q !== g.spec);
+    const at = before ? rest.indexOf(before) : rest.length;
+    rest.splice(at, 0, g.spec);
+    this.tracks = rest;
+    this.commitLayout();
+  }
+
   private move(e: PointerEvent) {
+    const g = this.gesture;
+    if (g && this.canvas) {
+      if (g.kind === 'resize') {
+        const t = this.shownTracks();
+        const avail = t.reduce((a, l) => a + l.w, 0) || 1;
+        const flexTotal = t.reduce((a, l) => a + l.spec.flex, 0);
+        const sum = g.f0[0] + g.f0[1];
+        const a = Math.max(0.3, Math.min(sum - 0.3, g.f0[0] + ((e.offsetX - g.x0) / avail) * flexTotal));
+        t[g.i].spec.flex = a;
+        t[g.i + 1].spec.flex = sum - a;
+      } else {
+        g.x = e.offsetX;
+        if (Math.abs(g.x - g.x0) > 4) g.started = true;
+        this.canvas.style.cursor = g.started ? 'grabbing' : 'grab';
+      }
+      this.dirty = true;
+      return;
+    }
+    if (this.canvas) this.canvas.style.cursor = this.edgeAt(e.offsetX) >= 0 ? 'col-resize' : e.offsetY < this.headH ? 'grab' : 'crosshair';
     const md = this.mdAtY(e.offsetY);
     if (md === null || !this.well) {
       this.readout.set(null);
@@ -418,29 +497,55 @@ export class LogTracks {
     g.lineTo(W, this.headH + 0.5);
     g.stroke();
 
-    // cursor & hover lines
-    const yc = yOf(this.cursorMd);
-    g.strokeStyle = 'rgba(127,227,255,0.9)';
-    g.lineWidth = 1;
-    g.beginPath();
-    g.moveTo(0, yc);
-    g.lineTo(W, yc);
-    g.stroke();
-    g.fillStyle = '#7fe3ff';
-    g.beginPath();
-    g.moveTo(0, yc - 4);
-    g.lineTo(5, yc);
-    g.lineTo(0, yc + 4);
-    g.fill();
+    // hover line under the cursor line
     if (this.hoverMd !== null) {
       const yh = yOf(this.hoverMd);
-      g.strokeStyle = 'rgba(255,217,160,0.6)';
+      g.strokeStyle = 'rgba(255,217,160,0.55)';
+      g.lineWidth = 1;
       g.setLineDash([3, 3]);
       g.beginPath();
       g.moveTo(0, yh);
       g.lineTo(W, yh);
       g.stroke();
       g.setLineDash([]);
+    }
+    // the 3D position: a glowing accent line with its depth on a tag over the depth column
+    const yc = yOf(this.cursorMd);
+    if (yc >= this.headH) {
+      const accent = cssVar('--ui-accent', '#b954fd');
+      g.save();
+      g.shadowColor = accent;
+      g.shadowBlur = 6;
+      g.fillStyle = accent;
+      g.fillRect(0, yc - 1, W, 2);
+      g.restore();
+      const tag = fmt.n(this.cursorMd, 1);
+      g.font = font.mono(9.5, 600);
+      const tw = Math.min(DEPTH_W, g.measureText(tag).width + 8);
+      g.fillStyle = accent;
+      g.beginPath();
+      g.roundRect(2, yc - 7, tw, 14, 3);
+      g.fill();
+      g.fillStyle = ink.card;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(tag, 2 + tw / 2, yc + 0.5);
+    }
+    // dragging a track: its column highlighted, and where it will land
+    const gs = this.gesture;
+    if (gs?.kind === 'move' && gs.started) {
+      const accent = cssVar('--ui-accent', '#b954fd');
+      const t = this.shownTracks();
+      const src = t.find((l) => l.spec === gs.spec);
+      if (src) {
+        g.fillStyle = 'rgba(255,255,255,0.05)';
+        g.fillRect(src.x, 0, src.w, H);
+      }
+      const before = t.find((l) => gs.x < l.x + l.w / 2 && l.spec !== gs.spec);
+      const last = t[t.length - 1];
+      const lx = before ? before.x : last.x + last.w;
+      g.fillStyle = accent;
+      g.fillRect(lx - 1, 0, 2, H);
     }
   }
 

@@ -118,7 +118,7 @@ export function ScrubField({
         className="group/scrub relative h-7 min-w-0 flex-1 cursor-ew-resize touch-none overflow-hidden rounded-md bg-muted/70 outline-none select-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-default aria-disabled:opacity-50"
       >
         {histogram && <Bars h={histogram} min={min} max={max} t={t} />}
-        <div aria-hidden className="absolute inset-y-0 left-0 bg-ui-accent/14" style={{ width: `${t * 100}%` }} />
+        <div aria-hidden className="absolute inset-y-0 left-0 bg-fg-1/[0.07] group-hover/scrub:bg-fg-1/[0.1]" style={{ width: `${t * 100}%` }} />
         <div aria-hidden className="absolute inset-y-1 w-0.5 -translate-x-1/2 rounded-full bg-ui-accent" style={{ left: `max(1px, min(calc(100% - 1px), ${t * 100}%))` }} />
         <div className="relative flex h-full items-center justify-between gap-2 px-2">
           <span className="type-label min-w-0 truncate">{label}</span>
@@ -199,5 +199,68 @@ function Bars({ h, min, max, t }: { h: ScrubHistogram; min: number; max: number;
         return b > 0 ? <rect key={i} x={i + 0.12} y={1 - b * 0.85} width={0.76} height={b * 0.85} className={on ? kept : 'fill-fg-3/18'} /> : null;
       })}
     </svg>
+  );
+}
+
+/**
+ * A scrub bar small enough to sit inside a list row (opacity of a layer):
+ * the value as text over a fill; drag sideways or use the arrow keys.
+ */
+export function ScrubChip({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  const drag = useRef<{ x: number; v: number } | null>(null);
+  const t = (Math.max(min, Math.min(max, value)) - min) / (max - min);
+  const snap = (v: number) => Math.max(min, Math.min(max, Math.round(v / step) * step));
+  return (
+    <div
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      aria-valuetext={format(value)}
+      title={`${label}: drag to change`}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        if (e.button !== 0) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, v: value };
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        // the whole range over ~140 px of travel
+        onChange(snap(d.v + ((e.clientX - d.x) / 140) * (max - min) * (e.shiftKey ? 0.2 : 1)));
+      }}
+      onPointerUp={() => (drag.current = null)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        const k = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 0;
+        if (!k) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onChange(snap(value + k * step * (e.shiftKey ? 5 : 1)));
+      }}
+      className="relative h-[18px] w-11 shrink-0 cursor-ew-resize touch-none overflow-hidden rounded-sm bg-muted/80 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <div aria-hidden className="absolute inset-y-0 left-0 border-r-2 border-ui-accent bg-fg-1/[0.09]" style={{ width: `${t * 100}%` }} />
+      <span className="type-value relative flex h-full items-center justify-center text-[0.72rem]! leading-none!">{format(value)}</span>
+    </div>
   );
 }

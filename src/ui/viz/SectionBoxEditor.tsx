@@ -256,7 +256,7 @@ function Relief({ app, px, py, k }: { app: App; px: (x: number) => number; py: (
 }
 
 function Bit({ app, px, py }: { app: App; px: (x: number) => number; py: (n: number) => number }) {
-  const pose = useSignal(app.pose);
+  const pose = useSignal(app.poseText);
   const t = app.engine.activeWell.trajectory.at(pose.md);
   return <circle cx={px(t.ew)} cy={py(t.ns)} r={3.5} strokeWidth={1.5} className="pointer-events-none fill-primary stroke-card" />;
 }

@@ -16,7 +16,7 @@ import { Tab, TabStrip } from '../tabs';
 import { AppShellAction, AppShellActions, AppShellBrand, AppShellHeader, AppShellNav, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { OverflowDivider, OverflowItem, OverflowLabel, Toolbar } from '@tecton/react/tecton/overflow';
 import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
-import { ChartColumnIcon, CircleHelpIcon, FlaskConicalIcon, MaximizeIcon, PanelLeftIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
+import { ChartColumnIcon, CircleHelpIcon, PaletteIcon, FlaskConicalIcon, MaximizeIcon, PanelLeftIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
@@ -29,6 +29,7 @@ import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
 import { HelpDialog } from './HelpDialog';
+import { PersonaliseDialog } from './PersonaliseDialog';
 import { ProductionSheet } from './ProductionSheet';
 
 const PROPERTIES: { id: PropertyMode; label: string; dot: string }[] = [
@@ -53,12 +54,19 @@ function Divider() {
  * Brand, well selector, the navigation and colouring tabs, and a toolbar of
  * commands that folds into a More menu as the window narrows.
  */
-export function TopBar({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
+export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<string, PanelDef>; brand?: boolean }) {
   const ready = useSignal(app.ready);
   return (
     <AppShellHeader className="gap-2">
       <AppShellBrand>
-        <Logo />
+        {/* mounts as the loader leaves, so the loader's logo flies here */}
+        {brand ? (
+          <span className="flex" style={{ viewTransitionName: 'brand-logo' }}>
+            <Logo />
+          </span>
+        ) : (
+          <span className="size-6" />
+        )}
         <span className="hidden sm:inline">BoreWalk</span>
       </AppShellBrand>
       {ready && <Controls app={app} panels={panels} />}
@@ -75,6 +83,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
   const production = useSignal(app.productionOpen);
   const data = useSignal(app.dataOpen);
   const help = useSignal(app.helpOpen);
+  const personalise = useSignal(app.personaliseOpen);
   const roomy = useMinWidth(1360);
   const e = app.engine;
   const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
@@ -172,6 +181,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
           ))}
           <OverflowDivider />
           <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
+          <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
           <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
           <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
         </Toolbar>
@@ -190,6 +200,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
       <ProductionSheet app={app} isOpen={production} onOpenChange={(o) => app.productionOpen.set(o)} />
       <DataDialog app={app} isOpen={data} onOpenChange={(o) => app.dataOpen.set(o)} />
       <HelpDialog app={app} isOpen={help} onOpenChange={(o) => app.helpOpen.set(o)} />
+      <PersonaliseDialog app={app} isOpen={personalise} onOpenChange={(o) => app.personaliseOpen.set(o)} />
     </>
   );
 }

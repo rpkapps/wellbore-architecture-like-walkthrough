@@ -12,6 +12,7 @@ import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
 import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
+import { Morph } from './overlay';
 import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewControls } from './ViewControls';
@@ -23,7 +24,7 @@ const TIMELINE_H = 64;
  * The application: the top bar, then the workspace, where the 3D view fills
  * the stage and the panels, the overlays and the timeline float over it.
  */
-export function Workspace({ app }: { app: App }) {
+export function Workspace({ app, brand = true }: { app: App; brand?: boolean }) {
   const ready = useSignal(app.ready);
   const presenting = useSignal(app.presentation) !== null;
   const panels = usePanels(app);
@@ -31,7 +32,7 @@ export function Workspace({ app }: { app: App }) {
   const chrome = ready && !presenting;
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
-      {!presenting && <TopBar app={app} panels={panels} />}
+      {!presenting && <TopBar app={app} panels={panels} brand={brand} />}
       <WorkspaceFrame
         ws={app.workspace}
         panels={panels}
@@ -108,15 +109,21 @@ function Overlays({ app }: { app: App }) {
     <>
       <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto">
-          <Hud app={app} />
+          <Morph name="hud">
+            <Hud app={app} />
+          </Morph>
         </div>
       </div>
       <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
-        <div className="pointer-events-auto flex min-h-0 flex-col">{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</div>
+        <div className="pointer-events-auto flex min-h-0 flex-col">
+          <Morph name={inspecting ? 'inspector' : 'legend'}>{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</Morph>
+        </div>
       </div>
       <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
         <div className="pointer-events-auto">
-          <Narrative app={app} />
+          <Morph name="narrative">
+            <Narrative app={app} />
+          </Morph>
         </div>
       </div>
       <div className="absolute right-2 bottom-2">

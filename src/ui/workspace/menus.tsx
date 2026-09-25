@@ -5,6 +5,7 @@ import { FEATURES, type FeatureId } from '../../features/registry';
 import type { App } from '../app';
 import { useSignal } from '../signal';
 import { openWindows } from '../toolWindow';
+import { withTransition } from '../transition';
 import { PRESETS, type PresetId } from './layout';
 import type { PanelDef } from './panels';
 
@@ -53,7 +54,7 @@ export function WindowMenu({ app, panels }: { app: App; panels: Map<string, Pane
           ))}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem id="hide" onAction={() => ws.hidden.set(!ws.hidden.value)}>
+        <DropdownMenuItem id="hide" onAction={() => withTransition(() => ws.hidden.set(!ws.hidden.value))}>
           {ws.hidden.value ? 'Show panels' : 'Hide panels'}
           <DropdownMenuShortcut>Tab</DropdownMenuShortcut>
         </DropdownMenuItem>
@@ -77,12 +78,12 @@ export function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, P
         <DropdownMenuGroup>
           <DropdownMenuLabel>Layouts</DropdownMenuLabel>
           {PRESETS.map((p) => (
-            <DropdownMenuItem key={p.id} id={p.id} onAction={() => ws.preset(p.id as PresetId, available)}>
+            <DropdownMenuItem key={p.id} id={p.id} onAction={() => withTransition(() => ws.preset(p.id as PresetId, available))}>
               {p.label}
             </DropdownMenuItem>
           ))}
           {custom && (
-            <DropdownMenuItem id="custom" onAction={() => ws.apply(custom, available)}>
+            <DropdownMenuItem id="custom" onAction={() => withTransition(() => ws.apply(custom, available))}>
               My workspace
             </DropdownMenuItem>
           )}
@@ -91,7 +92,7 @@ export function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, P
         <DropdownMenuItem id="save" onAction={() => (ws.saveCustom(), app.toast('Saved as “My workspace”.'))}>
           Save current as My workspace
         </DropdownMenuItem>
-        <DropdownMenuItem id="reset" onAction={() => ws.preset('walkthrough', available)}>
+        <DropdownMenuItem id="reset" onAction={() => withTransition(() => ws.preset('walkthrough', available))}>
           Reset to default
         </DropdownMenuItem>
       </DropdownMenu>

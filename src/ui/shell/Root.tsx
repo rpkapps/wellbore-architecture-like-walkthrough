@@ -1,11 +1,9 @@
-import { Alert, AlertDescription, AlertTitle } from '@tecton/react/components/alert';
-import { Progress, ProgressLabel, ProgressValue } from '@tecton/react/components/progress';
 import { Toaster } from '@tecton/react/components/sonner';
-import { cn } from 'cn';
 import { useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { loadVolve } from '../../data/dataset';
 import { App } from '../app';
-import { Logo } from '../logo';
+import { Loader } from './Loader';
 import { Workspace } from './Workspace';
 
 type Boot = { stage: 'loading'; msg: string; f: number } | { stage: 'failed'; msg: string } | { stage: 'running'; app: App };
@@ -44,10 +42,19 @@ export function Root() {
           e.start();
           setProgress({ msg: 'Ready', f: 1 });
           setTimeout(() => {
+            // the particles burst, then the loader leaves in a view transition
+            // (its logo flies into the top bar) while the camera sweeps down
             setLoader('leaving');
-            e.rig.flyTo(o.pos, o.target, 3.2);
-            setTimeout(() => setLoader('gone'), 1200);
-          }, 350);
+            setTimeout(() => {
+              // driven by hand (not React's ViewTransition): other synchronous
+              // updates in the same moment would otherwise cancel it
+              const done = () => flushSync(() => setLoader('gone'));
+              const vt = (document as Document & { startViewTransition?: (cb: () => void) => unknown }).startViewTransition;
+              if (vt && !document.documentElement.hasAttribute('data-reduce-motion')) vt.call(document, done);
+              else done();
+              e.rig.flyTo(o.pos, o.target, 3.2);
+            }, 520);
+          }, 300);
         });
         setBoot({ stage: 'running', app });
       })
@@ -62,40 +69,9 @@ export function Root() {
 
   return (
     <>
-      {boot.stage === 'running' && <Workspace app={boot.app} />}
+      {boot.stage === 'running' && <Workspace app={boot.app} brand={loader === 'gone'} />}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
       <Toaster theme="dark" position="top-center" offset={56} />
     </>
-  );
-}
-
-function Loader({ progress, failed, leaving }: { progress: { msg: string; f: number }; failed: string | null; leaving: boolean }) {
-  return (
-    <div className={cn('fixed inset-0 z-50 grid place-items-center bg-background transition-opacity duration-1000', leaving && 'pointer-events-none opacity-0')}>
-      <div className="flex w-full max-w-md flex-col gap-6 px-6">
-        <div className="flex items-center gap-3">
-          <Logo className="size-10" />
-          <h1 className="text-2xl font-medium">BoreWalk</h1>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Walk a real wellbore in 3D. Loading the preloaded Equinor Volve open dataset — well logs, directional surveys, formation picks, operator interpretation and production history.
-        </p>
-        {failed ? (
-          <Alert variant="destructive">
-            <AlertTitle>The dataset failed to load</AlertTitle>
-            <AlertDescription>{failed}</AlertDescription>
-          </Alert>
-        ) : (
-          <Progress value={Math.round(progress.f * 100)} className="w-full">
-            <ProgressLabel>{progress.msg}</ProgressLabel>
-            <ProgressValue />
-          </Progress>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Data: Equinor ASA and the Volve licence partners (ExxonMobil E&amp;P Norway, Bayerngas Norge), released under the Equinor Open Data Licence. Values shown are as published; calculated and
-          reconstructed quantities are labelled throughout.
-        </p>
-      </div>
-    </div>
   );
 }

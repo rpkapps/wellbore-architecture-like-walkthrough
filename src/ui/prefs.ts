@@ -1,0 +1,104 @@
+import { Signal } from './signal';
+import { clearCssVarCache } from './tokens';
+
+/**
+ * Personal settings: how the chrome looks and moves. Stored per browser and
+ * applied as CSS variables on the document, so a change costs no render.
+ */
+export type Density = 'compact' | 'default' | 'comfortable';
+export type Accent = 'orchid' | 'azure' | 'blue' | 'green' | 'yellow' | 'pink' | 'saffron';
+export type LabelDensity = 'all' | 'near' | 'few';
+
+export interface Prefs {
+  density: Density;
+  accent: Accent;
+  /** 0.55 … 1: panels over the 3D view */
+  panelOpacity: number;
+  /** px of background blur behind translucent panels */
+  panelBlur: number;
+  /** overlays over the 3D view start as one-line chips */
+  overlaysCollapsed: boolean;
+  labels: boolean;
+  labelDensity: LabelDensity;
+  reduceMotion: boolean;
+}
+
+export const DEFAULT_PREFS: Prefs = {
+  density: 'default',
+  accent: 'orchid',
+  panelOpacity: 1,
+  panelBlur: 0,
+  overlaysCollapsed: false,
+  labels: true,
+  labelDensity: 'near',
+  reduceMotion: false,
+};
+
+export const DENSITY_ROOT: Record<Density, number> = { compact: 13, default: 14, comfortable: 15 };
+
+/** Palette step of each accent family that reads well on the dark theme. */
+export const ACCENTS: { id: Accent; label: string; step: string }[] = [
+  { id: 'orchid', label: 'Violet', step: 'orchid-460' },
+  { id: 'azure', label: 'Teal', step: 'azure-560' },
+  { id: 'blue', label: 'Blue', step: 'blue-460' },
+  { id: 'green', label: 'Green', step: 'green-560' },
+  { id: 'yellow', label: 'Amber', step: 'yellow-830' },
+  { id: 'pink', label: 'Coral', step: 'pink-460' },
+  { id: 'saffron', label: 'Copper', step: 'saffron-560' },
+];
+
+const KEY = 'bw.prefs.v1';
+
+function load(): Prefs {
+  try {
+    return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Prefs>) };
+  } catch {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+export const prefs = new Signal<Prefs>(load());
+
+export function setPrefs(p: Partial<Prefs>) {
+  prefs.set({ ...prefs.value, ...p });
+}
+
+/** Write the settings to the document (called on load and on every change). */
+export function applyPrefs(p: Prefs = prefs.value) {
+  if (typeof document === 'undefined') return;
+  const r = document.documentElement;
+  r.style.setProperty('--ui-root', `${DENSITY_ROOT[p.density]}px`);
+  r.style.setProperty('--ui-accent', `var(--tecton-palette-${ACCENTS.find((a) => a.id === p.accent)?.step ?? 'orchid-460'})`);
+  r.style.setProperty('--panel-alpha', String(p.panelOpacity));
+  r.style.setProperty('--panel-blur', `${p.panelBlur}px`);
+  r.toggleAttribute('data-reduce-motion', p.reduceMotion);
+  clearCssVarCache();
+}
+
+prefs.subscribe(() => {
+  applyPrefs();
+  try {
+    localStorage.setItem(KEY, JSON.stringify(prefs.value));
+  } catch {
+    /* storage blocked: the settings last for this session */
+  }
+});
+applyPrefs();
+
+const OVERLAYS = ['hud', 'legend', 'inspector', 'narrative'];
+
+/** bumped by "collapse / expand all": every overlay adopts `overlayState.collapsed` */
+export const overlayBroadcast = new Signal(0);
+export const overlayState = { collapsed: false };
+
+export function setAllOverlays(collapsed: boolean) {
+  for (const id of OVERLAYS) {
+    try {
+      localStorage.setItem(`bw.overlay.${id}`, collapsed ? '1' : '0');
+    } catch {
+      /* storage blocked */
+    }
+  }
+  overlayState.collapsed = collapsed;
+  overlayBroadcast.set(overlayBroadcast.value + 1);
+}

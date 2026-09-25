@@ -28,7 +28,7 @@ export function Hud({ app }: { app: App }) {
 
 function HudChip({ app, onExpand }: { app: App; onExpand: () => void }) {
   const hud = useSignal(app.hud);
-  const p = useSignal(app.pose);
+  const p = useSignal(app.poseText);
   return (
     <OverlayChip name="position" onExpand={onExpand}>
       <Compass heading={hud.heading} azi={p.azi} className="size-6" />
@@ -68,7 +68,7 @@ function Compass({ heading, azi, className }: { heading: number; azi: number; cl
 
 function Camera({ app, end }: { app: App; end: React.ReactNode }) {
   const hud = useSignal(app.hud);
-  const p = useSignal(app.pose);
+  const p = useSignal(app.poseText);
   const hdg = fmt.n((hud.heading + 360) % 360, 0);
   return (
     <div className="flex items-center gap-2">
@@ -86,12 +86,12 @@ function Camera({ app, end }: { app: App; end: React.ReactNode }) {
 }
 
 function Depth({ app }: { app: App }) {
-  const p = useSignal(app.pose);
+  const p = useSignal(app.poseText);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-3">
         <Attitude inc={p.inc} />
-        <dl className="grid flex-1 grid-cols-2 gap-x-3">
+        <dl className="grid min-w-0 flex-1 grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-0.5">
           <Read k="MD" v={fmt.n(p.md, 1)} unit="m" />
           <Read k="TVDSS" v={fmt.n(p.tvdss, 1)} unit="m" />
         </dl>
@@ -103,16 +103,16 @@ function Depth({ app }: { app: App }) {
   );
 }
 
-/** A key figure: a small uppercase name over a large number. */
+/** A key figure: a small uppercase name, then the number, right-aligned. */
 function Read({ k, v, unit }: { k: string; v: string; unit?: string }) {
   return (
-    <div className="flex min-w-0 flex-col">
+    <>
       <dt className="type-section">{k}</dt>
-      <dd className="type-key truncate">
+      <dd className="type-key truncate text-right">
         {v}
         {unit && <span className="type-unit ml-0.5">{unit}</span>}
       </dd>
-    </div>
+    </>
   );
 }
 

@@ -4,6 +4,11 @@
  */
 const cache = new Map<string, string>();
 
+/** Forget cached values (the accent or density changed). */
+export function clearCssVarCache() {
+  cache.clear();
+}
+
 export function cssVar(name: string, fallback = '#888'): string {
   let v = cache.get(name);
   if (v === undefined) {

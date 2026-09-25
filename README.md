@@ -62,7 +62,11 @@ Even without it, the app lowers its render resolution automatically when the fra
 
 ### User interface (Tecton)
 
-Everything around the 3D view is React with [`@tecton/react`](https://github.com/rpkapps/tecton-ui-1): the application frame is Tecton's `AppShell`, the work area is its `Canvas` with floating overlays, and the panels, dialogs, sheets, forms, tables, stats and charts are Tecton components themed by its dark token set (Figtree and IBM Plex Mono). The 3D scene and the canvas-drawn plots (log tracks, strips, crossplots, maps) keep their own renderers and take their chrome colours and fonts from the Tecton tokens.
+Everything around the 3D view is React with [`@tecton/react`](https://github.com/rpkapps/tecton-ui-1): dialogs, sheets, menus, tabs, tables and charts are Tecton components themed by its dark token set (Figtree and IBM Plex Mono). The 3D scene and the canvas-drawn plots (log tracks, strips, crossplots, maps) keep their own renderers and take their chrome colours and fonts from the Tecton tokens.
+
+**Workspace.** The 3D view fills the window and never changes size; the panels float over it, Illustrator style (`src/ui/workspace/`). Scene, Interpretation, Features, Well logs and every tool window are panels in tabbed groups on three dock columns (left, right, bottom) or in floating windows. Drag a tab to another group, above or below one to split it, to an empty window edge to start a column, or onto the view to float it; drag column edges and splits to resize; fold a column to a strip of icons whose panels open as flyouts. The panel menu (⋯) docks and floats from the keyboard, **Window** shows and hides panels, **Workspace** switches between layouts for a task (Walkthrough, Petrophysics, Geosteering) or your saved one, and **Tab** (with nothing focused) hides every panel. The projection centre follows the area the panels leave free, so the subject stays centred without resizing the canvas. Layout changes, and the position, key, details and chapter cards collapsing to one-line chips, animate with view transitions.
+
+**Controls and look.** Numbers are scrub fields (drag sideways, click to type, arrow keys); the net-pay cut-offs and GR limits draw the well's own distribution inside the field. Text uses a small set of roles (titles, section headers, labels, values, captions) at a 14 px root size; the accent colour marks only what must stand out (cursor, playhead, selection). The **Personalise** dialog (palette button) sets density, accent colour, panel opacity and background blur, whether overlays start collapsed, scene-label density and reduced motion; settings are kept in the browser. The 3D view draws on demand (camera motion, input, state changes) rather than every frame.
 
 `@tecton/react` is a private package, so it is vendored as a packed tarball in `vendor/` and installed from there (`"@tecton/react": "file:vendor/tecton-react-0.1.0.tgz"`). To update it, pack it in the Tecton repository and replace the tarball:
 
@@ -238,7 +242,8 @@ src/features/                   optional features (registry, one module per feat
 src/data/                       LAS/CSV parsers, minimum curvature, petrophysics, horizons, stratigraphy
 src/scene/                      three.js engine, geomodel, wellbore assembly, shaders, camera rig
 src/ui/                         controller (app.ts), log-track renderer, inspector model, data import, tour
-src/ui/shell/                   React + Tecton chrome: app shell, sidebar tabs, 3D overlays, timeline, logs, dialogs
+src/ui/shell/                   React + Tecton chrome: page loader, top bar, panels, 3D overlays, timeline, logs, dialogs
+src/ui/workspace/               the panel workspace: layout model, dock columns, floating windows, menus
 vendor/                         @tecton/react packed tarball (private package)
 tests/                          unit tests against the real Volve files
 ```

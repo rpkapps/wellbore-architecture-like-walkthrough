@@ -1,4 +1,3 @@
-import { Badge } from '@tecton/react/components/badge';
 import { Button } from '@tecton/react/components/button';
 import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { ColorSwatch } from '@tecton/react/tecton/color-swatch';
@@ -12,6 +11,7 @@ import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
 import { SelectField, SliderField, SwitchField } from '../controls';
 import { ProvBadge } from '../prov';
 import { PanelAccordion, PanelSection } from '../section';
+import { ScrubChip } from '../scrub';
 import { useRev } from '../signal';
 import { SectionBoxEditor } from '../viz/SectionBoxEditor';
 
@@ -84,8 +84,25 @@ function Layers({ app }: { app: App }) {
               onHoverEnd={() => (geo.setHighlight(null), app.engine.requestRender())}
             >
               <TreeViewItemContent
-                icon={<ColorSwatch color={f.color} size="xs" shape="square" aria-label={`${f.name} colour`} />}
-                suffix={f.reservoir ? <Badge variant="warning">Reservoir</Badge> : <span className="font-mono text-xs text-muted-foreground">{Math.round(st.opacity * 100)}%</span>}
+                icon={
+                  <span className="flex" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+                    <ColorSwatch color={f.color} size="xs" shape="square" aria-label={`${f.name} colour: click to change`} onChange={(hex) => app.setFormationColor(id, hex)} />
+                  </span>
+                }
+                suffix={
+                  <span className="flex items-center gap-1.5">
+                    {f.reservoir && <span title="Reservoir" aria-label="Reservoir" role="img" className="size-1.5 rounded-full bg-saffron-560 shadow-[0_0_6px_var(--tecton-palette-saffron-560)]" />}
+                    <ScrubChip
+                      label={`${f.name} opacity`}
+                      value={Math.round(st.opacity * 100)}
+                      min={0}
+                      max={100}
+                      step={5}
+                      format={(v) => `${v}%`}
+                      onChange={(v) => app.setLayer(id, { opacity: v / 100 })}
+                    />
+                  </span>
+                }
                 endAdornment={
                   <>
                     {toggle(f.name, st.visible, (v) => app.setLayer(id, { visible: v }))}
