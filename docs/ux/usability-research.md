@@ -446,6 +446,34 @@ Some of this already exists: the crossplot brush marks samples in 3D, and the lo
 - **Empty states:** a view that has no data for this well says so and offers one action. For example: *"Crossplot needs RHOB and NPHI. 15/9-F-11 A has them → Switch well"*, or *"Simulation needs the Eclipse files → Import"*.
 - **Effort:** S.
 
+### P10. Simpler docking: fixed regions, explicit undock (decided with the owner)
+
+Free docking turned out to be part of the complexity. Every placement option is one more thing to learn and get wrong. The flexibility the owner values is *different layouts for different tasks*, and workspaces (P1) provide that. So:
+
+- **Regions:**
+  - **Three fixed regions:** left sidebar, right sidebar and bottom panel. Each can be resized and collapsed, and each holds tabs.
+  - The 3D view and the timeline are always present.
+  - Nothing can create a new column or region.
+- **One fixed split per sidebar:**
+  - Each sidebar has a top slot and a bottom slot, divided by a draggable divider (Blender's Outliner above Properties).
+  - The bottom slot is hidden while it's empty.
+  - Default: Scene / Interpretation above Properties on the left.
+  - Nothing can create further splits.
+- **Floating windows:**
+  - Only an **Undock ↗** button creates one, from the tab header or tab menu.
+  - Drag a floating window by its header to move it, and by its edges to resize it. Dragging never docks it.
+  - **Dock back ↙**, or a double-click on the header, returns it to the exact slot and tab it came from.
+  - Several can be open at once. Each remembers its own size and position, and Tab hides them with everything else.
+- **Moving between regions** uses the tab menu and the rail (*Move to left / right / bottom*), not drop targets. Dragging a tab only reorders it within its group.
+- **Undo:**
+  - Every layout change shows a toast with **Undo**.
+  - *Reset location* and *Reset workspace* (P1, P2) cover larger mistakes.
+- **Migration:**
+  - Saved layouts with extra splits merge those groups into the nearest slot, as tabs.
+  - Floating windows stay floating and get a remembered home.
+- **Code:** `ui/workspace/Frame.tsx` (the drop-target logic in `createDnd` shrinks to reordering within a group) and `ui/workspace/layout.ts` (a column becomes `{ top, bottom? }` slots; the `split` / `zone` drop targets go away).
+- **Effort:** M. It comes after P2.
+
 ### Later, and optional
 
 - **Guided tasks** (ArcGIS Tasks, Petrel Guru): a workspace can carry a short checklist ("1. Pick the landing zone 2. Check the crossplot…"). Each step applies the view it needs.
@@ -456,7 +484,7 @@ Some of this already exists: the crossplot brush marks samples in 3D, and the lo
 
 - **Moving the analysis views into a split main area (ParaView layouts).** It conflicts with "the 3D view never resizes", which the current design deliberately guarantees. The dock system already gives the flexibility you like.
 - **A ribbon (ArcGIS, Petrel).** It adds density, and the rail plus the contextual task bar give the same context-driven benefit without it.
-- **Removing floating windows.** They stay available but aren't the default (Figma's lesson).
+- **Removing floating windows.** They stay, but only as an explicit Undock / Dock back (P10), never as the result of a missed drop.
 
 ---
 
