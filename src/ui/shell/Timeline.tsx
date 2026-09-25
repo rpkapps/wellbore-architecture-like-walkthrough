@@ -6,20 +6,55 @@ import { payIntervals } from '../../data/petro';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
 import type { App } from '../app';
 import { fmt } from '../dom';
+import { useTextScale } from '../prefs';
 import { IconButton } from '../icon-button';
 import { useRev, useSignal } from '../signal';
+import { scaledPx } from '../tokens';
 import { PoseReadout } from './Hud';
 import { SURFACE } from './overlay';
 
 const SPEEDS = [15, 45, 120, 300];
 
-// vertical layout of the strip (px)
-const H = 56;
-const CH_Y = 7; // chapter markers
-const S_TOP = 17; // formation strip
-const S_H = 20;
-const S_BOT = S_TOP + S_H;
-const LABEL_Y = 51; // depth scale baseline
+/**
+ * Vertical layout of the strip (px) at text scale `k` (the density; 1 at
+ * Compact): the chapter stops, the formation strip, then the depth scale,
+ * whose labels and tag grow with the text while the strip keeps its height.
+ */
+export function stripGeometry(k: number) {
+  const FS = scaledPx(9.5, k); // depth labels and the playhead's tag
+  const CH_Y = Math.round(7 * k); // chapter markers
+  const S_TOP = Math.round(17 * k); // formation strip
+  const S_H = 20;
+  const S_BOT = S_TOP + S_H;
+  const LABEL_Y = S_BOT + 5 + Math.round(FS * 0.9); // depth scale baseline
+  const TAG_Y = LABEL_Y - FS;
+  const TAG_H = Math.round(FS * 1.37);
+  return {
+    k,
+    FS,
+    CH_Y,
+    CH_R: Math.round(13 * k) / 2,
+    CH_FS: scaledPx(8.5, k),
+    S_TOP,
+    S_H,
+    S_BOT,
+    LABEL_Y,
+    TAG_Y,
+    TAG_H,
+    H: Math.ceil(TAG_Y + TAG_H + 1.5),
+    /** IBM Plex Mono advance at FS */
+    CW: FS * 0.62,
+  };
+}
+
+/** The timeline's height at text scale `k`: 64 px, a little more at Roomy. */
+export const timelineHeight = (k: number) => Math.max(64, stripGeometry(k).H + 6);
+
+/** The strip's layout at the current density. */
+function useGeometry() {
+  const k = useTextScale();
+  return useMemo(() => stripGeometry(k), [k]);
+}
 
 /**
  * Play along the well and scrub the whole hole. Play, the speed and where
@@ -102,6 +137,7 @@ class HoverStore {
 
 function Strip({ app }: { app: App }) {
   const rev = useRev(app.wellRev);
+  const { H } = useGeometry();
   const box = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(0);
   const hover = useMemo(() => new HoverStore(), []);
@@ -139,7 +175,7 @@ function Strip({ app }: { app: App }) {
   const onChapter = useCallback((i: number | null) => hover.set((h) => (h ? { ...h, chapter: i ?? undefined } : null)), [hover]);
 
   // the strip drawn in MD across 0..1 of the width, so it does not depend on the width
-  const base = useMemo(() => <Base app={app} />, [app, rev]); // eslint-disable-line react-hooks/exhaustive-deps
+  const base = useMemo(() => <Base app={app} />, [app, rev, H]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div ref={box} className="relative min-w-0 flex-1" style={{ height: H }}>
@@ -175,6 +211,7 @@ function Strip({ app }: { app: App }) {
 
 function HoverLine({ hover }: { hover: HoverStore }) {
   const h = useSyncExternalStore(hover.subscribe, hover.get);
+  const { S_TOP, S_BOT } = useGeometry();
   if (!h || h.chapter !== undefined) return null;
   return <line x1={h.x} x2={h.x} y1={S_TOP - 2} y2={S_BOT + 2} className="pointer-events-none stroke-foreground/50" strokeDasharray="2 2" />;
 }
@@ -185,6 +222,7 @@ function HoverLine({ hover }: { hover: HoverStore }) {
  * percentages, so resizing the window does not render it again.
  */
 function Base({ app }: { app: App }) {
+  const { H, S_TOP, S_H, S_BOT } = useGeometry();
   const w = app.engine.activeWell;
   const td = w.tdMD;
   const pct = (md: number) => `${((md / td) * 100).toFixed(3)}%`;
@@ -234,13 +272,14 @@ function Base({ app }: { app: App }) {
 /** Tour chapters as numbered stops above the strip; crowded ones shrink to dots. */
 function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number; W: number; onHover: (i: number | null) => void }) {
   const chapter = useSignal(app.chapter);
+  const { CH_Y, CH_R, CH_FS, S_TOP } = useGeometry();
   const cs = app.chapters;
   const minGap = cs.reduce((g, c, i) => (i ? Math.min(g, x(c.md) - x(cs[i - 1].md)) : g), Infinity);
-  const big = minGap >= 15;
+  const big = minGap >= 2 * CH_R + 2;
   return (
     <g>
       {cs.map((c, i) => {
-        const cx = Math.max(7, Math.min(W - 7, x(c.md)));
+        const cx = Math.max(CH_R + 0.5, Math.min(W - CH_R - 0.5, x(c.md)));
         const on = chapter?.index === i;
         return (
           <g
@@ -263,9 +302,9 @@ function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number;
             }}
           >
             <line x1={x(c.md)} x2={x(c.md)} y1={CH_Y + 4} y2={S_TOP} className="stroke-border" />
-            <circle cx={cx} cy={CH_Y} r={big ? 6.5 : 3.5} strokeWidth={1.5} className={on ? 'fill-ui-accent stroke-ui-accent' : 'fill-background stroke-fg-3 hover:stroke-fg-1'} />
+            <circle cx={cx} cy={CH_Y} r={big ? CH_R : 3.5} strokeWidth={1.5} className={on ? 'fill-ui-accent stroke-ui-accent' : 'fill-background stroke-fg-3 hover:stroke-fg-1'} />
             {big && (
-              <text x={cx} y={CH_Y + 3} textAnchor="middle" fontSize={8.5} fontWeight={600} className={`pointer-events-none ${on ? 'fill-background' : 'fill-fg-2'}`}>
+              <text x={cx} y={CH_Y} dy="0.35em" textAnchor="middle" fontSize={CH_FS} fontWeight={600} className={`pointer-events-none ${on ? 'fill-background' : 'fill-fg-2'}`}>
                 {i + 1}
               </text>
             )}
@@ -291,12 +330,13 @@ function Playhead({ app, x, W, td, onKey }: { app: App; x: (md: number) => numbe
   const slider = useRef<SVGGElement>(null);
   const [gap, setGap] = useState<[number, number]>([-1, -1]);
   const gapKey = useRef('');
+  const { S_TOP, S_H, LABEL_Y, TAG_Y, TAG_H, FS, CW } = useGeometry();
   useLayoutEffect(() => {
     const place = () => {
       const md = app.pose.value.md;
       const px = x(md);
       const tag = `${fmt.n(md, 0)} m`;
-      const tw = tag.length * 6 + 10;
+      const tw = Math.round(tag.length * CW + 10);
       const tx = Math.max(0, Math.min(W - tw, px - tw / 2));
       head.current?.setAttribute('transform', `translate(${px.toFixed(1)},0)`);
       dim.current?.setAttribute('x', px.toFixed(1));
@@ -319,7 +359,7 @@ function Playhead({ app, x, W, td, onKey }: { app: App; x: (md: number) => numbe
     };
     place();
     return app.pose.subscribe(place);
-  }, [app, x, W]);
+  }, [app, x, W, CW]);
   return (
     <g
       ref={slider}
@@ -338,17 +378,17 @@ function Playhead({ app, x, W, td, onKey }: { app: App; x: (md: number) => numbe
         <circle cy={S_TOP - 4} r={8} className="fill-ui-accent/20" />
         <circle cy={S_TOP - 4} r={5} strokeWidth={2} className="knob fill-ui-accent stroke-transparent" />
       </g>
-      <rect ref={tagBox} y={LABEL_Y - 9.5} height={13} rx={6.5} className="fill-ui-accent" />
-      <text ref={tagText} y={LABEL_Y} textAnchor="middle" fontSize={9.5} fontWeight={600} className="fill-background font-mono" />
+      <rect ref={tagBox} y={TAG_Y} height={TAG_H} rx={TAG_H / 2} className="fill-ui-accent" />
+      <text ref={tagText} y={LABEL_Y} textAnchor="middle" fontSize={FS} fontWeight={600} className="fill-background font-mono" />
     </g>
   );
 }
 
 /** The depth scale under the strip; labels that would touch the playhead's tag are left out. */
 function Scale({ td, W, x, gap }: { td: number; W: number; x: (md: number) => number; gap: [number, number] }) {
-  const step = niceStep(td / Math.max(2, W / 80));
+  const { S_BOT, LABEL_Y, FS, CW: cw, k } = useGeometry();
+  const step = niceStep(td / Math.max(2, W / (80 * k)));
   const tdLabel = `TD ${fmt.n(td, 0)} m`;
-  const cw = 5.9; // IBM Plex Mono advance at 9.5 px
   const labels: { md: number; text: string; x0: number; x1: number; anchor: 'start' | 'middle' | 'end' }[] = [{ md: 0, text: '0 m', x0: 0, x1: 3 * cw, anchor: 'start' }];
   for (let md = step; md < td; md += step) {
     const text = fmt.n(md, 0);
@@ -358,7 +398,7 @@ function Scale({ td, W, x, gap }: { td: number; W: number; x: (md: number) => nu
   const shown = labels.filter((l) => l.x1 < end.x0 - 10 && (l.x1 < gap[0] || l.x0 > gap[1]));
   if (end.x1 < gap[0] || end.x0 > gap[1]) shown.push(end);
   return (
-    <g className="pointer-events-none fill-muted-foreground font-mono" fontSize={9.5}>
+    <g className="pointer-events-none fill-muted-foreground font-mono" fontSize={FS}>
       {shown.map((l) => (
         <g key={l.md}>
           {l.anchor === 'middle' && <rect x={x(l.md) - 0.5} y={S_BOT + 2} width={1} height={3} className="fill-border" />}
@@ -396,7 +436,7 @@ function HoverCard({ app, hover: store, W }: { app: App; hover: HoverStore; W: n
       style={{ left }}
     >
       <span className="truncate font-medium">{title}</span>
-      <span className="truncate font-mono text-[10.5px] text-muted-foreground">{sub}</span>
+      <span className="truncate font-mono text-[0.75rem] text-muted-foreground">{sub}</span>
     </div>
   );
 }

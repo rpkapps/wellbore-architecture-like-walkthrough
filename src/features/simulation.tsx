@@ -14,7 +14,7 @@ import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
 import { Rev, SCENE } from '../ui/signal';
-import { font, ink } from '../ui/tokens';
+import { font, ink, textLen } from '../ui/tokens';
 import type { FeatureModule } from './registry';
 import { FOCUS } from '../scene/rockMaterial';
 
@@ -86,6 +86,8 @@ export class SimulationFeature implements FeatureModule {
   private measured: { t: number; oil: number }[] = [];
 
   constructor(private app: App) {
+    // cached drawing: redraw when a colour or the text size it uses changes
+    app.paintRev.subscribe(() => this.chart.invalidate());
     this.panel = new ToolWindow({
       id: 'simulation',
       title: 'Reservoir simulation',
@@ -534,27 +536,29 @@ void main(){
     const mr = meas.map((q) => ({ t: q.t, r: q.oil / 30.4 }));
     const rMax = Math.max(...mr.map((q) => q.r), ...simRate, 1) * 1.1;
     const X = (t: number) => 40 + ((t - t0) / (t1 - t0 || 1)) * (W - 50);
-    const Y = (r: number) => H - 18 - (r / rMax) * (H - 34);
+    // the title above and the year labels below grow with the density's text
+    const bot = H - textLen(18);
+    const Y = (r: number) => bot - (r / rMax) * (bot - textLen(16));
     g.font = font.mono(10);
     g.fillStyle = ink.muted;
     g.textAlign = 'left';
-    g.fillText('Field oil rate, Sm³/d', 4, 11);
+    g.fillText('Field oil rate, Sm³/d', 4, textLen(11));
     g.strokeStyle = ink.grid;
     for (let y = new Date(t0).getUTCFullYear() + 1; y <= new Date(t1).getUTCFullYear(); y++) {
       const x = X(Date.UTC(y, 0, 1));
       g.beginPath();
-      g.moveTo(x, 16);
-      g.lineTo(x, H - 18);
+      g.moveTo(x, textLen(16));
+      g.lineTo(x, bot);
       g.stroke();
       g.textAlign = 'center';
-      g.fillText(String(y).slice(2), x, H - 5);
+      g.fillText(String(y).slice(2), x, H - textLen(5));
     }
     g.textAlign = 'right';
-    g.fillText(fmt.big(rMax), 36, 22);
-    g.fillText('0', 36, H - 18);
+    g.fillText(fmt.big(rMax), 36, textLen(22));
+    g.fillText('0', 36, bot);
     // measured (bars) vs simulated (line)
     g.fillStyle = 'rgba(255,181,71,0.55)';
-    for (const q of mr) g.fillRect(X(q.t), Y(q.r), Math.max(1, X(q.t + 30 * 864e5) - X(q.t) - 0.5), H - 18 - Y(q.r));
+    for (const q of mr) g.fillRect(X(q.t), Y(q.r), Math.max(1, X(q.t + 30 * 864e5) - X(q.t) - 0.5), bot - Y(q.r));
     if (simRate.length) {
       g.strokeStyle = '#7fe3ff';
       g.lineWidth = 1.6;

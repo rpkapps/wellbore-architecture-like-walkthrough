@@ -14,8 +14,9 @@ export function FluidDonut({ sw, phi, size = 76 }: { sw: number; phi: number; si
   return (
     <svg
       viewBox="0 0 76 76"
-      width={size}
-      height={size}
+      // in rem (size is px at the 14 px Compact root), so the donut and its text grow with the density
+      width={`${size / 14}rem`}
+      height={`${size / 14}rem`}
       className="shrink-0"
       role="img"
       aria-label={`Pore space in pay: ${fmt.pct(so, 0)} oil, ${fmt.pct(sw, 0)} water; average porosity ${fmt.pct(phi, 1)}`}

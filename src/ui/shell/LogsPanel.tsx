@@ -103,7 +103,7 @@ function LogReadout({ logs }: { logs: LogTracks }) {
   return (
     <div
       role="status"
-      className="pointer-events-none absolute z-10 flex w-44 flex-col gap-1 rounded-md bg-popover px-2.5 py-2 font-mono text-[10.5px] text-popover-foreground shadow-md ring-1 ring-foreground/10"
+      className="pointer-events-none absolute z-10 flex w-44 flex-col gap-1 rounded-md bg-popover px-2.5 py-2 font-mono text-[0.75rem] text-popover-foreground shadow-md ring-1 ring-foreground/10"
       style={{ left: left ? r.x - 188 : r.x + 16, top: Math.max(4, Math.min(r.y + 14, r.h - 260)) }}
     >
       <span className="text-foreground">{r.title}</span>

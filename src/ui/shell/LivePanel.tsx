@@ -6,8 +6,9 @@ import type { TimeSeries } from '../../connect/store';
 import type { App } from '../app';
 import { CompactSelect } from '../controls';
 import { IconButton } from '../icon-button';
+import { themeRev } from '../prefs';
 import { useSignal } from '../signal';
-import { cssVar, font, ink, wash } from '../tokens';
+import { cssVar, font, ink, textLen, wash } from '../tokens';
 import { fitStore } from '../toolWindow';
 
 /**
@@ -150,6 +151,8 @@ export function LiveBody({ app }: { app: App }) {
       if (!raf) raf = requestAnimationFrame(() => ((raf = 0), draw.current()));
     };
     const off = app.hub.seriesRev.subscribe(kick);
+    // a new theme, accent or density: the colours and text sizes change
+    const offLook = themeRev.subscribe(kick);
     const c = cv.current;
     // the size comes with the observation, once per frame after layout: draw now, so the chart never shows stretched
     const ro = new ResizeObserver((es) => {
@@ -171,6 +174,7 @@ export function LiveBody({ app }: { app: App }) {
     kick();
     return () => {
       off();
+      offLook();
       ro.disconnect();
       c?.removeEventListener('pointermove', move);
       c?.removeEventListener('pointerleave', leave);
@@ -200,13 +204,14 @@ export function LiveBody({ app }: { app: App }) {
 
 // ------------------------------------------------------------------ drawing
 
-const AXIS = 18;
 const GAP = 4;
 
 function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], windowMs: number, hoverX: number | null) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (!W || !H) return;
   fitStore(c, W, H, dpr);
+  // the time axis and the label offsets grow with the density's text
+  const AXIS = textLen(18);
   const g = c.getContext('2d')!;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, c.width, c.height);
@@ -241,7 +246,7 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
     if (!Number.isFinite(lo)) {
       g.fillStyle = ink.faint;
       g.font = font.sans(11);
-      g.fillText(`${name} — no readings in this window`, 8, top + 16);
+      g.fillText(`${name} — no readings in this window`, 8, top + textLen(16));
       return;
     }
     if (hi - lo < 1e-9) {
@@ -287,16 +292,16 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
     g.font = font.sans(11, 600);
     g.fillStyle = color;
     g.textBaseline = 'top';
-    g.fillText(name, 8, top + 5);
+    g.fillText(name, 8, top + textLen(5));
     const nameW = g.measureText(name).width;
     g.font = font.sans(10);
     g.fillStyle = ink.muted;
-    g.fillText(`${ch.unit || ''}  ${fmt(lo + pad)}–${fmt(hi - pad)}`, 14 + nameW, top + 6);
+    g.fillText(`${ch.unit || ''}  ${fmt(lo + pad)}–${fmt(hi - pad)}`, 14 + nameW, top + textLen(6));
     const shownV = hoverI >= 0 ? ch.v[hoverI] : last;
     g.font = font.mono(th > 44 ? 16 : 12, 600);
     g.fillStyle = ink.text;
     g.textAlign = 'right';
-    g.fillText(Number.isNaN(shownV) ? '—' : fmt(shownV), W - 8, top + 4);
+    g.fillText(Number.isNaN(shownV) ? '—' : fmt(shownV), W - 8, top + textLen(4));
     g.textAlign = 'left';
   });
 

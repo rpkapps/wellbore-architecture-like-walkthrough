@@ -8,7 +8,7 @@ import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
-import { font, ink, wash } from '../ui/tokens';
+import { font, ink, textLen, textScale, wash } from '../ui/tokens';
 import type { FeatureModule } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
 
@@ -353,7 +353,10 @@ export class GeosteerFeature implements FeatureModule {
     return { a: p.window.from, b: p.window.to };
   }
 
-  private pad = { l: 46, r: 12, t: 8, b: 20 };
+  /** plot margins; the ones holding labels grow with the density's text */
+  private get pad() {
+    return { l: textLen(46), r: 12, t: 8, b: textLen(20) };
+  }
 
   private mdAtX(x: number): number | null {
     const r = this.range();
@@ -409,17 +412,17 @@ export class GeosteerFeature implements FeatureModule {
     g.fillStyle = ink.muted;
     g.font = font.mono(10);
     g.textAlign = 'right';
-    const stepY = niceStep((y1 - y0) / 5);
+    const stepY = niceStep(Math.max((y1 - y0) / 5, ((y1 - y0) * textLen(20)) / (H - P.t - P.b)));
     for (let d = Math.ceil(y0 / stepY) * stepY; d <= y1; d += stepY) {
       g.beginPath();
       g.moveTo(P.l, Y(d));
       g.lineTo(W - P.r, Y(d));
       g.stroke();
-      g.fillText(d.toFixed(0), P.l - 4, Y(d) + 3);
+      g.fillText(d.toFixed(0), P.l - 4, Y(d) + 3.5 * textScale());
     }
     g.textAlign = 'center';
     const stepX = niceStep((r.b - r.a) / 8);
-    for (let md = Math.ceil(r.a / stepX) * stepX; md <= r.b; md += stepX) g.fillText(md.toFixed(0), X(md), H - 6);
+    for (let md = Math.ceil(r.a / stepX) * stepX; md <= r.b; md += stepX) g.fillText(md.toFixed(0), X(md), H - textLen(6));
     // untied model surfaces for comparison
     if (p.source === 'tied') {
       g.setLineDash([4, 4]);

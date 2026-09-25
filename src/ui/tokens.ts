@@ -51,7 +51,46 @@ export const ink = {
   },
 };
 
-export const font = {
+/** The chrome's root text size in px (the density setting: 14, 15 or 17), from the cached `--ui-root`. */
+export function uiRoot(): number {
+  return parseFloat(cssVar('--ui-root', '15px')) || 15;
+}
+
+/**
+ * How much canvas and SVG text grows with the density setting: 1 at a 14 px
+ * root (Compact), 15/14 at Default, 17/14 at Roomy. Sizes in the drawing code
+ * are written for Compact; lengths that hold text (header rows, gutters) scale too.
+ */
+export function textScale(): number {
+  return uiRoot() / 14;
+}
+
+/**
+ * A text size of the drawing code in CSS px at the current density. Nothing
+ * draws below 9.5 px at Compact (10.2 px at Default) however small it was written.
+ */
+export function textPx(size: number): number {
+  return scaledPx(size, textScale());
+}
+
+/** `textPx` at a given text scale (React code that knows the density without reading the document). */
+export function scaledPx(size: number, k: number): number {
+  return Math.round(Math.max(size, 9.5) * k * 10) / 10;
+}
+
+/** A length that holds text (a row, a gutter), scaled like the text in it, in whole px. */
+export function textLen(px: number): number {
+  return Math.round(px * textScale());
+}
+
+/** Canvas fonts at an exact size, for pictures with a layout of their own (the snapshot export). */
+export const fixedFont = {
   sans: (size: number, weight = 500) => `${weight} ${size}px Figtree, ui-sans-serif, system-ui, sans-serif`,
   mono: (size: number, weight = 500) => `${weight} ${size}px "IBM Plex Mono", ui-monospace, monospace`,
+};
+
+/** Canvas fonts that follow the density setting (see `textPx`). */
+export const font = {
+  sans: (size: number, weight = 500) => fixedFont.sans(textPx(size), weight),
+  mono: (size: number, weight = 500) => fixedFont.mono(textPx(size), weight),
 };

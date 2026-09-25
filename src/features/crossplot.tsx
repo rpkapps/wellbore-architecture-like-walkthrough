@@ -9,14 +9,15 @@ import { CompactSelect, Note, type Option } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
-import { font, ink, wash } from '../ui/tokens';
+import { font, ink, textLen, wash } from '../ui/tokens';
 import { CURVE_BY_KEY } from './curves';
 import type { FeatureModule } from './registry';
 
 type ColourBy = 'formation' | 'gr' | 'sw' | 'md';
 
 const SEL_COLOR = '#ff5fd2';
-const PAD = { l: 52, r: 14, t: 12, b: 34 };
+/** plot margins; the ones holding labels grow with the density's text */
+const pads = () => ({ l: textLen(52), r: 14, t: 12, b: textLen(34) });
 /** select key for "all logged depths" */
 const ALL = '_all';
 
@@ -228,6 +229,7 @@ export class CrossplotFeature implements FeatureModule {
   /** the static plot: grid, overlays, points */
   private drawLayer(g: CanvasRenderingContext2D, W: number, H: number) {
     const def = CROSSPLOTS[this.kind];
+    const PAD = pads();
     const X = this.scale(def.x, PAD.l, W - PAD.r);
     const Y = this.scale(def.y, H - PAD.b, PAD.t);
     this.tx = X;
@@ -255,29 +257,37 @@ export class CrossplotFeature implements FeatureModule {
     };
     const lbl = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 1 ? (Number.isInteger(v) ? v.toFixed(0) : v.toFixed(1)) : v.toFixed(2).replace(/^0/, '').replace(/^-0/, '-'));
     g.textAlign = 'center';
+    // tick labels that would touch the previous one are left out (the grid line stays)
+    let lastX = -Infinity;
     for (const v of ticks(def.x)) {
       g.beginPath();
       g.moveTo(X(v), PAD.t);
       g.lineTo(X(v), H - PAD.b);
       g.stroke();
-      g.fillText(lbl(v), X(v), H - PAD.b + 13);
+      const half = g.measureText(lbl(v)).width / 2;
+      if (X(v) - half < lastX + 4) continue;
+      lastX = X(v) + half;
+      g.fillText(lbl(v), X(v), H - PAD.b + textLen(13));
     }
     g.textAlign = 'right';
+    let lastY = Infinity;
     for (const v of ticks(def.y)) {
       g.beginPath();
       g.moveTo(PAD.l, Y(v));
       g.lineTo(W - PAD.r, Y(v));
       g.stroke();
-      g.fillText(lbl(v), PAD.l - 5, Y(v) + 3);
+      if (lastY - Y(v) < textLen(12)) continue;
+      lastY = Y(v);
+      g.fillText(lbl(v), PAD.l - 5, Y(v) + textLen(3.5));
     }
     g.font = font.sans(10.5, 400);
     g.fillStyle = ink.text;
     g.textAlign = 'center';
     g.fillText(def.x.label, (PAD.l + W - PAD.r) / 2, H - 6);
     g.save();
-    g.translate(12, (PAD.t + H - PAD.b) / 2);
+    g.translate(textLen(12), (PAD.t + H - PAD.b) / 2);
     g.rotate(-Math.PI / 2);
-    g.fillText(def.y.label, 0, 0);
+    g.fillText(fitText(g, def.y.label, H - PAD.t - PAD.b), 0, 0);
     g.restore();
     g.save();
     g.beginPath();
@@ -318,6 +328,7 @@ export class CrossplotFeature implements FeatureModule {
       }
     };
     if (params && this.kind === 'pickett') {
+      let swRight = -Infinity;
       for (const [sw, c] of [
         [1, '#5fb4ff'],
         [0.5, '#9fd0a8'],
@@ -329,7 +340,12 @@ export class CrossplotFeature implements FeatureModule {
         g.fillStyle = c;
         g.textAlign = 'left';
         g.font = font.sans(10, 400);
-        g.fillText(sw === 1 ? 'Sw 1 water' : `Sw ${sw}`, X((params.a * params.rw) / (0.35 ** params.m * sw ** params.n)) + 5, Y(0.35) + 3);
+        // left out where it would run into the previous line's label
+        const text = sw === 1 ? 'Sw 1 water' : `Sw ${sw}`;
+        const lx = X((params.a * params.rw) / (0.35 ** params.m * sw ** params.n)) + 5;
+        if (lx < swRight + 6) continue;
+        swRight = lx + g.measureText(text).width;
+        g.fillText(text, lx, Y(0.35) + 3);
       }
     } else if (params && this.kind === 'nd') {
       const ml = matrixLine(params);
@@ -355,7 +371,7 @@ export class CrossplotFeature implements FeatureModule {
       g.setLineDash([]);
       g.fillStyle = 'rgba(255,255,255,0.7)';
       g.textAlign = 'left';
-      g.fillText('pay', PAD.l + 4, PAD.t + 12);
+      g.fillText('pay', PAD.l + 4, PAD.t + textLen(12));
     }
     g.restore();
     g.strokeStyle = wash(0.2);
@@ -562,4 +578,12 @@ export class CrossplotFeature implements FeatureModule {
     this.markers.frustumCulled = false;
     e.scene.add(this.markers);
   }
+}
+
+/** Text cut to `max` px with an ellipsis. */
+function fitText(g: CanvasRenderingContext2D, text: string, max: number) {
+  if (g.measureText(text).width <= max) return text;
+  let t = text;
+  while (t.length > 1 && g.measureText(`${t}…`).width > max) t = t.slice(0, -1);
+  return `${t.trimEnd()}…`;
 }
