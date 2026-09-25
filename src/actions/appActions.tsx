@@ -118,7 +118,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Navigation',
       description: 'Guided follows the well path (tunnel, chase or orbit camera); Explore frees the camera to orbit or fly.',
       category: 'Navigate',
-      where: 'Top bar › Navigation',
+      where: 'View toolbar › Guided / Explore',
       input: z.object({ mode: z.enum(['guided', 'explore']) }),
       choices: (app) => [
         { label: 'Guided', input: { mode: 'guided' }, current: app.engine.rig.mode === 'guided' },
@@ -211,7 +211,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Field overview',
       description: 'Flies the camera out to the whole Volve field.',
       category: 'Navigate',
-      where: 'Top bar › Field overview',
+      where: 'View toolbar › Field overview',
       keywords: ['home', 'reset camera', 'zoom out'],
       run: (app) => app.overview(),
     }),
@@ -236,7 +236,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Colour the wellbore by',
       description: 'The property painted on the borehole wall and halo: resistivity, hydrocarbons (pore fluids), lithology, or drilling speed.',
       category: 'View',
-      where: 'Top bar › Colour by',
+      where: 'Colour key › Colour by',
       shortcut: 'V',
       input: z.object({ mode: z.enum(PROPERTY_MODES) }),
       choices: (app) =>
@@ -471,7 +471,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Tool',
       description: 'Runs a command of an enabled feature (measure, snapshot, crossplot type…).',
       category: 'Features',
-      where: 'Top bar › Tools',
+      where: 'View toolbar',
       input: z.object({ tool: z.string(), item: z.string().optional() }),
       choices: (app) =>
         app.tools.value.flatMap((t) =>
