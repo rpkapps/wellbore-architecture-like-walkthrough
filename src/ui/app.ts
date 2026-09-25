@@ -24,8 +24,6 @@ import { DataImporter } from './dataImport';
 import { DataHub } from '../connect/hub';
 import type { ConnectRequest } from './shell/ConnectDialog';
 
-export type SidebarTab = 'scene' | 'interpretation' | 'features';
-
 /** Position read-out along the active well (timeline, log cursor). */
 export interface Pose {
   md: number;
@@ -741,25 +739,11 @@ export class App {
   }
 
   // ------------------------------------------------------------------ panels
-  /** The left column folds to its icons and back; the right one is the well logs. */
-  togglePanel(side: 'left' | 'right') {
-    withTransition(() => {
-      if (side === 'right') this.workspace.toggle('logs');
-      else if (!this.workspace.toggleZone('left')) this.workspace.open('scene');
-    });
-  }
-
-  /** Show a panel (Scene, Interpretation, Features), opening it where it was; a second call on the showing panel closes it. */
-  showSidebar(tab: SidebarTab, toggle = false) {
-    if (toggle && this.workspace.isShown(tab)) {
-      this.workspace.close(tab);
-      return;
-    }
-    if (tab === 'interpretation' && this.engine.mode !== 'hydrocarbon') {
-      this.setProperty('hydrocarbon');
-      this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
-    }
-    this.workspace.open(tab);
+  /** The Interpretation panel is brought up (from the rail or a menu): its parameters redraw the Hydrocarbons view, so show that. */
+  interpretationShown() {
+    if (this.engine.mode === 'hydrocarbon') return;
+    this.setProperty('hydrocarbon');
+    this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
   }
 
   inspectFormation(id: string) {

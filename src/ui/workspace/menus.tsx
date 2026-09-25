@@ -1,65 +1,15 @@
 import { Button } from '@tecton/react/components/button';
-import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut } from '@tecton/react/components/dropdown-menu';
+import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from '@tecton/react/components/dropdown-menu';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@tecton/react/components/dialog';
 import { Input } from '@tecton/react/components/input';
 import { CheckIcon, PencilIcon, PlusIcon, RotateCcwIcon, SaveIcon, Trash2Icon } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { IconButton } from '../icon-button';
-import { FEATURES, type FeatureId } from '../../features/registry';
 import type { App } from '../app';
 import { useSignal } from '../signal';
-import { openWindows } from '../toolWindow';
 import { withTransition } from '../transition';
 import { PRESETS, type PresetId } from './layout';
 import type { PanelDef } from './panels';
-
-const isFeature = (id: string): id is FeatureId => FEATURES.some((f) => f.id === id);
-
-/** Window menu entries: every panel, ticked when it is open; choosing one shows or closes it. */
-export function useWindowMenu(app: App, panels: Map<string, PanelDef>): ReactNode {
-  const ws = app.workspace;
-  useSignal(ws.layout);
-  useSignal(openWindows);
-  const list = [...panels.values()];
-  const open = list.filter((p) => ws.isOpen(p.id)).map((p) => p.id);
-  const toggle = (id: string) => {
-    const p = panels.get(id);
-    if (!p) return;
-    if (!p.tool) {
-      ws.isShown(id) ? ws.close(id) : ws.open(id);
-      return;
-    }
-    // a feature's window: turning it on shows it; an open one closes through the feature
-    if (isFeature(id) && !app.flags.on(id)) app.flags.set(id, true);
-    else if (p.tool.visible) p.tool.close();
-    else p.tool.show();
-  };
-  return (
-    <>
-      <DropdownMenuGroup
-        selectionMode="multiple"
-        selectedKeys={open}
-        onSelectionChange={(keys) => {
-          if (keys === 'all') return;
-          const next = new Set([...keys].map(String));
-          for (const p of list) if (next.has(p.id) !== open.includes(p.id)) toggle(p.id);
-        }}
-      >
-        <DropdownMenuLabel>Panels</DropdownMenuLabel>
-        {list.map((p) => (
-          <DropdownMenuItem key={p.id} id={p.id} textValue={p.title}>
-            {p.title}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuGroup>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem id="hide" onAction={() => withTransition(() => ws.hidden.set(!ws.hidden.value))}>
-        {ws.hidden.value ? 'Show panels' : 'Hide panels'}
-        <DropdownMenuShortcut>Tab</DropdownMenuShortcut>
-      </DropdownMenuItem>
-    </>
-  );
-}
 
 /**
  * Workspace menu entries: layouts for a task, your own named ones, and saving

@@ -10,7 +10,9 @@ import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, ty
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
-import { PRESETS, type PresetId } from '../ui/workspace/layout';
+import { locate, PRESETS, type PresetId } from '../ui/workspace/layout';
+import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
+import { showTool } from '../ui/workspace/panels';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -27,6 +29,14 @@ const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
 const NUMERIC_PARAMS = (Object.keys(DEFAULT_PARAMS) as (keyof PetroParams)[]).filter((k) => typeof DEFAULT_PARAMS[k] === 'number') as [string, ...string[]];
+
+/** A panel to open or move: a feature's tool window (opened through its feature) or a built-in panel. */
+function panelRef(app: App, panel: string): PanelRef {
+  const tool = toolWindows.value.find((w) => w.opts.id === panel);
+  if (tool) return { id: panel, tool, open: () => showTool(app, tool) };
+  if (panel in BUILTIN_PANELS) return { id: panel };
+  throw new Error(`No panel "${panel}".`);
+}
 
 /** Every panel that can be shown now: the built-in ones and the open features' tool windows. */
 function panelIds(): Record<string, string> {
@@ -265,7 +275,8 @@ export function appActions(): AnyAction<App>[] {
       choices: (app) => Object.entries(panelIds()).map(([panel, label]) => ({ label, input: { panel }, current: app.workspace.isShown(panel) })),
       run: (app, { panel }) => {
         const tool = toolWindows.value.find((w) => w.opts.id === panel);
-        if (tool) tool.show();
+        // a feature's window turns its feature on, as the rail does
+        if (tool) showTool(app, tool);
         else if (panel in BUILTIN_PANELS) withTransition(() => app.workspace.open(panel));
         else throw new Error(`No panel "${panel}" (is its feature on?).`);
       },
@@ -284,6 +295,45 @@ export function appActions(): AnyAction<App>[] {
         const tool = toolWindows.value.find((w) => w.opts.id === panel);
         if (tool) tool.close();
         else withTransition(() => app.workspace.close(panel));
+      },
+    }),
+    A({
+      id: 'panels.place',
+      title: 'Move panel',
+      description: 'Moves a panel to the left, right or bottom column, undocks it into a floating window, or resets it to where it opens by default (opening it first if it is closed).',
+      category: 'Panels',
+      input: z.object({ panel: z.string(), to: z.enum(['left', 'right', 'bottom', 'float', 'default']) }),
+      choices: (app) => {
+        const where = { left: 'move to left', right: 'move to right', bottom: 'move to bottom', float: 'undock', default: 'reset location' } as const;
+        return Object.entries(panelIds())
+          .filter(([id]) => app.workspace.isOpen(id))
+          .flatMap(([panel, label]) => {
+            const at = locate(app.workspace.value, panel);
+            return (Object.keys(where) as (keyof typeof where)[])
+              .filter((to) => (to === 'float' ? at?.kind !== 'float' : to === 'default' ? !atDefault(app.workspace, panel) : !(at?.kind === 'dock' && at.zone === to)))
+              .map((to) => ({ label: `${label}: ${where[to]}`, input: { panel, to } }));
+          });
+      },
+      run: (app, { panel, to }) => withTransition(() => place(app.workspace, panelRef(app, panel), to as Placement)),
+    }),
+    A({
+      id: 'panels.maximise',
+      title: 'Maximise panel',
+      description: 'Fills the space beside the rail and above the timeline with the group of tabs a panel is in, or restores it.',
+      category: 'Panels',
+      shortcut: 'Ctrl Space',
+      input: z.object({ panel: z.string() }),
+      choices: (app) =>
+        Object.entries(panelIds())
+          .filter(([id]) => app.workspace.isOpen(id))
+          .map(([panel, label]) => ({ label, input: { panel }, current: maximised.value !== null && maximised.value === groupOf(app.workspace, panel) })),
+      run: (app, { panel }) => {
+        const g = groupOf(app.workspace, panel);
+        if (!g) throw new Error(`"${panel}" is not open.`);
+        withTransition(() => {
+          if (app.workspace.hidden.value) app.workspace.hidden.set(false);
+          toggleMaximised(g);
+        });
       },
     }),
     A({
