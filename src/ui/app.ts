@@ -12,7 +12,8 @@ import type { PropertyMode } from '../scene/wellbore';
 import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
 import { onAnyChange, Rev, SCENE, Signal } from './signal';
-import { Workspace } from './workspace/layout';
+import { DOCK_PANELS, Workspace, type WorkspaceContext } from './workspace/layout';
+import { openWindows } from './toolWindow';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
 import { noteSyncUpdate, transitionBusyFor, withTransition } from './transition';
@@ -749,6 +750,56 @@ export class App {
     });
   }
 
+  /**
+   * Can a workspace show this panel now? The app's own panels always; a tool
+   * window only while it is open, since its feature decides that: switching
+   * workspace moves the open ones to that workspace's places for them and
+   * never opens or closes one.
+   */
+  readonly hasPanel = (id: string) => DOCK_PANELS.has(id) || openWindows.value.some((w) => w.opts.id === id);
+
+  /**
+   * Switch workspace (its tab, Ctrl PgUp / PgDn, the palette). Its layout
+   * comes back as it was left, animated, and its task context (the colouring,
+   * the navigation mode) is set through the same calls the top bar makes.
+   * Returns false for an unknown workspace.
+   */
+  switchWorkspace(id: string) {
+    const ws = this.workspace;
+    if (!ws.has(id)) return false;
+    if (id === this.targetWorkspace) return true;
+    const ctx = ws.info(id)?.context;
+    // before the transition: a toast (Explore's hint) would otherwise cut its animation short
+    if (ctx && this.ready.value) this.applyContext(ctx);
+    this.pendingWorkspace = id;
+    withTransition(() => {
+      ws.switchTo(id, this.hasPanel);
+      if (this.pendingWorkspace === id) this.pendingWorkspace = null;
+    });
+    return true;
+  }
+
+  /** a switch waiting for its transition to start */
+  private pendingWorkspace: string | null = null;
+
+  /** The workspace being switched to, or the active one: Ctrl PgDn pressed twice quickly steps twice. */
+  get targetWorkspace() {
+    return this.pendingWorkspace ?? this.workspace.current.value;
+  }
+
+  private applyContext(ctx: WorkspaceContext) {
+    const rig = this.engine.rig;
+    // an optional mode (ROP) is only set while a feature offers it
+    if (ctx.colour && ctx.colour !== this.engine.mode && (ctx.colour !== 'rop' || this.optionalModes.value.has('rop'))) this.setProperty(ctx.colour);
+    if (ctx.nav && ctx.nav !== rig.mode) this.setNav(ctx.nav);
+    if (ctx.nav === 'guided' && ctx.guidedView && ctx.guidedView !== rig.guidedView) this.setGuidedView(ctx.guidedView);
+  }
+
+  /** Reset a workspace's layout to where it started (the active one animates). */
+  resetWorkspace(id = this.workspace.current.value) {
+    withTransition(() => this.workspace.reset(id, this.hasPanel));
+  }
+
   /** Show a panel (Scene, Interpretation, Features), opening it where it was; a second call on the showing panel closes it. */
   showSidebar(tab: SidebarTab, toggle = false) {
     if (toggle && this.workspace.isShown(tab)) {
@@ -895,6 +946,19 @@ export class App {
   }
 
   private bindKeys() {
+    // Ctrl PgUp / PgDn steps through the workspace tabs. Caught on the way down, since a focused
+    // button or tab list would otherwise swallow it; text fields, menus and dialogs keep it.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key !== 'PageUp' && e.key !== 'PageDown')) return;
+        if ((e.target as HTMLElement).closest?.('input, select, textarea, [role="dialog"], [role="menu"], [role="listbox"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void this.actions.run(e.key === 'PageUp' ? 'workspace.previous' : 'workspace.next');
+      },
+      true,
+    );
     window.addEventListener('keydown', (e) => {
       const t = e.target as HTMLElement;
       // keys belong to form controls, and to anything inside a dialog or popover

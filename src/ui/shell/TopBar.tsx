@@ -22,7 +22,6 @@ import {
   CircleHelpIcon,
   CompassIcon,
   FlaskConicalIcon,
-  LayoutDashboardIcon,
   MaximizeIcon,
   PaintBucketIcon,
   PaletteIcon,
@@ -40,7 +39,7 @@ import type { PropertyMode } from '../../scene/wellbore';
 import type { App, ToolEntry } from '../app';
 import { IconButton, Tip } from '../icon-button';
 import { Logo } from '../logo';
-import { useWindowMenu, useWorkspaceMenu } from '../workspace/menus';
+import { useNameDialog, useWindowMenu, WorkspaceSubmenu, WorkspaceTabs } from '../workspace/menus';
 import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
@@ -133,6 +132,8 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
       <WellSelect app={app} />
       <Divider />
       <Overflow role="group" aria-label="View and commands" className="min-w-0 flex-1 flex-nowrap justify-end gap-1">
+        <WorkspaceItem app={app} />
+        <GroupDivider />
         <NavItem app={app} />
         <GroupDivider />
         <ColourItem app={app} />
@@ -170,7 +171,6 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
           </Button>
         </OverflowItem>
         <WindowMenu app={app} panels={panels} />
-        <WorkspaceMenu app={app} panels={panels} />
         <LeftToggle app={app} />
         <LogsToggle app={app} />
       </Overflow>
@@ -335,12 +335,21 @@ function WindowMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }
   return <MenuItem id="window" priority={5} label="Window" icon={<AppWindowIcon />} items={items} className="min-w-56" />;
 }
 
-function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
-  const menu = useWorkspaceMenu(app, panels);
+/**
+ * The workspace tabs, first in the row so they sit by the well: tabs while
+ * there is room, a select when the window narrows, then a submenu of the
+ * More menu. The name dialog lives here, outside both, so it outlives the
+ * menu that opened it.
+ */
+function WorkspaceItem({ app }: { app: App }) {
+  const names = useNameDialog(app);
+  const roomy = useMinWidth(1180);
   return (
     <>
-      <MenuItem id="workspace" priority={5} label="Workspace" icon={<LayoutDashboardIcon />} items={menu.items} className="min-w-60" />
-      {menu.dialogs}
+      <OverflowItem id="workspace" priority={9} labelBehavior="keep" tooltip={false} overflow={<WorkspaceSubmenu app={app} ask={names.ask} />}>
+        <WorkspaceTabs app={app} ask={names.ask} compact={!roomy} />
+      </OverflowItem>
+      {names.dialog}
     </>
   );
 }
@@ -417,7 +426,7 @@ function ChoiceMenu({
   );
 }
 
-/** A labelled menu button (Window, Workspace); in the More menu it becomes a submenu. */
+/** A labelled menu button (Window); in the More menu it becomes a submenu. */
 function MenuItem({ id, priority, label, icon, items, className }: { id: string; priority: number; label: string; icon: ReactNode; items: ReactNode; className?: string }) {
   return (
     <OverflowItem

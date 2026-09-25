@@ -1,3 +1,5 @@
+import type { GuidedView, NavMode } from '../../scene/cameraRig';
+import type { PropertyMode } from '../../scene/wellbore';
 import { Signal } from '../signal';
 
 /**
@@ -9,6 +11,13 @@ import { Signal } from '../signal';
  * The model is plain data (persisted per browser); the Workspace class holds
  * it in a signal and applies the edits the frame's drag and drop and menus
  * make.
+ *
+ * Workspaces work as in Blender: each one (the built-in Walkthrough,
+ * Petrophysics and Geosteering, and the user's own) keeps its own live
+ * layout. Edits save into the active workspace as they happen, switching
+ * away and back finds the layout as it was left, and Reset puts back the
+ * layout the workspace started from (its preset, or for a user workspace
+ * the layout it was saved or duplicated with).
  */
 
 export type Zone = 'left' | 'right' | 'bottom';
@@ -67,7 +76,20 @@ const col = (size: number, ...groups: string[][]): Column => ({ size, collapsed:
 
 export type PresetId = 'walkthrough' | 'petrophysics' | 'geosteering';
 
-export const PRESETS: { id: PresetId; label: string; build: () => Layout }[] = [
+/**
+ * What a workspace sets up besides the panels when you switch to it, so a
+ * tab means a task and not only an arrangement: the colouring and the
+ * navigation mode (with its guided camera). Unset parts are left as they are.
+ */
+export interface WorkspaceContext {
+  colour?: PropertyMode;
+  nav?: NavMode;
+  /** the guided camera, when `nav` is 'guided' */
+  guidedView?: GuidedView;
+}
+
+/** The built-in workspaces: their tab name, what they set up, and the layout Reset goes back to. */
+export const PRESETS: { id: PresetId; label: string; context?: WorkspaceContext; build: () => Layout }[] = [
   {
     id: 'walkthrough',
     label: 'Walkthrough',
@@ -76,14 +98,25 @@ export const PRESETS: { id: PresetId; label: string; build: () => Layout }[] = [
   {
     id: 'petrophysics',
     label: 'Petrophysics',
+    context: { colour: 'hydrocarbon' },
     build: () => ({ v: 1, left: col(320, ['interpretation'], ['scene', 'features']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
   },
   {
     id: 'geosteering',
     label: 'Geosteering',
+    context: { nav: 'guided', guidedView: 'chase' },
     build: () => ({ v: 1, left: col(280, ['scene', 'interpretation', 'features']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
   },
 ];
+
+const isPreset = (id: string): id is PresetId => PRESETS.some((p) => p.id === id);
+
+/**
+ * The app's own panels. Unlike feature tool windows, whose feature decides
+ * whether they are open, these belong to a workspace's layout, so switching
+ * workspace does not carry them along.
+ */
+export const DOCK_PANELS: ReadonlySet<string> = new Set(['scene', 'interpretation', 'features', 'logs', 'sources', 'live']);
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
@@ -184,44 +217,139 @@ function save(key: string, v: unknown) {
   }
 }
 
-const KEY = 'bw.workspace.v1';
+function drop(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* nothing to drop */
+  }
+}
+
+/** the single live layout of earlier versions (migrated into the Walkthrough workspace) */
+const LEGACY_LAYOUT = 'bw.workspace.v1';
 /** the single "My workspace" of earlier versions (moved into the named list) */
 const CUSTOM = 'bw.workspace.custom.v1';
+/** the user's workspaces: name, what Reset goes back to, and the task context */
 const SAVED = 'bw.workspaces.v2';
+/** the live layout of every workspace, and the active one */
+const LIVE = 'bw.workspace.v2';
 
-/** A layout the user saved under a name. */
+/** A workspace the user made (Save as, Duplicate, +). */
 export interface SavedWorkspace {
   id: string;
   name: string;
+  /** the layout it was saved or duplicated with: what Reset goes back to */
   layout: Layout;
+  /** copied from the workspace it was duplicated from */
+  context?: WorkspaceContext;
+}
+
+/** A tab: a built-in or a user workspace. */
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  builtin: boolean;
+  context?: WorkspaceContext;
+}
+
+interface LiveState {
+  v: 2;
+  active: string;
+  layouts: Record<string, Layout>;
 }
 
 function loadSaved(): SavedWorkspace[] {
   const list = load<SavedWorkspace[]>(SAVED);
-  if (Array.isArray(list)) return list.filter((w) => w && typeof w.name === 'string' && valid(w.layout));
+  if (Array.isArray(list)) return list.filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && !isPreset(w.id) && valid(w.layout));
   const old = load<Layout>(CUSTOM);
   return valid(old) ? [{ id: uid('w'), name: 'My workspace', layout: old }] : [];
 }
 
-function valid(L: Layout | null): L is Layout {
-  return !!L && L.v === 1 && ZONES.every((z) => Array.isArray(L[z]?.stacks)) && Array.isArray(L.floating);
+/**
+ * The live layouts and the active workspace. Earlier versions kept one live
+ * layout: it becomes the Walkthrough's, so nobody loses the arrangement they
+ * had. Anything unreadable falls back to the presets.
+ */
+function loadLive(exists: (id: string) => boolean): { active: string; layouts: Record<string, Layout> } {
+  const st = load<LiveState>(LIVE);
+  const layouts: Record<string, Layout> = {};
+  if (st && typeof st === 'object' && st.layouts && typeof st.layouts === 'object') {
+    for (const [id, L] of Object.entries(st.layouts)) if (exists(id) && valid(L)) layouts[id] = L;
+    return { active: typeof st.active === 'string' && exists(st.active) ? st.active : PRESETS[0].id, layouts };
+  }
+  const legacy = load<Layout>(LEGACY_LAYOUT);
+  if (valid(legacy)) layouts[PRESETS[0].id] = legacy;
+  return { active: PRESETS[0].id, layouts };
+}
+
+function valid(L: Layout | null | undefined): L is Layout {
+  return !!L && typeof L === 'object' && L.v === 1 && ZONES.every((z) => Array.isArray(L[z]?.stacks)) && Array.isArray(L.floating);
 }
 
 export class Workspace {
+  /** the live layout of the active workspace */
   readonly layout: Signal<Layout>;
   /** Tab hides every panel for a clean view */
   readonly hidden = new Signal(false);
-  /** the user's named workspaces */
+  /** the user's workspaces, in tab order after the built-in ones */
   readonly saved = new Signal<SavedWorkspace[]>(loadSaved());
-  /** the preset or saved workspace last applied (null once none matches) */
-  readonly current = new Signal<string | null>(null);
+  /** the active workspace */
+  readonly current: Signal<string>;
+  /** the live layouts of the workspaces (the active one's is kept in step with `layout`) */
+  private live: Record<string, Layout>;
   private memory: Memory = {};
 
   constructor() {
-    const saved = load<Layout>(KEY);
-    this.layout = new Signal(valid(saved) ? saved : PRESETS[0].build());
-    this.layout.subscribe(() => save(KEY, this.layout.value));
+    const st = loadLive((id) => this.has(id));
+    this.live = st.layouts;
+    this.current = new Signal(st.active);
+    this.layout = new Signal(st.layouts[st.active] ?? this.base(st.active));
+    // every edit saves into the active workspace
+    this.layout.subscribe(() => {
+      this.live[this.current.value] = this.layout.value;
+      this.persist();
+    });
+    this.current.subscribe(() => this.persist());
     this.saved.subscribe(() => save(SAVED, this.saved.value));
+    this.live[st.active] = this.layout.value;
+    this.persist();
+    // written back at once: a workspace migrated from an older key keeps its id from now on
+    save(SAVED, this.saved.value);
+    // the old single layout now lives in the Walkthrough workspace
+    drop(LEGACY_LAYOUT);
+  }
+
+  private persist() {
+    save(LIVE, { v: 2, active: this.current.value, layouts: this.live } satisfies LiveState);
+  }
+
+  /** Every workspace, as the tabs show them: the built-in ones, then the user's. */
+  list(): WorkspaceInfo[] {
+    return [
+      ...PRESETS.map((p) => ({ id: p.id, name: p.label, builtin: true, context: p.context })),
+      ...this.saved.value.map((w) => ({ id: w.id, name: w.name, builtin: false, context: w.context })),
+    ];
+  }
+
+  info(id: string): WorkspaceInfo | undefined {
+    return this.list().find((w) => w.id === id);
+  }
+
+  has(id: string) {
+    return isPreset(id) || this.saved.value.some((w) => w.id === id);
+  }
+
+  /** The layout a workspace starts from and Reset goes back to. */
+  private base(id: string): Layout {
+    const p = PRESETS.find((x) => x.id === id);
+    if (p) return p.build();
+    const w = this.saved.value.find((x) => x.id === id);
+    return w ? clone(w.layout) : PRESETS[0].build();
+  }
+
+  /** A workspace's live layout: as it was left, or its starting layout the first time. */
+  layoutOf(id: string): Layout {
+    return id === this.current.value ? this.value : (this.live[id] ?? this.base(id));
   }
 
   get value() {
@@ -360,7 +488,7 @@ export class Workspace {
     this.layout.set(M);
   }
 
-  /** Replace the layout, keeping open panels a preset does not mention and dropping ones it names that do not exist. */
+  /** Replace the layout, keeping open tool windows it does not mention and dropping panels it names that do not exist. */
   apply(next: Layout, available: (id: string) => boolean) {
     const M = clone(next);
     for (const z of ZONES) {
@@ -373,48 +501,106 @@ export class Workspace {
     M.floating = M.floating.filter((f) => (f.panels = f.panels.filter(available)).length);
     const inNext = new Set(openPanels(M));
     let out = M;
-    for (const id of openPanels(this.value))
-      if (!inNext.has(id) && available(id) && !['scene', 'interpretation', 'features', 'logs'].includes(id)) out = attach(out, id, { kind: 'zone', zone: defaultZone(id) });
+    // a feature's window is open because its feature is on, whichever workspace shows it
+    for (const id of openPanels(this.value)) if (!inNext.has(id) && available(id) && !DOCK_PANELS.has(id)) out = attach(out, id, { kind: 'zone', zone: defaultZone(id) });
     this.layout.set(out);
   }
 
-  preset(id: PresetId, available: (id: string) => boolean) {
-    this.apply(PRESETS.find((p) => p.id === id)!.build(), available);
+  /**
+   * Make a workspace the active one: the layout being left stays with its
+   * workspace, and the one entered comes back as it was left (its starting
+   * layout the first time). Returns false for an unknown id.
+   */
+  switchTo(id: string, available: (id: string) => boolean): boolean {
+    if (!this.has(id)) return false;
+    if (id === this.current.value) return true;
+    this.live[this.current.value] = this.value;
+    const next = this.layoutOf(id);
+    // the active id first, so the layout below saves into the workspace entered
     this.current.set(id);
+    this.apply(next, available);
+    return true;
   }
 
-  /** Save the current layout under a name (replacing a workspace of the same name); returns its id. */
+  /** The workspace `step` tabs away from `from` (the active one), wrapping round (Ctrl PgUp / PgDn). */
+  neighbour(step: number, from = this.current.value): string {
+    const ids = this.list().map((w) => w.id);
+    const i = ids.indexOf(from);
+    return ids[(((i + step) % ids.length) + ids.length) % ids.length];
+  }
+
+  /** Kept for scripts and tests: switch to a built-in workspace. */
+  preset(id: PresetId, available: (id: string) => boolean) {
+    this.switchTo(id, available);
+  }
+
+  /**
+   * Put a workspace's layout back to where it started: a built-in one to its
+   * preset, a user one to the layout it was saved or duplicated with.
+   */
+  reset(id: string, available: (id: string) => boolean) {
+    if (!this.has(id)) return;
+    if (id === this.current.value) this.apply(this.base(id), available);
+    else {
+      delete this.live[id];
+      this.persist();
+    }
+  }
+
+  /**
+   * A new user workspace holding a copy of another's live layout and task
+   * context (a unique name is made up when none is given), placed after the
+   * others. Switching to it is the caller's: the app's switch also applies
+   * the context. Returns its id.
+   */
+  duplicate(id: string, name?: string): string {
+    const from = this.info(id) ?? this.info(this.current.value)!;
+    const n = this.uniqueName(name?.trim() || `${from.name} copy`);
+    const entry: SavedWorkspace = { id: uid('w'), name: n, layout: clone(this.layoutOf(from.id)), ...(from.context ? { context: { ...from.context } } : {}) };
+    this.saved.set([...this.saved.value, entry]);
+    return entry.id;
+  }
+
+  /**
+   * Save the active layout under a name: a user workspace of the same name is
+   * replaced, otherwise a new one is made. It becomes the active one; returns its id.
+   */
   saveAs(name: string): string {
     const n = name.trim() || 'Workspace';
     const same = this.saved.value.find((w) => w.name.toLowerCase() === n.toLowerCase());
     const id = same?.id ?? uid('w');
-    const entry = { id, name: n, layout: clone(this.value) };
+    const context = this.info(this.current.value)?.context;
+    const entry: SavedWorkspace = { id, name: n, layout: clone(this.value), ...(context ? { context: { ...context } } : {}) };
     this.saved.set(same ? this.saved.value.map((w) => (w.id === id ? entry : w)) : [...this.saved.value, entry]);
+    // the same layout, so nothing to apply: it simply carries on as that workspace
+    this.live[id] = this.value;
     this.current.set(id);
     return id;
   }
 
-  /** Overwrite a saved workspace with the current layout. */
-  update(id: string) {
-    this.saved.set(this.saved.value.map((w) => (w.id === id ? { ...w, layout: clone(this.value) } : w)));
+  /** A name no workspace uses yet: "Petrophysics copy", then "Petrophysics copy 2"… */
+  uniqueName(name: string): string {
+    const taken = new Set(this.list().map((w) => w.name.toLowerCase()));
+    if (!taken.has(name.toLowerCase())) return name;
+    let i = 2;
+    while (taken.has(`${name} ${i}`.toLowerCase())) i++;
+    return `${name} ${i}`;
   }
 
+  /** Rename a user workspace (built-in ones keep their names). */
   rename(id: string, name: string) {
     const n = name.trim();
-    if (!n) return;
+    if (!n || isPreset(id)) return;
     this.saved.set(this.saved.value.map((w) => (w.id === id ? { ...w, name: n } : w)));
   }
 
-  remove(id: string) {
+  /** Delete a user workspace (built-in ones stay); deleting the active one goes back to Walkthrough. */
+  remove(id: string, available: (id: string) => boolean = () => true) {
+    if (isPreset(id) || !this.saved.value.some((w) => w.id === id)) return;
+    if (this.current.value === id) this.switchTo(PRESETS[0].id, available);
     this.saved.set(this.saved.value.filter((w) => w.id !== id));
-    if (this.current.value === id) this.current.set(null);
-  }
-
-  load(id: string, available: (id: string) => boolean) {
-    const w = this.saved.value.find((x) => x.id === id);
-    if (!w) return;
-    this.apply(w.layout, available);
-    this.current.set(id);
+    delete this.live[id];
+    this.persist();
   }
 
   /** Left / right column as a whole: expanded, or folded to its icon strip. */
