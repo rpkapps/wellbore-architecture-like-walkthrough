@@ -57,7 +57,8 @@ export type DropTarget =
 
 export type Place = { kind: 'dock'; zone: Zone; stack: Stack; index: number } | { kind: 'float'; win: FloatWin; index: number };
 
-export const SIZE_LIMITS: Record<Zone, [number, number]> = { left: [220, 640], right: [240, 760], bottom: [120, 560] };
+/** smallest sizes of the columns; the largest is whatever the window leaves (the frame caps a drag) */
+export const SIZE_LIMITS: Record<Zone, [number, number]> = { left: [220, 4000], right: [240, 4000], bottom: [120, 4000] };
 
 let seq = 0;
 const uid = (p: string) => `${p}${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -184,7 +185,23 @@ function save(key: string, v: unknown) {
 }
 
 const KEY = 'bw.workspace.v1';
+/** the single "My workspace" of earlier versions (moved into the named list) */
 const CUSTOM = 'bw.workspace.custom.v1';
+const SAVED = 'bw.workspaces.v2';
+
+/** A layout the user saved under a name. */
+export interface SavedWorkspace {
+  id: string;
+  name: string;
+  layout: Layout;
+}
+
+function loadSaved(): SavedWorkspace[] {
+  const list = load<SavedWorkspace[]>(SAVED);
+  if (Array.isArray(list)) return list.filter((w) => w && typeof w.name === 'string' && valid(w.layout));
+  const old = load<Layout>(CUSTOM);
+  return valid(old) ? [{ id: uid('w'), name: 'My workspace', layout: old }] : [];
+}
 
 function valid(L: Layout | null): L is Layout {
   return !!L && L.v === 1 && ZONES.every((z) => Array.isArray(L[z]?.stacks)) && Array.isArray(L.floating);
@@ -194,13 +211,17 @@ export class Workspace {
   readonly layout: Signal<Layout>;
   /** Tab hides every panel for a clean view */
   readonly hidden = new Signal(false);
-  readonly custom = new Signal<Layout | null>(load<Layout>(CUSTOM));
+  /** the user's named workspaces */
+  readonly saved = new Signal<SavedWorkspace[]>(loadSaved());
+  /** the preset or saved workspace last applied (null once none matches) */
+  readonly current = new Signal<string | null>(null);
   private memory: Memory = {};
 
   constructor() {
     const saved = load<Layout>(KEY);
     this.layout = new Signal(valid(saved) ? saved : PRESETS[0].build());
     this.layout.subscribe(() => save(KEY, this.layout.value));
+    this.saved.subscribe(() => save(SAVED, this.saved.value));
   }
 
   get value() {
@@ -355,11 +376,41 @@ export class Workspace {
 
   preset(id: PresetId, available: (id: string) => boolean) {
     this.apply(PRESETS.find((p) => p.id === id)!.build(), available);
+    this.current.set(id);
   }
 
-  saveCustom() {
-    this.custom.set(clone(this.value));
-    save(CUSTOM, this.value);
+  /** Save the current layout under a name (replacing a workspace of the same name); returns its id. */
+  saveAs(name: string): string {
+    const n = name.trim() || 'Workspace';
+    const same = this.saved.value.find((w) => w.name.toLowerCase() === n.toLowerCase());
+    const id = same?.id ?? uid('w');
+    const entry = { id, name: n, layout: clone(this.value) };
+    this.saved.set(same ? this.saved.value.map((w) => (w.id === id ? entry : w)) : [...this.saved.value, entry]);
+    this.current.set(id);
+    return id;
+  }
+
+  /** Overwrite a saved workspace with the current layout. */
+  update(id: string) {
+    this.saved.set(this.saved.value.map((w) => (w.id === id ? { ...w, layout: clone(this.value) } : w)));
+  }
+
+  rename(id: string, name: string) {
+    const n = name.trim();
+    if (!n) return;
+    this.saved.set(this.saved.value.map((w) => (w.id === id ? { ...w, name: n } : w)));
+  }
+
+  remove(id: string) {
+    this.saved.set(this.saved.value.filter((w) => w.id !== id));
+    if (this.current.value === id) this.current.set(null);
+  }
+
+  load(id: string, available: (id: string) => boolean) {
+    const w = this.saved.value.find((x) => x.id === id);
+    if (!w) return;
+    this.apply(w.layout, available);
+    this.current.set(id);
   }
 
   /** Left / right column as a whole: expanded, or folded to its icon strip. */

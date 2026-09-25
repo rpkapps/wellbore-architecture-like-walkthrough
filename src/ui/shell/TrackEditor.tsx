@@ -53,10 +53,17 @@ export function TrackEditor({ app }: { app: App }) {
     logs.commitLayout();
   };
   return (
-    <ScrollArea className="min-h-0 flex-1">
+    <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
       <div className="flex flex-col gap-3 pr-2">
         <div className="flex items-center gap-2">
-          <span className="flex-1 text-xs text-muted-foreground">{logs.tracks.filter((t) => !t.hidden).length} tracks shown</span>
+          {/* every track at once */}
+          <Switch
+            aria-label={logs.tracks.every((t) => !t.hidden) ? 'Hide every track' : 'Show every track'}
+            isSelected={logs.tracks.every((t) => !t.hidden)}
+            onChange={(on) => (logs.tracks.forEach((t) => (t.hidden = !on)), change())}
+            className="ml-6"
+          />
+          <span className="type-caption flex-1">{logs.tracks.filter((t) => !t.hidden).length} tracks shown</span>
           <Button
             variant="ghost"
             size="xs"
@@ -68,10 +75,30 @@ export function TrackEditor({ app }: { app: App }) {
             Reset to standard
           </Button>
         </div>
-        <SortableList label="Tracks" items={logs.tracks} itemLabel={(t) => t.title} deps={[rev, editing, w]} onReorder={(ids) => change(ids.map((id) => logs.tracks.find((t) => t.id === id)!))}>
+        <SortableList
+          label="Tracks"
+          items={logs.tracks}
+          itemLabel={(t) => t.title}
+          deps={[rev, editing, w]}
+          onReorder={(ids) => change(ids.map((id) => logs.tracks.find((t) => t.id === id)!))}
+          below={(t) =>
+            t.id === editTrack?.id && (
+              // the settings open right under the track they belong to
+              <section aria-label={`Scales and colours of ${t.title}`} className="mt-0.5 mb-1.5 ml-6 flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="type-section min-w-0 flex-1 truncate">Scales and colours</span>
+                  <IconButton label="Close the settings" size="icon-xs" onPress={() => setEditing(null)}>
+                    <XIcon />
+                  </IconButton>
+                </div>
+                <TrackFields app={app} t={t} onChange={() => change()} />
+              </section>
+            )
+          }
+        >
           {(t) => (
             <>
-              <Switch size="sm" aria-label={`Show ${t.title}`} isSelected={!t.hidden} onChange={(on) => ((t.hidden = !on), change())} />
+              <Switch aria-label={`Show ${t.title}`} isSelected={!t.hidden} onChange={(on) => ((t.hidden = !on), change())} />
               <span className="ml-1.5 min-w-0 flex-1 truncate text-sm" title={t.curves.map((c) => c.label).join(', ')}>
                 {t.title}
               </span>
@@ -88,17 +115,6 @@ export function TrackEditor({ app }: { app: App }) {
             </>
           )}
         </SortableList>
-        {editTrack && (
-          <section aria-label={`Scales and colours of ${editTrack.title}`} className="flex flex-col gap-2 rounded-md border border-border-subtle p-2">
-            <div className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-xs font-medium">{editTrack.title}</span>
-              <IconButton label="Close" size="icon-xs" onPress={() => setEditing(null)}>
-                <XIcon />
-              </IconButton>
-            </div>
-            <TrackFields app={app} t={editTrack} onChange={() => change()} />
-          </section>
-        )}
         <Separator emphasis="subtle" />
         <div className="flex items-center gap-2">
           <CompactSelect label="Curve for a new track" value={pick} onChange={setPick} options={curveGroups(opts)} placeholder="Choose a curve …" className="min-w-0 flex-1" />

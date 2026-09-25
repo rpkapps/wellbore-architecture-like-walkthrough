@@ -1,17 +1,19 @@
 import { Button } from '@tecton/react/components/button';
 import { Separator } from '@tecton/react/components/separator';
 import { Panel, PanelActions, PanelContent, PanelDescription, PanelFooter, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
-import { XIcon } from 'lucide-react';
+import { CheckIcon, XIcon } from 'lucide-react';
 import { Fragment } from 'react';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
-import { useSignal } from '../signal';
+import { useRev, useSignal } from '../signal';
 import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 /** Details of whatever was last clicked in the scene. */
 export function InspectorCard({ app }: { app: App }) {
   const v = useSignal(app.inspector);
+  // toggle actions (isolate) show the scene's current state
+  useRev(app.sceneRev);
   const [collapsed, setCollapsed] = useCollapsed('inspector');
   if (!v) return null;
   const close = (
@@ -27,7 +29,7 @@ export function InspectorCard({ app }: { app: App }) {
       </OverlayChip>
     );
   return (
-    <Panel variant="elevated" size="sm" aria-label={v.title} className={`min-h-0 w-72 max-w-full shrink ${SURFACE}`}>
+    <Panel variant="elevated" size="sm" aria-label={v.title} className={`min-h-0 w-80 max-w-full shrink ${SURFACE}`}>
       <PanelHeader className="flex-wrap">
         <span aria-hidden className="mt-0.5 size-3 shrink-0 rounded-[3px]" style={{ background: v.color }} />
         <PanelTitle className="type-title">{v.title}</PanelTitle>
@@ -43,7 +45,8 @@ export function InspectorCard({ app }: { app: App }) {
         )}
       </PanelHeader>
       <PanelContent className="flex flex-col gap-3">
-        <dl className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1">
+        {/* names and values wrap rather than hide behind an ellipsis */}
+        <dl className="grid grid-cols-[minmax(5.5rem,1fr)_minmax(0,auto)_auto] items-baseline gap-x-3 gap-y-1">
           {v.rows.map((r, i) => {
             if (r === 'sep') return <Separator key={i} emphasis="subtle" className="col-span-3 my-1" />;
             if (!Array.isArray(r))
@@ -55,9 +58,9 @@ export function InspectorCard({ app }: { app: App }) {
             const [k, val, prov] = r;
             return (
               <Fragment key={i}>
-                <dt className="type-label truncate">{k}</dt>
-                <dd className="type-value text-right">{val}</dd>
-                <dd className="flex justify-end">{prov ? <ProvBadge prov={prov} short /> : null}</dd>
+                <dt className="type-label leading-snug">{k}</dt>
+                <dd className="type-value text-right leading-snug [overflow-wrap:anywhere]">{val}</dd>
+                <dd className="flex justify-end self-center">{prov ? <ProvBadge prov={prov} short /> : null}</dd>
               </Fragment>
             );
           })}
@@ -66,11 +69,15 @@ export function InspectorCard({ app }: { app: App }) {
       </PanelContent>
       {v.actions && v.actions.length > 0 && (
         <PanelFooter>
-          {v.actions.map((a) => (
-            <Button key={a.label} size="sm" variant={a.primary ? 'default' : 'outline'} onPress={a.onPress}>
-              {a.label}
-            </Button>
-          ))}
+          {v.actions.map((a) => {
+            const on = a.pressed?.();
+            return (
+              <Button key={a.label} size="sm" variant={a.primary ? 'default' : on ? 'secondary' : 'ghost'} aria-pressed={a.pressed ? on : undefined} onPress={a.onPress}>
+                {on && <CheckIcon data-icon="inline-start" />}
+                {a.label}
+              </Button>
+            );
+          })}
         </PanelFooter>
       )}
     </Panel>

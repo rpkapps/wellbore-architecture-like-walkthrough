@@ -1,11 +1,11 @@
 import { Button } from '@tecton/react/components/button';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@tecton/react/components/dialog';
 import { ToggleGroup, ToggleGroupItem } from '@tecton/react/components/toggle-group';
-import { CheckIcon } from 'lucide-react';
+import { CheckIcon, MonitorIcon, MoonIcon, SunIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { App } from '../app';
 import { SelectField, SwitchField } from '../controls';
-import { ACCENTS, DEFAULT_PREFS, prefs, setAllOverlays, setPrefs, type Density, type LabelDensity } from '../prefs';
+import { ACCENTS, DEFAULT_PREFS, prefs, setAllOverlays, setPrefs, type Density, type LabelDensity, type Theme } from '../prefs';
 import { ScrubField } from '../scrub';
 import { useSignal } from '../signal';
 
@@ -22,13 +22,37 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 export function PersonaliseDialog({ app, isOpen, onOpenChange }: { app: App; isOpen: boolean; onOpenChange: (open: boolean) => void }) {
   const p = useSignal(prefs);
   return (
-    <Dialog isOpen={isOpen} onOpenChange={onOpenChange} className="sm:max-w-md">
+    <Dialog isOpen={isOpen} onOpenChange={onOpenChange} className="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>Personalise</DialogTitle>
         <DialogDescription>Saved in this browser. Changes apply at once.</DialogDescription>
       </DialogHeader>
-      <div className="flex max-h-[65vh] flex-col gap-5 overflow-y-auto pr-1">
+      <div className="flex max-h-[65vh] flex-col gap-5 overflow-x-hidden overflow-y-auto pr-1">
         <Group title="Appearance">
+          <div className="flex h-7 items-center justify-between gap-2">
+            <span className="type-label">Theme</span>
+            <ToggleGroup
+              aria-label="Theme"
+              size="sm"
+              selectionMode="single"
+              disallowEmptySelection
+              selectedKeys={[p.theme]}
+              onSelectionChange={(k) => k.size && setPrefs({ theme: String([...k][0]) as Theme })}
+            >
+              <ToggleGroupItem id="dark">
+                <MoonIcon data-icon="inline-start" />
+                Dark
+              </ToggleGroupItem>
+              <ToggleGroupItem id="light">
+                <SunIcon data-icon="inline-start" />
+                Light
+              </ToggleGroupItem>
+              <ToggleGroupItem id="system">
+                <MonitorIcon data-icon="inline-start" />
+                System
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
           <div className="flex h-7 items-center justify-between gap-2">
             <span className="type-label">Density</span>
             <ToggleGroup

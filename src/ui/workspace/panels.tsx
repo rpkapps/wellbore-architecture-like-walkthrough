@@ -82,13 +82,17 @@ function toolPanel(w: ToolWindow): PanelDef {
 /** Every panel the workspace can show right now: the built-in ones and the feature tool windows. */
 export function usePanels(app: App): Map<string, PanelDef> {
   const tools = useSignal(toolWindows);
+  // each definition keeps its identity, so opening a tool does not re-render the other panels
+  const builtins = useMemo(() => builtinPanels(app), [app]);
   return useMemo(() => {
     const m = new Map<string, PanelDef>();
-    for (const p of builtinPanels(app)) m.set(p.id, p);
-    for (const w of tools) m.set(w.opts.id, toolPanel(w));
+    for (const p of builtins) m.set(p.id, p);
+    for (const w of tools) m.set(w.opts.id, toolDefs.get(w) ?? toolDefs.set(w, toolPanel(w)).get(w)!);
     return m;
-  }, [app, tools]);
+  }, [builtins, tools]);
 }
+
+const toolDefs = new WeakMap<ToolWindow, PanelDef>();
 
 /** A tool window's content: its provenance and own controls on a row, then its body (canvases redraw on resize). */
 function ToolBody({ win }: { win: ToolWindow }) {

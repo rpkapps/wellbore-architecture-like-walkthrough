@@ -1,12 +1,13 @@
 import { Panel, PanelActions, PanelContent, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
 import type { ReactNode } from 'react';
-import { colormap, RES_RANGE, toCss } from '../../data/colormap';
+import { colormap, toCss } from '../../data/colormap';
 import { ropByZone, ROP_RANGE } from '../../data/drilling';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
 import type { App } from '../app';
 import { Note } from '../controls';
 import { ProvBadge, type Provenance } from '../prov';
 import { useRev } from '../signal';
+import { ColormapPicker } from '../viz/ColormapPicker';
 import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -18,11 +19,10 @@ export function Legend({ app }: { app: App }) {
   const w = app.engine.activeWell;
   if (m === 'resistivity') {
     const stops = Array.from({ length: 24 }, (_, i) => `${toCss(colormap(app.colormapName, i / 23))} ${((i / 23) * 100).toFixed(1)}%`).join(',');
-    const lmin = Math.log10(RES_RANGE.min);
-    const lmax = Math.log10(RES_RANGE.max);
     return (
       <Frame title="Resistivity · Ω·m" prov="measured" compact={<MiniRamp stops={stops} lo="0.2" hi="1000" />}>
-        <Ramp stops={stops} ticks={[0.2, 1, 10, 100, 1000].map((v) => [v, (Math.log10(v) - lmin) / (lmax - lmin)])} />
+        {/* the ramp itself opens the colour maps */}
+        <ColormapPicker app={app} />
         <Note>Log scale · wall = shallow reading, halo → deep (RT) · radial ×{app.engine.radialScale}</Note>
       </Frame>
     );

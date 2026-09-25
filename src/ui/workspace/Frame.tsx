@@ -1,8 +1,8 @@
 import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { ChevronsLeftRightIcon, EllipsisIcon, PanelLeftCloseIcon, PanelRightCloseIcon, PanelBottomCloseIcon, XIcon } from 'lucide-react';
-import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Activity, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, ViewTransition, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { IconButton } from '../icon-button';
-import { withTransition } from '../transition';
+import { animate, useAnimatedSignal, withTransition } from '../transition';
 import { Signal, useSignal } from '../signal';
 import { SURFACE } from '../shell/overlay';
 import { SIZE_LIMITS, type Column, type DropTarget, type FloatWin, type Layout, type Stack, type Workspace, type Zone } from './layout';
@@ -13,6 +13,8 @@ const G = 6;
 /** a folded column: its icon strip */
 const STRIP = 34;
 const MIN_STACK = 72;
+/** how much of the 3D view a column drag always leaves visible (px) */
+const MIN_VIEW = 160;
 
 export interface Free {
   left: number;
@@ -79,12 +81,13 @@ export function WorkspaceFrame({
   timelineHeight: number;
   onFree: (f: Free) => void;
 }) {
-  const L = useSignal(ws.layout);
-  const hidden = useSignal(ws.hidden) || !!chromeless;
+  // layout changes made in `withTransition` render as a Transition, so the
+  // <ViewTransition> around each group animates them
+  const L = useAnimatedSignal(ws.layout);
+  const hidden = useAnimatedSignal(ws.hidden) || !!chromeless;
   const stage = useRef<HTMLDivElement>(null);
+  const freeEl = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ W: 0, H: 0 });
-  // column sizes follow a drag at once, the layout is written when it ends
-  const [live, setLive] = useState<Partial<Record<Zone, number>>>({});
   const registry = useRef(new Map<string, Registered>());
   const drag = useMemo(() => new Signal<DragState | null>(null), []);
 
@@ -97,7 +100,7 @@ export function WorkspaceFrame({
     return () => ro.disconnect();
   }, []);
 
-  const geo = useMemo(() => geometry(L, size.W, size.H, hidden ? 0 : timelineHeight, hidden, live), [L, size, hidden, timelineHeight, live]);
+  const geo = useMemo(() => geometry(L, size.W, size.H, hidden ? 0 : timelineHeight, hidden, {}), [L, size, hidden, timelineHeight]);
   useEffect(() => onFree(geo.free), [geo.free.left, geo.free.right, geo.free.bottom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tab (with nothing focused, as in Illustrator) hides and shows every panel
@@ -117,12 +120,29 @@ export function WorkspaceFrame({
   const geoRef = useRef(geo);
   geoRef.current = geo;
 
+  // a column edge being dragged: the columns, their edges and the free area
+  // follow the pointer by writing styles directly (no React render per move);
+  // the layout, and the 3D view's centring, are updated when the drag ends
+  const live = (zone: Zone, v: number) => {
+    const st = stage.current;
+    if (!st) return;
+    const g = geometry(L, size.W, size.H, hidden ? 0 : timelineHeight, hidden, { [zone]: v });
+    for (const z of ['left', 'right', 'bottom'] as Zone[]) {
+      const r = g.cols[z];
+      const box = st.querySelector<HTMLElement>(`[data-col="${z}"]`);
+      const edge = st.querySelector<HTMLElement>(`[data-edge="${z}"]`);
+      if (r && box) Object.assign(box.style, px(r));
+      if (r && edge) Object.assign(edge.style, px(edgeRect(z, r)));
+    }
+    if (freeEl.current) Object.assign(freeEl.current.style, { left: `${g.free.left}px`, right: `${g.free.right}px`, bottom: `${g.free.bottom}px` });
+  };
+
   const style = { '--free-l': `${geo.free.left}px`, '--free-r': `${geo.free.right}px`, '--free-b': `${geo.free.bottom}px` } as CSSProperties;
   return (
     <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden" style={style}>
       <div className="absolute inset-0">{viewport}</div>
       {/* the area the panels leave free: overlays are laid out in it */}
-      <div className="pointer-events-none absolute @container transition-[left,right,bottom] duration-150" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
+      <div ref={freeEl} className="pointer-events-none absolute @container" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
         {overlay}
       </div>
       {!hidden && (
@@ -130,19 +150,39 @@ export function WorkspaceFrame({
           {(['left', 'right', 'bottom'] as Zone[]).map((z) => {
             const r = geo.cols[z];
             if (!r) return null;
-            return <DockColumn key={z} ws={ws} zone={z} col={L[z]} rect={r} panels={panels} dnd={dnd} registry={registry.current} setLive={(v) => setLive((s) => ({ ...s, [z]: v }))} />;
+            return <DockColumn key={z} ws={ws} zone={z} col={L[z]} rect={r} max={maxSize(geo, z)} panels={panels} dnd={dnd} registry={registry.current} onLive={(v) => live(z, v)} />;
           })}
           {L.floating.map((f) => (
             <FloatWindow key={f.id} ws={ws} win={f} panels={panels} dnd={dnd} registry={registry.current} bounds={size} others={L.floating.filter((o) => o !== f)} />
           ))}
         </>
       )}
-      <div className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight, display: hidden ? 'none' : undefined }}>
-        {timeline}
-      </div>
+      <Activity mode={hidden ? 'hidden' : 'visible'}>
+        <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
+          <div className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
+            {timeline}
+          </div>
+        </ViewTransition>
+      </Activity>
       <DragLayer drag={drag} />
     </div>
   );
+}
+
+const px = (r: Rect) => ({ left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+
+/** the strip along a column's inner edge that resizes it */
+function edgeRect(zone: Zone, r: Rect): Rect {
+  return zone === 'left' ? { x: r.x + r.w, y: r.y, w: G, h: r.h } : zone === 'right' ? { x: r.x - G, y: r.y, w: G, h: r.h } : { x: r.x, y: r.y - G, w: r.w, h: G };
+}
+
+/** A column can grow until only MIN_VIEW of the 3D view is left beside (or above) it. */
+function maxSize(g: Geometry, z: Zone): number {
+  const { left, right } = g.cols;
+  if (z === 'left') return g.W - 2 * G - (right ? right.w + G : 0) - MIN_VIEW;
+  if (z === 'right') return g.W - 2 * G - (left ? left.w + G : 0) - MIN_VIEW;
+  const colH = left?.h ?? right?.h ?? g.H - 2 * G;
+  return colH - MIN_VIEW / 2;
 }
 
 function geometry(L: Layout, W: number, H: number, tl: number, hidden: boolean, live: Partial<Record<Zone, number>>): Geometry {
@@ -185,53 +225,69 @@ function DockColumn({
   zone,
   col,
   rect,
+  max,
   panels,
   dnd,
   registry,
-  setLive,
+  onLive,
 }: {
   ws: Workspace;
   zone: Zone;
   col: Column;
   rect: Rect;
+  max: number;
   panels: Map<string, PanelDef>;
   dnd: Dnd;
   registry: Map<string, Registered>;
-  setLive: (v: number | undefined) => void;
+  onLive: (v: number) => void;
 }) {
   const [flyout, setFlyout] = useState<{ stack: string; panel: string } | null>(null);
   const horizontal = zone === 'bottom';
   const box = useRef<HTMLDivElement>(null);
-  if (col.collapsed) return <IconStrip ws={ws} zone={zone} col={col} rect={rect} panels={panels} flyout={flyout} setFlyout={setFlyout} dnd={dnd} registry={registry} />;
+  if (col.collapsed)
+    return (
+      <ViewTransition key="strip" default="none" enter="ws-enter" exit="ws-exit">
+        <IconStrip ws={ws} zone={zone} col={col} rect={rect} panels={panels} flyout={flyout} setFlyout={setFlyout} dnd={dnd} registry={registry} />
+      </ViewTransition>
+    );
 
-  // the splits between groups: weights follow the drag
+  // the splits between groups: the two groups follow the drag directly, the
+  // weights are written when it ends
   const splitDown = (i: number) => (e: ReactPointerEvent<HTMLDivElement>) => {
     const kids = box.current?.querySelectorAll<HTMLElement>(':scope > [data-stack]');
     if (!kids || !kids[i] || !kids[i + 1]) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    const a = horizontal ? kids[i].offsetWidth : kids[i].offsetHeight;
-    const b = horizontal ? kids[i + 1].offsetWidth : kids[i + 1].offsetHeight;
+    const ka = kids[i];
+    const kb = kids[i + 1];
+    const a = horizontal ? ka.offsetWidth : ka.offsetHeight;
+    const b = horizontal ? kb.offsetWidth : kb.offsetHeight;
     const wSum = col.stacks[i].weight + col.stacks[i + 1].weight;
     const start = horizontal ? e.clientX : e.clientY;
+    let weights: [number, number] | null = null;
     const move = (ev: PointerEvent) => {
       const d = (horizontal ? ev.clientX : ev.clientY) - start;
       const na = Math.max(MIN_STACK, Math.min(a + b - MIN_STACK, a + d));
-      ws.resizeSplit(zone, i, [(na / (a + b)) * wSum, ((a + b - na) / (a + b)) * wSum]);
+      weights = [(na / (a + b)) * wSum, ((a + b - na) / (a + b)) * wSum];
+      ka.style.flex = `${weights[0]} 1 0`;
+      kb.style.flex = `${weights[1]} 1 0`;
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      if (weights) ws.resizeSplit(zone, i, weights);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   };
 
   return (
-    <>
-      <div ref={box} className={`absolute flex ${horizontal ? 'flex-row' : 'flex-col'}`} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, gap: G }}>
+    <ViewTransition key="column" default="none" enter="ws-enter" exit="ws-exit">
+      <div ref={box} data-col={zone} className={`absolute flex ${horizontal ? 'flex-row' : 'flex-col'}`} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, gap: G }}>
         {col.stacks.map((s, i) => (
           <div key={s.id} data-stack className="relative flex min-h-0 min-w-0" style={{ flex: `${s.weight} 1 0` }}>
-            <StackView ws={ws} group={s} zone={zone} panels={panels} dnd={dnd} registry={registry} />
+            <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
+              <StackView ws={ws} group={s} zone={zone} panels={panels} dnd={dnd} registry={registry} />
+            </ViewTransition>
             {i < col.stacks.length - 1 && (
               <div
                 aria-hidden
@@ -246,24 +302,20 @@ function DockColumn({
           </div>
         ))}
       </div>
-      <EdgeHandle zone={zone} rect={rect} size={col.size} onLive={setLive} onCommit={(v) => ws.setSize(zone, v)} />
-    </>
+      <EdgeHandle zone={zone} rect={rect} size={col.size} max={max} onLive={onLive} onCommit={(v) => ws.setSize(zone, v)} />
+    </ViewTransition>
   );
 }
 
 /** The column's inner edge: drag to resize the column (the 3D view keeps its size). */
-function EdgeHandle({ zone, rect, size, onLive, onCommit }: { zone: Zone; rect: Rect; size: number; onLive: (v: number | undefined) => void; onCommit: (v: number) => void }) {
-  const style: CSSProperties =
-    zone === 'left'
-      ? { left: rect.x + rect.w, top: rect.y, width: G, height: rect.h, cursor: 'col-resize' }
-      : zone === 'right'
-        ? { left: rect.x - G, top: rect.y, width: G, height: rect.h, cursor: 'col-resize' }
-        : { left: rect.x, top: rect.y - G, width: rect.w, height: G, cursor: 'row-resize' };
+function EdgeHandle({ zone, rect, size, max, onLive, onCommit }: { zone: Zone; rect: Rect; size: number; max: number; onLive: (v: number) => void; onCommit: (v: number) => void }) {
+  const style: CSSProperties = { ...px(edgeRect(zone, rect)), cursor: zone === 'bottom' ? 'row-resize' : 'col-resize' };
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     const x0 = e.clientX;
     const y0 = e.clientY;
-    const [lo, hi] = SIZE_LIMITS[zone];
+    const lo = SIZE_LIMITS[zone][0];
+    const hi = Math.max(lo, max);
     let v = size;
     const move = (ev: PointerEvent) => {
       const d = zone === 'left' ? ev.clientX - x0 : zone === 'right' ? x0 - ev.clientX : y0 - ev.clientY;
@@ -273,14 +325,13 @@ function EdgeHandle({ zone, rect, size, onLive, onCommit }: { zone: Zone; rect: 
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      onCommit(v);
-      onLive(undefined);
+      if (v !== size) onCommit(v);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   };
   return (
-    <div aria-hidden onPointerDown={down} className="group/edge absolute z-10" style={style}>
+    <div aria-hidden data-edge={zone} onPointerDown={down} className="group/edge absolute z-10" style={style}>
       <div
         className={`absolute rounded-full bg-ui-accent opacity-0 transition-opacity group-hover/edge:opacity-70 ${zone === 'bottom' ? 'inset-x-8 top-[2px] h-0.5' : 'inset-y-8 left-[2px] w-0.5'}`}
       />
@@ -321,9 +372,9 @@ function IconStrip({
       if (flyRef.current?.contains(t) || stripRef.current?.contains(t)) return;
       // menus and popovers opened from the flyout live in a portal
       if ((t as HTMLElement).closest?.('[data-slot$="-content"], [role="menu"], [role="dialog"], [role="listbox"]')) return;
-      setFlyout(null);
+      animate(() => setFlyout(null));
     };
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setFlyout(null);
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && animate(() => setFlyout(null));
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('keydown', key);
     return () => {
@@ -368,7 +419,7 @@ function IconStrip({
                   size="icon-sm"
                   variant={on ? 'secondary' : 'ghost'}
                   placement={zone === 'left' ? 'right' : zone === 'right' ? 'left' : 'top'}
-                  onPress={() => setFlyout(on ? null : { stack: s.id, panel: p })}
+                  onPress={() => animate(() => setFlyout(on ? null : { stack: s.id, panel: p }))}
                   aria-pressed={on}
                   data-index={i}
                 >
@@ -380,9 +431,11 @@ function IconStrip({
         ))}
       </div>
       {fly && flyout && (
-        <div ref={flyRef} className="absolute z-20 flex" style={{ left: flyRect.x, top: flyRect.y, width: flyRect.w, height: flyRect.h }}>
-          <StackView ws={ws} group={fly} zone={zone} panels={panels} dnd={dnd} registry={registry} active={flyout.panel} onActivate={(p) => setFlyout({ stack: fly.id, panel: p })} />
-        </div>
+        <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
+          <div ref={flyRef} className="absolute z-20 flex" style={{ left: flyRect.x, top: flyRect.y, width: flyRect.w, height: flyRect.h }}>
+            <StackView ws={ws} group={fly} zone={zone} panels={panels} dnd={dnd} registry={registry} active={flyout.panel} onActivate={(p) => setFlyout({ stack: fly.id, panel: p })} />
+          </div>
+        </ViewTransition>
       )}
     </>
   );
@@ -433,12 +486,7 @@ function StackView({
     else ws.close(id);
   };
   return (
-    <section
-      ref={el}
-      aria-label={def?.title}
-      className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${SURFACE}`}
-      style={{ viewTransitionName: activeOverride ? undefined : `ws-${active}`, viewTransitionClass: 'ws-panel' } as CSSProperties}
-    >
+    <section ref={el} aria-label={def?.title} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${SURFACE}`}>
       <div className="@container flex h-8 shrink-0 items-center gap-1 border-b border-border-subtle pr-1 pl-1" onPointerDown={onHeaderDown}>
         <div ref={strip} role="tablist" aria-label="Panels" className="flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
           {group.panels.map((id) => {
@@ -471,6 +519,7 @@ function StackView({
                 <button
                   type="button"
                   aria-label={`Close ${d.title}`}
+                  title={`Close ${d.title}`}
                   tabIndex={-1}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => closePanel(id)}
@@ -494,7 +543,9 @@ function StackView({
           if (!d || !seen.current.has(id)) return null;
           return (
             <Activity key={id} mode={id === active ? 'visible' : 'hidden'}>
-              <div className="flex min-h-0 flex-1 flex-col">{d.body()}</div>
+              <div className="flex min-h-0 flex-1 flex-col">
+                <PanelBody def={d} />
+              </div>
             </Activity>
           );
         })}
@@ -502,6 +553,11 @@ function StackView({
     </section>
   );
 }
+
+/** A panel's content renders only when the panel itself changes, not when its group moves or resizes. */
+const PanelBody = memo(function PanelBody({ def }: { def: PanelDef }) {
+  return def.body();
+});
 
 function PanelMenu({ ws, id, zone, onClose }: { ws: Workspace; id: string; zone: Zone | null; onClose: () => void }) {
   const act = (k: string) =>
@@ -518,7 +574,7 @@ function PanelMenu({ ws, id, zone, onClose }: { ws: Workspace; id: string; zone:
         <IconButton label="Panel options" size="icon-xs">
           <EllipsisIcon />
         </IconButton>
-        <DropdownMenu placement="bottom end" className="min-w-44" onAction={(k) => act(String(k))}>
+        <DropdownMenu placement="bottom end" className="w-max min-w-44" onAction={(k) => act(String(k))}>
           <DropdownMenuGroup>
             <DropdownMenuItem id="float">Float</DropdownMenuItem>
             {zone !== 'left' && <DropdownMenuItem id="left">Dock left</DropdownMenuItem>}
@@ -561,9 +617,10 @@ function FloatWindow({
   bounds: { W: number; H: number };
   others: FloatWin[];
 }) {
-  // position and size follow the pointer locally; the layout is written on release
-  const [r, setR] = useState<Rect | null>(null);
-  const rect = r ?? { x: win.x, y: win.y, w: win.w, h: win.h };
+  // position and size follow the pointer by writing the window's style
+  // directly (at most once a frame); the layout is written on release
+  const el = useRef<HTMLDivElement>(null);
+  const rect = { x: win.x, y: win.y, w: win.w, h: win.h };
   const clampR = (q: Rect): Rect => {
     const w = Math.max(220, Math.min(bounds.W - 2 * G, q.w));
     const h = Math.max(140, Math.min(bounds.H - 2 * G, q.h));
@@ -587,15 +644,21 @@ function FloatWindow({
     const y0 = e.clientY;
     const r0 = { ...rect };
     let last = r0;
+    let raf = 0;
     const move = (ev: PointerEvent) => {
       last = clampR(f(ev.clientX - x0, ev.clientY - y0, r0));
-      setR(last);
+      if (!raf)
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (el.current) Object.assign(el.current.style, px(last));
+        });
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      ws.setFloat(win.id, last);
-      setR(null);
+      cancelAnimationFrame(raf);
+      if (el.current) Object.assign(el.current.style, px(last));
+      if (last.x !== r0.x || last.y !== r0.y || last.w !== r0.w || last.h !== r0.h) ws.setFloat(win.id, last);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -611,22 +674,24 @@ function FloatWindow({
     ['se', 'bottom-0 right-0 size-3 cursor-nwse-resize', (dx, dy, q) => ({ ...q, w: q.w + dx, h: q.h + dy })],
   ];
   return (
-    <div className="absolute z-20 flex" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} onPointerDownCapture={() => ws.raise(win.id)}>
-      <StackView
-        ws={ws}
-        group={win}
-        zone={null}
-        panels={panels}
-        dnd={dnd}
-        registry={registry}
-        onHeaderDown={(e) => {
-          if (e.button === 0) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }));
-        }}
-      />
-      {edges.map(([k, cls, f]) => (
-        <div key={k} aria-hidden className={`absolute ${cls}`} onPointerDown={(e) => track(e, f)} />
-      ))}
-    </div>
+    <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
+      <div ref={el} className="absolute z-20 flex" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} onPointerDownCapture={() => ws.raise(win.id)}>
+        <StackView
+          ws={ws}
+          group={win}
+          zone={null}
+          panels={panels}
+          dnd={dnd}
+          registry={registry}
+          onHeaderDown={(e) => {
+            if (e.button === 0) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }));
+          }}
+        />
+        {edges.map(([k, cls, f]) => (
+          <div key={k} aria-hidden className={`absolute ${cls}`} onPointerDown={(e) => track(e, f)} />
+        ))}
+      </div>
+    </ViewTransition>
   );
 }
 

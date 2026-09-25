@@ -93,7 +93,7 @@ export class SimulationFeature implements FeatureModule {
       onClose: () => app.flags.set('simulation', false),
       body: () => (
         <>
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
             <div className="flex flex-col gap-3 pb-1">{this.renderControls()}</div>
           </ScrollArea>
           <canvas

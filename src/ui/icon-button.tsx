@@ -22,3 +22,13 @@ export function IconButton({
     </TooltipTrigger>
   );
 }
+
+/** A tooltip for a focusable control that is not an IconButton (a tree row action, a swatch). */
+export function Tip({ label, children, placement = 'top' }: { label: string; children: ReactNode; placement?: 'top' | 'bottom' | 'left' | 'right' }) {
+  return (
+    <TooltipTrigger delay={400}>
+      {children}
+      <Tooltip placement={placement}>{label}</Tooltip>
+    </TooltipTrigger>
+  );
+}

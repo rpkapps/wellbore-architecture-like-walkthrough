@@ -16,6 +16,8 @@ export type InspectorRow = [string, string, (Provenance | '')?] | 'sep' | { h: s
 export interface InspectorAction {
   label: string;
   primary?: boolean;
+  /** a toggle: read when the card renders, so the button follows the scene */
+  pressed?: () => boolean;
   onPress: () => void;
 }
 
@@ -231,7 +233,6 @@ class Inspect {
       rows.push(['Net pay in well', `${fmt.n(net, 1)} m MD`, 'calculated']);
     }
     const app = this.app;
-    const isolated = app.engine.geology.isolatedId === id;
     return view(
       f.name,
       'Formation (regional structural model)',
@@ -242,7 +243,8 @@ class Inspect {
         <p className="mt-1 text-muted-foreground">Surface interpolated from Equinor formation picks (plane trend + inverse-distance residuals); exact at the picks, interpretive between wells.</p>
       </>,
       [
-        { label: isolated ? 'Clear isolation' : 'Isolate', onPress: () => app.isolate(isolated ? null : id) },
+        // isolate: every other formation fades to a ghost so this one stands alone; press again to bring them back
+        { label: 'Isolate', pressed: () => app.engine.geology.isolatedId === id, onPress: () => app.isolate(app.engine.geology.isolatedId === id ? null : id) },
         {
           label: 'Hide',
           onPress: () => {

@@ -18,6 +18,17 @@ export function cssVar(name: string, fallback = '#888'): string {
   return v || fallback;
 }
 
+/** Is the light theme on? (canvases pick their washes from it) */
+export const isLight = () => typeof document !== 'undefined' && !document.documentElement.classList.contains('dark');
+
+/**
+ * A faint wash or hairline for canvases: white at `a` on the dark theme, black
+ * (a little stronger, it reads weaker) on the light one.
+ */
+export function wash(a: number): string {
+  return isLight() ? `rgba(0,0,0,${Math.min(1, a * 1.4).toFixed(3)})` : `rgba(255,255,255,${a})`;
+}
+
 /** Semantic colours and fonts the canvas renderers share. */
 export const ink = {
   get text() {

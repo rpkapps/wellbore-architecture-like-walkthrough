@@ -135,9 +135,25 @@ export function InterpretationPanel({ app }: { app: App }) {
   const [resets, setResets] = useState(0);
   const [open, setOpen] = useState<Set<Key>>(() => new Set(['Saturation', 'Net pay cut-offs', 'zones']));
   const timer = useRef<number | null>(null);
+  const live = useRef({ at: 0, cost: 0, timer: 0 });
+  // the curves, 3D and headline numbers follow the drag, paced so they take
+  // at most about a third of the time (the control stays responsive on slow
+  // machines); the rest of the app (features, zone table, timeline) catches
+  // up once the drag settles
   const apply = () => {
+    const L = live.current;
+    const run = () => {
+      const t0 = performance.now();
+      app.reinterpretLive();
+      L.at = performance.now();
+      L.cost = L.at - t0;
+    };
+    clearTimeout(L.timer);
+    const wait = L.at + 2 * L.cost - performance.now();
+    if (wait <= 0) run();
+    else L.timer = window.setTimeout(run, wait);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => app.reinterpret(), 90);
+    timer.current = window.setTimeout(() => app.reinterpret(), 260);
   };
   const set = (key: keyof PetroParams, v: number | string) => {
     (w.params as unknown as Record<string, unknown>)[key] = v;
@@ -218,6 +234,7 @@ export function InterpretationPanel({ app }: { app: App }) {
 }
 
 function SummaryStats({ app, baseline }: { app: App; baseline: Summary }) {
+  useRev(app.interpRev);
   const w = app.engine.activeWell;
   const loading = useSignal(app.loadingWell);
   if (loading)
@@ -458,7 +475,7 @@ function CpiValidation({ app }: { app: App }) {
   );
 }
 
-function exportCsv(app: App) {
+export function exportCsv(app: App) {
   const w = app.engine.activeWell;
   if (!w.logs || !w.petro) return;
   const p = w.petro;

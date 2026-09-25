@@ -8,7 +8,7 @@ import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { ToolWindow, fitCanvas } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
-import { font } from '../ui/tokens';
+import { font, ink, wash } from '../ui/tokens';
 import type { FeatureModule } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
 
@@ -369,8 +369,8 @@ export class GeosteerFeature implements FeatureModule {
     poly((s) => s.top, (s) => s.base, tcol, 0.75);
     g.globalAlpha = 1;
     // grid + depth axis
-    g.strokeStyle = 'rgba(255,255,255,0.08)';
-    g.fillStyle = 'rgba(231,236,241,0.55)';
+    g.strokeStyle = wash(0.08);
+    g.fillStyle = ink.muted;
     g.font = font.mono(10);
     g.textAlign = 'right';
     const stepY = niceStep((y1 - y0) / 5);
@@ -454,7 +454,7 @@ export class GeosteerFeature implements FeatureModule {
       g.lineTo(X(md), H - P.b);
       g.stroke();
     }
-    g.fillStyle = 'rgba(231,236,241,0.5)';
+    g.fillStyle = ink.muted;
     g.textAlign = 'left';
     g.fillText('TVDSS m', 4, P.t + 8);
     g.textAlign = 'right';

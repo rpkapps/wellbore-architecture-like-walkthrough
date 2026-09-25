@@ -385,7 +385,13 @@ export class Engine {
 
   start() {
     const cv = this.renderer.domElement;
-    for (const ev of ['pointerdown', 'pointermove', 'wheel']) cv.addEventListener(ev, () => this.requestRender(600), { passive: true });
+    // a drag that started on the chrome (a panel or window being moved) and
+    // crosses the view does not redraw it
+    let downOnView = false;
+    cv.addEventListener('pointerdown', () => ((downOnView = true), this.requestRender(600)), { passive: true });
+    window.addEventListener('pointerup', () => (downOnView = false), { passive: true });
+    cv.addEventListener('pointermove', (e) => (e.buttons === 0 || downOnView) && this.requestRender(600), { passive: true });
+    cv.addEventListener('wheel', () => this.requestRender(600), { passive: true });
     window.addEventListener('keydown', () => this.requestRender(600));
     window.addEventListener('resize', () => this.requestRender(600));
     const loop = (ts: number) => {

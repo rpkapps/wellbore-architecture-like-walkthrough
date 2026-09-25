@@ -109,19 +109,19 @@ function Overlays({ app }: { app: App }) {
     <>
       <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto">
-          <Morph name="hud">
+          <Morph anchor="tl">
             <Hud app={app} />
           </Morph>
         </div>
       </div>
       <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
         <div className="pointer-events-auto flex min-h-0 flex-col">
-          <Morph name={inspecting ? 'inspector' : 'legend'}>{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</Morph>
+          <Morph anchor="tr">{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</Morph>
         </div>
       </div>
       <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
         <div className="pointer-events-auto">
-          <Morph name="narrative">
+          <Morph anchor="bl">
             <Narrative app={app} />
           </Morph>
         </div>

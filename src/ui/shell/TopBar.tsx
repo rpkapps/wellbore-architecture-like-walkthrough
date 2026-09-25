@@ -16,7 +16,7 @@ import { Tab, TabStrip } from '../tabs';
 import { AppShellAction, AppShellActions, AppShellBrand, AppShellHeader, AppShellNav, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { OverflowDivider, OverflowItem, OverflowLabel, Toolbar } from '@tecton/react/tecton/overflow';
 import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
-import { ChartColumnIcon, CircleHelpIcon, PaletteIcon, FlaskConicalIcon, MaximizeIcon, PanelLeftIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
+import { ChartColumnIcon, CircleHelpIcon, FlaskConicalIcon, MaximizeIcon, PaletteIcon, PanelLeftIcon, SearchIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
@@ -30,6 +30,8 @@ import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
 import { HelpDialog } from './HelpDialog';
 import { PersonaliseDialog } from './PersonaliseDialog';
+import { CommandPalette } from './CommandPalette';
+import { Kbd } from '@tecton/react/components/kbd';
 import { ProductionSheet } from './ProductionSheet';
 
 const PROPERTIES: { id: PropertyMode; label: string; dot: string }[] = [
@@ -44,6 +46,8 @@ const idle = new Signal<unknown>(0);
 function Dot({ color }: { color: string }) {
   return <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: color }} />;
 }
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Full-height divider between header groups. */
 function Divider() {
@@ -61,7 +65,7 @@ export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<st
       <AppShellBrand>
         {/* mounts as the loader leaves, so the loader's logo flies here */}
         {brand ? (
-          <span className="flex" style={{ viewTransitionName: 'brand-logo' }}>
+          <span className="brand-logo flex">
             <Logo />
           </span>
         ) : (
@@ -105,7 +109,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
           <WellIcon />
           <SelectValue />
         </SelectTrigger>
-        <SelectContent className="min-w-64">
+        <SelectContent className="w-max min-w-64">
           {app.selectableWells().map((w) => (
             <SelectItem key={w.id} id={w.id} textValue={w.name}>
               {w.name}
@@ -139,11 +143,14 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
             <SelectTrigger size="sm">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="w-max min-w-(--trigger-width)">
               {props.map((p) => (
                 <SelectItem key={p.id} id={p.id} textValue={p.label}>
-                  <Dot color={p.dot} />
-                  {p.label}
+                  {/* the item's own row does not centre its children vertically */}
+                  <span className="flex items-center gap-2">
+                    <Dot color={p.dot} />
+                    {p.label}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -188,6 +195,10 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
       </AppShellNav>
       <Divider />
       <AppShellActions className="ml-0 gap-0.5">
+        <Button variant="ghost" size="sm" aria-label="Command palette" onPress={() => app.paletteOpen.set(true)} className="gap-1.5 text-fg-2">
+          <SearchIcon data-icon="inline-start" />
+          <Kbd className="h-4 px-1 text-[0.68rem]">{isMac ? '⌘K' : 'Ctrl K'}</Kbd>
+        </Button>
         <WindowMenu app={app} panels={panels} />
         <WorkspaceMenu app={app} panels={panels} />
         <AppShellAction label="Left column: fold to icons / expand" variant={leftOpen ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('left')}>
@@ -201,6 +212,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
       <DataDialog app={app} isOpen={data} onOpenChange={(o) => app.dataOpen.set(o)} />
       <HelpDialog app={app} isOpen={help} onOpenChange={(o) => app.helpOpen.set(o)} />
       <PersonaliseDialog app={app} isOpen={personalise} onOpenChange={(o) => app.personaliseOpen.set(o)} />
+      <CommandPalette app={app} />
     </>
   );
 }
@@ -208,10 +220,11 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
 /** An icon-only command; its label is the tooltip and the More-menu entry. */
 function IconItem({ id, priority, label, icon, onAction, isActive }: { id: string; priority: number; label: string; icon: ReactNode; onAction?: () => void; isActive?: boolean }) {
   return (
-    <OverflowItem id={id} priority={priority} label={label} icon={icon} onAction={onAction} labelBehavior="keep" tooltip>
-      <Button variant={isActive ? 'secondary' : 'ghost'} size="icon-sm" aria-label={label} aria-pressed={isActive}>
+    // the overflow item's own tooltip only shows for collapsed labels, so the button brings its own
+    <OverflowItem id={id} priority={priority} label={label} icon={icon} onAction={onAction} labelBehavior="keep">
+      <IconButton label={label} variant={isActive ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={isActive}>
         {icon}
-      </Button>
+      </IconButton>
     </OverflowItem>
   );
 }
@@ -265,7 +278,7 @@ function Tool({ t }: { t: ToolEntry }) {
     >
       <DropdownMenuTrigger>
         <IconButton label={t.label}>{t.icon}</IconButton>
-        <DropdownMenu placement="bottom end" className="min-w-56">
+        <DropdownMenu placement="bottom end" className="w-max min-w-56">
           {contents}
         </DropdownMenu>
       </DropdownMenuTrigger>

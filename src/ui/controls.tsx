@@ -55,7 +55,7 @@ export function SwitchField({ label, isSelected, onChange, aside, isDisabled }: 
         {label}
         {aside}
       </label>
-      <Switch id={id} size="sm" isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} />
+      <Switch id={id} isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} />
     </div>
   );
 }
@@ -136,7 +136,7 @@ export function CompactSelect({
       <SelectTrigger id={id} size={size} className={`min-w-0 ${appearance === 'ghost' ? GHOST : ''}`}>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="min-w-48">
+      <SelectContent className="w-max max-w-[min(32rem,90vw)] min-w-(--trigger-width)">
         {options.map((o) =>
           'options' in o ? (
             <SelectGroup key={o.label}>

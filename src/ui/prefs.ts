@@ -8,8 +8,10 @@ import { clearCssVarCache } from './tokens';
 export type Density = 'compact' | 'default' | 'comfortable';
 export type Accent = 'orchid' | 'azure' | 'blue' | 'green' | 'yellow' | 'pink' | 'saffron';
 export type LabelDensity = 'all' | 'near' | 'few';
+export type Theme = 'dark' | 'light' | 'system';
 
 export interface Prefs {
+  theme: Theme;
   density: Density;
   accent: Accent;
   /** 0.55 … 1: panels over the 3D view */
@@ -24,6 +26,7 @@ export interface Prefs {
 }
 
 export const DEFAULT_PREFS: Prefs = {
+  theme: 'dark',
   density: 'default',
   accent: 'orchid',
   panelOpacity: 1,
@@ -63,17 +66,40 @@ export function setPrefs(p: Partial<Prefs>) {
   prefs.set({ ...prefs.value, ...p });
 }
 
+const systemDark = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+
+/** The theme in effect ('system' resolved). */
+export function resolvedTheme(p: Prefs = prefs.value): 'dark' | 'light' {
+  return p.theme === 'system' ? (systemDark?.matches === false ? 'light' : 'dark') : p.theme;
+}
+
+/** Bumped when the resolved theme changes: canvases and the 3D labels redraw. */
+export const themeRev = new Signal(0);
+let lastTheme: 'dark' | 'light' | null = null;
+
 /** Write the settings to the document (called on load and on every change). */
 export function applyPrefs(p: Prefs = prefs.value) {
   if (typeof document === 'undefined') return;
   const r = document.documentElement;
+  const theme = resolvedTheme(p);
+  r.classList.toggle('dark', theme === 'dark');
+  r.classList.toggle('light', theme === 'light');
+  r.style.colorScheme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1c1f' : '#ffffff');
   r.style.setProperty('--ui-root', `${DENSITY_ROOT[p.density]}px`);
   r.style.setProperty('--ui-accent', `var(--tecton-palette-${ACCENTS.find((a) => a.id === p.accent)?.step ?? 'orchid-460'})`);
   r.style.setProperty('--panel-alpha', String(p.panelOpacity));
   r.style.setProperty('--panel-blur', `${p.panelBlur}px`);
   r.toggleAttribute('data-reduce-motion', p.reduceMotion);
   clearCssVarCache();
+  if (theme !== lastTheme) {
+    const first = lastTheme === null;
+    lastTheme = theme;
+    if (!first) themeRev.set(themeRev.value + 1);
+  }
 }
+
+systemDark?.addEventListener('change', () => prefs.value.theme === 'system' && applyPrefs());
 
 prefs.subscribe(() => {
   applyPrefs();

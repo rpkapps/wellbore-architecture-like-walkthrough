@@ -68,4 +68,23 @@ describe('workspace layout', () => {
     expect(open).not.toContain('section');
     expect(ws.value.bottom.stacks[0].panels).toEqual(expect.arrayContaining(['geosteer', 'correlation']));
   });
+
+  it('saves, renames, loads and deletes named workspaces', () => {
+    const ws = fresh();
+    ws.move('logs', { kind: 'zone', zone: 'bottom' });
+    const id = ws.saveAs('Logs below');
+    expect(ws.saved.value.map((w) => w.name)).toContain('Logs below');
+    // the same name replaces rather than duplicates
+    expect(ws.saveAs('logs below')).toBe(id);
+    expect(ws.saved.value.filter((w) => w.id === id)).toHaveLength(1);
+    ws.rename(id, 'Bottom logs');
+    ws.preset('walkthrough', () => true);
+    expect(ws.value.bottom.stacks).toHaveLength(0);
+    ws.load(id, () => true);
+    expect(ws.value.bottom.stacks[0].panels).toEqual(['logs']);
+    expect(ws.current.value).toBe(id);
+    ws.remove(id);
+    expect(ws.saved.value.find((w) => w.id === id)).toBeUndefined();
+    expect(ws.current.value).toBeNull();
+  });
 });

@@ -53,7 +53,7 @@ function SpeedMenu({ app }: { app: App }) {
         <GaugeIcon data-icon="inline-start" />
         <span className="font-mono tabular-nums">{speed}</span>
       </Button>
-      <DropdownMenu placement="top start" className="min-w-36">
+      <DropdownMenu placement="top start" className="w-max min-w-36">
         <DropdownMenuGroup
           selectionMode="single"
           selectedKeys={[String(speed)]}

@@ -14,6 +14,7 @@ export function SortableList<T extends { id: string }>({
   onReorder,
   deps = [],
   children,
+  below,
 }: {
   label: string;
   items: T[];
@@ -23,6 +24,8 @@ export function SortableList<T extends { id: string }>({
   /** values the rows render from besides the items themselves (rows are cached per item) */
   deps?: unknown[];
   children: (item: T, index: number) => ReactNode;
+  /** content shown under a row, inside it (e.g. the row's settings, opened from the row) */
+  below?: (item: T) => ReactNode;
 }) {
   const { dragAndDropHooks } = useDragAndDrop({
     getItems: (keys) => [...keys].map((k) => ({ 'text/plain': String(k) })),
@@ -45,16 +48,19 @@ export function SortableList<T extends { id: string }>({
           <GridListItem
             id={item.id}
             textValue={itemLabel(item)}
-            className="flex min-w-0 items-center gap-1 rounded-md outline-none data-dragging:opacity-40 data-focus-visible:ring-2 data-focus-visible:ring-ring data-hovered:bg-accent/40"
+            className="flex min-w-0 flex-col rounded-md outline-none data-dragging:opacity-40 data-focus-visible:ring-2 data-focus-visible:ring-ring"
           >
-            <AriaButton
-              slot="drag"
-              aria-label={`Drag ${itemLabel(item)} to reorder`}
-              className="flex h-7 w-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground outline-none data-focus-visible:ring-2 data-focus-visible:ring-ring data-hovered:text-foreground data-pressed:cursor-grabbing"
-            >
-              <GripVerticalIcon className="size-4" />
-            </AriaButton>
-            {children(item, i)}
+            <div className="flex min-w-0 items-center gap-1 rounded-md hover:bg-accent/40">
+              <AriaButton
+                slot="drag"
+                aria-label={`Drag ${itemLabel(item)} to reorder`}
+                className="flex h-7 w-5 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground outline-none data-focus-visible:ring-2 data-focus-visible:ring-ring data-hovered:text-foreground data-pressed:cursor-grabbing"
+              >
+                <GripVerticalIcon className="size-4" />
+              </AriaButton>
+              {children(item, i)}
+            </div>
+            {below?.(item)}
           </GridListItem>
         );
       }}

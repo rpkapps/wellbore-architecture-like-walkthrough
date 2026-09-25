@@ -13,7 +13,8 @@ import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
 import { onAnyChange, Rev, Signal } from './signal';
 import { Workspace } from './workspace/layout';
-import { prefs } from './prefs';
+import { prefs, themeRev } from './prefs';
+import { ActionRegistry } from '../actions/registry';
 import { withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
@@ -102,6 +103,8 @@ export class App {
   readonly ready = new Signal(false);
   /** active well, its data or its interpretation changed */
   readonly wellRev = new Rev();
+  /** bumped while an interpretation parameter is being dragged (the live results only) */
+  readonly interpRev = new Rev();
   /** geology layers, section box or scene display options changed */
   readonly sceneRev = new Rev();
   /** navigation mode, camera view, property mode or colour map changed */
@@ -122,6 +125,9 @@ export class App {
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
   readonly personaliseOpen = new Signal(false);
+  readonly paletteOpen = new Signal(false);
+  /** every operation as a typed action: the command palette runs these, and an assistant can (actions/tanstack.ts) */
+  readonly actions = new ActionRegistry<App>(this);
   /** name of the well whose files are loading (panels show placeholders) */
   readonly loadingWell = new Signal<string | null>(null);
   /**
@@ -174,6 +180,14 @@ export class App {
     };
     personal();
     prefs.subscribe(personal);
+    // a new theme: every canvas redraws with its colours
+    themeRev.subscribe(() => {
+      this.logs.invalidate();
+      this.notifyFeatures();
+      this.viewRev.bump();
+      this.sceneRev.bump();
+      this.wellRev.bump();
+    });
     this.logs.onPick = (md) => this.travelTo(md);
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
@@ -300,6 +314,20 @@ export class App {
 
   feature<T extends FeatureModule>(id: FeatureId): T | undefined {
     return this.modules.get(id) as T | undefined;
+  }
+
+  /**
+   * The cheap part of a re-interpretation, run while a parameter is dragged:
+   * the curves, the 3D colouring, the log tracks and the headline numbers.
+   * `reinterpret` (features, every panel) follows when the drag settles.
+   */
+  reinterpretLive() {
+    const w = this.engine.activeWell;
+    w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
+    this.zoneCache = null;
+    this.engine.refreshInterpretation();
+    this.logs.invalidate();
+    this.interpRev.bump();
   }
 
   reinterpret() {
@@ -710,20 +738,23 @@ export class App {
       if (t.closest('input, select, textarea, [role="dialog"], [role="menu"], [role="listbox"], [role="slider"]')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const rig = this.engine.rig;
+      // keys run the same actions as the command palette
+      const act = (id: string, input?: unknown) => void this.actions.run(id, input);
       if (e.code === 'Space' && rig.mode === 'guided') {
         e.preventDefault();
-        this.togglePlay();
-      } else if (rig.mode === 'guided' && e.key === '1') this.setGuidedView('tunnel');
-      else if (rig.mode === 'guided' && e.key === '2') this.setGuidedView('chase');
-      else if (rig.mode === 'guided' && e.key === '3') this.setGuidedView('orbit');
-      else if (e.key === 'n' || e.key === 'N') this.goChapter(this.chapterIdx + 1);
-      else if (e.key === 'p' || e.key === 'P') this.goChapter(this.chapterIdx - 1);
+        act('nav.play_pause');
+      } else if (rig.mode === 'guided' && e.key === '1') act('nav.guided_view', { view: 'tunnel' });
+      else if (rig.mode === 'guided' && e.key === '2') act('nav.guided_view', { view: 'chase' });
+      else if (rig.mode === 'guided' && e.key === '3') act('nav.guided_view', { view: 'orbit' });
+      else if (e.key === 'n' || e.key === 'N') act('nav.chapter', { index: Math.min(this.chapters.length - 1, this.chapterIdx + 1) });
+      else if (e.key === 'p' || e.key === 'P') act('nav.chapter', { index: Math.max(0, this.chapterIdx - 1) });
       else if (e.key === ']') rig.setMd(rig.md + 10);
       else if (e.key === '[') rig.setMd(rig.md - 10);
       else if (e.key === 'v' || e.key === 'V') {
         const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.optionalModes.value.has('rop') ? (['rop'] as PropertyMode[]) : [])];
-        this.setProperty(order[(order.indexOf(this.engine.mode) + 1) % order.length]);
-      } else if (e.key === 'Escape') this.inspector.set(null);
+        act('view.color_by', { mode: order[(order.indexOf(this.engine.mode) + 1) % order.length] });
+      } else if (e.key === '?') act('help.open');
+      else if (e.key === 'Escape') this.inspector.set(null);
     });
   }
 

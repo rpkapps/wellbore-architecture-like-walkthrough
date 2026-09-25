@@ -9,7 +9,7 @@ import { CompactSelect, Note, type Option } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { ToolWindow, fitCanvas } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
-import { font, ink } from '../ui/tokens';
+import { font, ink, wash } from '../ui/tokens';
 import { CURVE_BY_KEY } from './curves';
 import type { FeatureModule } from './registry';
 
@@ -368,7 +368,7 @@ export class CrossplotFeature implements FeatureModule {
       g.fillText('pay', PAD.l + 4, PAD.t + 12);
     }
     g.restore();
-    g.strokeStyle = 'rgba(255,255,255,0.2)';
+    g.strokeStyle = wash(0.2);
     g.strokeRect(PAD.l + 0.5, PAD.t + 0.5, W - PAD.l - PAD.r - 1, H - PAD.t - PAD.b - 1);
     if (!this.pts.length) {
       g.fillStyle = ink.muted;

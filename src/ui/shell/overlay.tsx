@@ -3,6 +3,7 @@ import { ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
 import { startTransition, useEffect, useState, ViewTransition, type ReactNode } from 'react';
 import { overlayBroadcast, overlayState, prefs } from '../prefs';
 import { useSignal } from '../signal';
+import { reducedMotion } from '../transition';
 import { IconButton } from '../icon-button';
 
 /**
@@ -26,14 +27,16 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
       return prefs.value.overlaysCollapsed;
     }
   });
-  // "collapse / expand all" in the personalisation dialog
+  // "collapse / expand all" in the personalisation dialog: applied at once,
+  // since a view transition would paint the overlays above the open dialog
   const broadcast = useSignal(overlayBroadcast);
   useEffect(() => {
-    if (broadcast) startTransition(() => setV(overlayState.collapsed));
+    if (broadcast) setV(overlayState.collapsed);
   }, [broadcast]);
   const set = (on: boolean) => {
     // the panel and its chip morph into each other (view transition)
-    startTransition(() => setV(on));
+    if (reducedMotion()) setV(on);
+    else startTransition(() => setV(on));
     try {
       localStorage.setItem(key, on ? '1' : '0');
     } catch {
@@ -43,10 +46,14 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
   return [v, set];
 }
 
-/** Wraps an overlay so its full and collapsed forms morph into each other. */
-export function Morph({ name, children }: { name: string; children: ReactNode }) {
+/**
+ * Wraps an overlay so its full and collapsed forms morph into each other,
+ * growing from the corner it is anchored to. Only its own collapse animates:
+ * other transitions (panels docking) leave it alone.
+ */
+export function Morph({ anchor, children }: { anchor: 'tl' | 'tr' | 'bl' | 'br'; children: ReactNode }) {
   return (
-    <ViewTransition name={`overlay-${name}`} share="overlay-morph" update="overlay-morph">
+    <ViewTransition default="none" update={`ov-${anchor}`}>
       {children}
     </ViewTransition>
   );

@@ -2,7 +2,10 @@ import { Toaster } from '@tecton/react/components/sonner';
 import { useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { loadVolve } from '../../data/dataset';
+import { appActions } from '../../actions/appActions';
 import { App } from '../app';
+import { prefs, resolvedTheme } from '../prefs';
+import { useSignal } from '../signal';
 import { Loader } from './Loader';
 import { Workspace } from './Workspace';
 
@@ -16,6 +19,7 @@ export function Root() {
   const [boot, setBoot] = useState<Boot>({ stage: 'loading', msg: 'Initialising…', f: 0 });
   const [progress, setProgress] = useState({ msg: 'Initialising…', f: 0 });
   const [loader, setLoader] = useState<'shown' | 'leaving' | 'gone'>('shown');
+  const theme = resolvedTheme(useSignal(prefs));
 
   useEffect(() => {
     let cancelled = false;
@@ -24,7 +28,8 @@ export function Root() {
         if (cancelled) return;
         setProgress({ msg: 'Building geological model and wellbore geometry', f: 0.86 });
         const app = new App(field);
-        const twin = { app, field, engine: undefined as unknown };
+        app.actions.register(...appActions());
+        const twin = { app, field, engine: undefined as unknown, actions: app.actions };
         (window as unknown as Record<string, unknown>).twin = twin;
         void app.whenReady.then(() => {
           const e = app.engine;
@@ -46,12 +51,15 @@ export function Root() {
             // (its logo flies into the top bar) while the camera sweeps down
             setLoader('leaving');
             setTimeout(() => {
-              // driven by hand (not React's ViewTransition): other synchronous
-              // updates in the same moment would otherwise cancel it
+              // started by hand, once, before any of React's own transitions:
+              // the loader and the logo carry transition names only meanwhile
               const done = () => flushSync(() => setLoader('gone'));
-              const vt = (document as Document & { startViewTransition?: (cb: () => void) => unknown }).startViewTransition;
-              if (vt && !document.documentElement.hasAttribute('data-reduce-motion')) vt.call(document, done);
-              else done();
+              const html = document.documentElement;
+              const vt = (document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } }).startViewTransition;
+              if (vt && !html.hasAttribute('data-reduce-motion')) {
+                html.setAttribute('data-vt-loader', '');
+                vt.call(document, done).finished.finally(() => html.removeAttribute('data-vt-loader'));
+              } else done();
               e.rig.flyTo(o.pos, o.target, 3.2);
             }, 520);
           }, 300);
@@ -71,7 +79,7 @@ export function Root() {
     <>
       {boot.stage === 'running' && <Workspace app={boot.app} brand={loader === 'gone'} />}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
-      <Toaster theme="dark" position="top-center" offset={56} />
+      <Toaster theme={theme} position="top-center" offset={56} />
     </>
   );
 }

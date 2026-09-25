@@ -122,7 +122,8 @@ function Choice<T extends string>({ legend, value, onChange, options }: { legend
   const id = useId();
   return (
     <FieldSet className="gap-2">
-      <FieldLegend variant="label" className="mb-0">
+      {/* a small uppercase heading, distinct from the options below it */}
+      <FieldLegend variant="label" className="type-section mb-0!">
         {legend}
       </FieldLegend>
       <RadioGroup aria-label={legend} orientation="horizontal" value={value} onChange={(v) => onChange(v as T)} className="flex flex-wrap gap-x-5 gap-y-2">
@@ -147,26 +148,28 @@ function Upload({ app }: { app: App }) {
   const take = (files: File[]) => files.length && void imp.handleFiles(files);
   return (
     <Section title="Upload">
-      <Choice<Target>
-        legend="Target"
-        value={target}
-        onChange={(v) => imp.target.set(v)}
-        options={[
-          ['supplement', `Supplement ${name}`],
-          ['replace', `Replace in ${name}`],
-          ['new', 'Create new well'],
-        ]}
-      />
-      <Choice<DepthUnit>
-        legend="Depth units for CSV / XLSX"
-        value={unit}
-        onChange={(v) => imp.depthUnit.set(v)}
-        options={[
-          ['auto', 'Auto (from header)'],
-          ['m', 'Metres'],
-          ['ft', 'Feet'],
-        ]}
-      />
+      <div className="flex flex-col gap-5 pb-1">
+        <Choice<Target>
+          legend="Target"
+          value={target}
+          onChange={(v) => imp.target.set(v)}
+          options={[
+            ['supplement', `Supplement ${name}`],
+            ['replace', `Replace in ${name}`],
+            ['new', 'Create new well'],
+          ]}
+        />
+        <Choice<DepthUnit>
+          legend="Depth units for CSV / XLSX"
+          value={unit}
+          onChange={(v) => imp.depthUnit.set(v)}
+          options={[
+            ['auto', 'Auto (from header)'],
+            ['m', 'Metres'],
+            ['ft', 'Feet'],
+          ]}
+        />
+      </div>
       <DropZone
         aria-label="Drop LAS, CSV or XLSX files"
         className="rounded-lg border border-dashed border-border outline-none data-[drop-target]:border-primary data-[drop-target]:bg-accent data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring"

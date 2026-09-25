@@ -5,15 +5,16 @@ import { TreeView, TreeViewAction, TreeViewItem, TreeViewItemContent, TreeViewVi
 import { LayersIcon } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
-import { COLORMAPS } from '../../data/colormap';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
-import { SelectField, SliderField, SwitchField } from '../controls';
+import { SliderField, SwitchField } from '../controls';
 import { ProvBadge } from '../prov';
 import { PanelAccordion, PanelSection } from '../section';
 import { ScrubChip } from '../scrub';
 import { useRev } from '../signal';
 import { SectionBoxEditor } from '../viz/SectionBoxEditor';
+import { ColormapPicker } from '../viz/ColormapPicker';
+import { Tip } from '../icon-button';
 
 const OPACITY = [1, 0.75, 0.5, 0.25, 0.1];
 const PRESETS: [LayerPreset, string][] = [
@@ -49,8 +50,20 @@ function Layers({ app }: { app: App }) {
   const wb = app.wellbore;
   const d = app.display;
   const toggle = (label: string, visible: boolean, onChange: (v: boolean) => void) => (
-    <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${label}`} isVisible={visible} onChange={onChange} />
+    <Tip label={visible ? 'Hide' : 'Show'}>
+      <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${label}`} isVisible={visible} onChange={onChange} />
+    </Tip>
   );
+  // a folder's eye: shows everything in it when anything is hidden, otherwise hides it all
+  const groupToggle = (what: string, states: boolean[], set: (v: boolean) => void) => {
+    const all = states.every(Boolean);
+    const some = states.some(Boolean);
+    return (
+      <Tip label={all ? 'Hide all' : 'Show all'}>
+        <TreeViewVisibilityToggle aria-label={`${all ? 'Hide' : 'Show'} ${what}`} isVisible={all} onChange={() => set(!all)} className={some && !all ? 'text-fg-2' : undefined} />
+      </Tip>
+    );
+  };
   const leaf = (id: string, label: string, visible: boolean, onChange: (v: boolean) => void, suffix?: ReactNode) => (
     <TreeViewItem id={id} textValue={label} isHidden={!visible}>
       <TreeViewItemContent suffix={suffix} endAdornment={toggle(label, visible, onChange)}>
@@ -68,7 +81,20 @@ function Layers({ app }: { app: App }) {
       }}
     >
       <TreeViewItem id="formations" textValue="Formations">
-        <TreeViewItemContent kind="folder" suffix={<ProvBadge prov="interpreted">Picks model</ProvBadge>} endAdornment={<PresetMenu app={app} />}>
+        <TreeViewItemContent
+          kind="folder"
+          suffix={<ProvBadge prov="interpreted">Picks model</ProvBadge>}
+          endAdornment={
+            <>
+              {groupToggle(
+                'every formation',
+                MODEL_HORIZONS.map((id) => geo.state.get(id)!.visible),
+                (v) => MODEL_HORIZONS.forEach((id) => app.setLayer(id, { visible: v })),
+              )}
+              <PresetMenu app={app} />
+            </>
+          }
+        >
           Formations
         </TreeViewItemContent>
         {MODEL_HORIZONS.map((id) => {
@@ -85,7 +111,7 @@ function Layers({ app }: { app: App }) {
             >
               <TreeViewItemContent
                 icon={
-                  <span className="flex" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+                  <span className="flex" title="Change colour" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
                     <ColorSwatch color={f.color} size="xs" shape="square" aria-label={`${f.name} colour: click to change`} onChange={(hex) => app.setFormationColor(id, hex)} />
                   </span>
                 }
@@ -117,13 +143,23 @@ function Layers({ app }: { app: App }) {
         })}
       </TreeViewItem>
       <TreeViewItem id="wellbore" textValue="Wellbore">
-        <TreeViewItemContent kind="folder">Wellbore</TreeViewItemContent>
+        <TreeViewItemContent
+          kind="folder"
+          endAdornment={groupToggle('the near-well geometry', [wb.casing, wb.fractures, wb.markers], (v) => app.setWellboreDisplay({ casing: v, fractures: v, markers: v }))}
+        >
+          Wellbore
+        </TreeViewItemContent>
         {leaf('casing', 'Casing & cement', wb.casing, (v) => app.setWellboreDisplay({ casing: v }))}
         {leaf('fractures', 'Natural fractures', wb.fractures, (v) => app.setWellboreDisplay({ fractures: v }), <ProvBadge prov="schematic" />)}
         {leaf('markers', 'Tops & depth marks', wb.markers, (v) => app.setWellboreDisplay({ markers: v }))}
       </TreeViewItem>
       <TreeViewItem id="scene" textValue="Scene">
-        <TreeViewItemContent kind="folder">Scene</TreeViewItemContent>
+        <TreeViewItemContent
+          kind="folder"
+          endAdornment={groupToggle('the scene layers', [d.labels, d.otherWells, d.sea, d.contours], (v) => app.setDisplay({ labels: v, otherWells: v, sea: v, contours: v }))}
+        >
+          Scene
+        </TreeViewItemContent>
         {leaf('labels', 'Labels', d.labels, (v) => app.setDisplay({ labels: v }))}
         {leaf('otherWells', 'Other Volve wellbores', d.otherWells, (v) => app.setDisplay({ otherWells: v }))}
         {leaf('sea', 'Sea, water column & platform', d.sea, (v) => app.setDisplay({ sea: v }))}
@@ -136,10 +172,12 @@ function Layers({ app }: { app: App }) {
 function PresetMenu({ app }: { app: App }) {
   return (
     <DropdownMenuTrigger>
-      <TreeViewAction aria-label="Layer presets">
-        <LayersIcon />
-      </TreeViewAction>
-      <DropdownMenu placement="bottom end" className="min-w-44" onAction={(k) => app.preset(k as LayerPreset)}>
+      <Tip label="Layer presets">
+        <TreeViewAction aria-label="Layer presets">
+          <LayersIcon />
+        </TreeViewAction>
+      </Tip>
+      <DropdownMenu placement="bottom end" className="w-max min-w-44" onAction={(k) => app.preset(k as LayerPreset)}>
         <DropdownMenuLabel>Presets</DropdownMenuLabel>
         {PRESETS.map(([id, label]) => (
           <DropdownMenuItem key={id} id={id}>
@@ -156,11 +194,13 @@ function LayerMenu({ app, id, name, opacity }: { app: App; id: string; name: str
   const nearest = OPACITY.reduce((a, b) => (Math.abs(b - opacity) < Math.abs(a - opacity) ? b : a));
   return (
     <DropdownMenuTrigger>
-      <TreeViewAction aria-label={`${name} actions`} />
-      <DropdownMenu placement="bottom end" className="min-w-44">
+      <Tip label="More">
+        <TreeViewAction aria-label={`${name} actions`} />
+      </Tip>
+      <DropdownMenu placement="bottom end" className="w-max min-w-44">
         <DropdownMenuGroup>
           <DropdownMenuItem onAction={() => app.inspectFormation(id)}>Details</DropdownMenuItem>
-          <DropdownMenuItem onAction={() => app.isolate(isolated ? null : id)}>{isolated ? 'Clear isolation' : 'Isolate'}</DropdownMenuItem>
+          <DropdownMenuItem onAction={() => app.isolate(isolated ? null : id)}>{isolated ? 'Show all formations' : 'Isolate (ghost the others)'}</DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup selectionMode="single" selectedKeys={[String(nearest)]} onSelectionChange={(k) => k !== 'all' && k.size && app.setLayer(id, { opacity: +String([...k][0]) })}>
@@ -239,12 +279,12 @@ function DisplayControls({ app }: { app: App }) {
   const s: SceneDisplay = app.display;
   return (
     <div className="flex flex-col gap-1">
-      <SelectField
-        label="Resistivity colours"
-        value={app.colormapName}
-        onChange={(v) => app.setColormap(v as typeof app.colormapName)}
-        options={COLORMAPS.map((c) => ({ id: c.id, label: c.label }))}
-      />
+      <div className="flex h-7 items-center gap-3">
+        <span className="type-label shrink-0">Resistivity colours</span>
+        <div className="min-w-0 flex-1">
+          <ColormapPicker app={app} size="sm" />
+        </div>
+      </div>
       <SwitchField label="Glow & colour grade" isSelected={s.postFx} onChange={(v) => app.setDisplay({ postFx: v })} />
       <SwitchField label="Realistic textures" isSelected={textures} onChange={(v) => app.flags.set('textures', v)} />
     </div>

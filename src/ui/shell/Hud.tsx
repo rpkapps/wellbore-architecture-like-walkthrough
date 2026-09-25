@@ -74,10 +74,18 @@ function Camera({ app, end }: { app: App; end: React.ReactNode }) {
     <div className="flex items-center gap-2">
       <Compass heading={hud.heading} azi={p.azi} className="size-9" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="type-title truncate">{hud.where}</span>
-        <span className="type-caption truncate font-mono">
-          {hud.nav} · {hud.camY >= 0 ? '+' : ''}
-          {fmt.n(hud.camY, 0)} m · {hdg}°
+        <span className="type-title truncate" title={hud.where}>
+          {hud.where}
+        </span>
+        {/* the navigation mode gives way first; the camera's elevation and heading always show */}
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="type-caption min-w-0 flex-1 truncate" title={hud.nav}>
+            {hud.nav}
+          </span>
+          <span className="type-caption shrink-0 font-mono tabular-nums" title="Camera elevation and heading">
+            {hud.camY >= 0 ? '+' : ''}
+            {fmt.n(hud.camY, 0)} m · {hdg}°
+          </span>
         </span>
       </div>
       <div className="self-start">{end}</div>

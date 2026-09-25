@@ -248,7 +248,7 @@ export class ViewsFeature implements FeatureModule {
             options={[5, 9, 15, 25].map((s) => ({ id: String(s), label: `${s} s / view` }))}
           />
         </div>
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           {n === 0 ? (
             <Empty>
               <EmptyHeader>

@@ -63,6 +63,8 @@ export function ScrubField({
     return Number(Math.max(min, Math.min(max, s)).toFixed(log ? Math.max(dec, 4) : dec));
   };
   const t = toT(value);
+  // pointer moves arrive faster than frames: apply the latest one per frame
+  const emit = useFrameThrottle(onChange);
 
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (isDisabled || editing || e.button !== 0) return;
@@ -76,11 +78,12 @@ export function ScrubField({
     if (!d.moved && Math.abs(dx) < 3) return;
     d.moved = true;
     const w = bar.current.clientWidth || 1;
-    onChange(fromT(d.t + (dx / w) * (e.shiftKey ? 0.1 : 1)));
+    emit.push(fromT(d.t + (dx / w) * (e.shiftKey ? 0.1 : 1)));
   };
   const up = () => {
     const d = drag.current;
     drag.current = null;
+    emit.flush();
     if (d && !d.moved) setEditing(true);
   };
   const key = (e: KeyboardEvent) => {
@@ -113,7 +116,10 @@ export function ScrubField({
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
-        onPointerCancel={() => (drag.current = null)}
+        onPointerCancel={() => {
+          drag.current = null;
+          emit.flush();
+        }}
         onKeyDown={key}
         className="group/scrub relative h-7 min-w-0 flex-1 cursor-ew-resize touch-none overflow-hidden rounded-md bg-muted/70 outline-none select-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-default aria-disabled:opacity-50"
       >
@@ -224,6 +230,7 @@ export function ScrubChip({
   onChange: (v: number) => void;
 }) {
   const drag = useRef<{ x: number; v: number } | null>(null);
+  const emit = useFrameThrottle(onChange);
   const t = (Math.max(min, Math.min(max, value)) - min) / (max - min);
   const snap = (v: number) => Math.max(min, Math.min(max, Math.round(v / step) * step));
   return (
@@ -246,9 +253,12 @@ export function ScrubChip({
         const d = drag.current;
         if (!d) return;
         // the whole range over ~140 px of travel
-        onChange(snap(d.v + ((e.clientX - d.x) / 140) * (max - min) * (e.shiftKey ? 0.2 : 1)));
+        emit.push(snap(d.v + ((e.clientX - d.x) / 140) * (max - min) * (e.shiftKey ? 0.2 : 1)));
       }}
-      onPointerUp={() => (drag.current = null)}
+      onPointerUp={() => {
+        drag.current = null;
+        emit.flush();
+      }}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         const k = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 0;
@@ -263,4 +273,29 @@ export function ScrubChip({
       <span className="type-value relative flex h-full items-center justify-center text-[0.72rem]! leading-none!">{format(value)}</span>
     </div>
   );
+}
+
+/** Calls `fn` with the latest pushed value at most once per animation frame; `flush` applies a pending one now. */
+function useFrameThrottle(fn: (v: number) => void) {
+  const ref = useRef({ fn, raf: 0, pending: null as number | null });
+  ref.current.fn = fn;
+  return useMemo(() => {
+    const st = ref.current;
+    const run = () => {
+      st.raf = 0;
+      const v = st.pending;
+      st.pending = null;
+      if (v !== null) st.fn(v);
+    };
+    return {
+      push(v: number) {
+        st.pending = v;
+        if (!st.raf) st.raf = requestAnimationFrame(run);
+      },
+      flush() {
+        if (st.raf) cancelAnimationFrame(st.raf);
+        run();
+      },
+    };
+  }, []);
 }

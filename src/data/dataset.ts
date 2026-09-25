@@ -321,14 +321,19 @@ async function fetchText(url: string): Promise<string> {
   return r.text();
 }
 
-export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac: number) => void): Promise<FieldModel> {
-  onProgress?.('Reading dataset manifest', 0.02);
+export async function loadVolve(baseUrl: string, report?: (msg: string, frac: number) => void): Promise<FieldModel> {
+  // report a step, then let the page paint it before the next piece of work
+  const onProgress = async (msg: string, frac: number) => {
+    report?.(msg, frac);
+    if (typeof requestAnimationFrame === 'function') await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+  };
+  await onProgress('Reading dataset manifest', 0.02);
   const manifest = JSON.parse(await fetchText(baseUrl + 'manifest.json')) as { field: FieldMeta; wells: ManifestWell[]; picks: string; productionMonthly: string; contextTrajectories: string; simulation?: string };
   const field = new FieldModel(manifest.field);
   field.baseUrl = baseUrl;
   field.simulationFile = manifest.simulation;
 
-  onProgress?.('Reading formation picks (34 wellbores)', 0.08);
+  await onProgress('Reading formation picks (34 wellbores)', 0.08);
   const [picksTxt, ctxTxt, prodTxt] = await Promise.all([
     fetchText(baseUrl + manifest.picks),
     fetchText(baseUrl + manifest.contextTrajectories),
@@ -365,7 +370,7 @@ export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac
     field.productionMonthly.set(n, s.records);
   }
 
-  onProgress?.('Reading directional surveys', 0.16);
+  await onProgress('Reading directional surveys', 0.16);
   for (const mw of manifest.wells) {
     const sv = surveyFromTable(parseCSV(await fetchText(baseUrl + mw.survey)));
     const stations = stationsFromSurvey(sv.stations, sv.hasPositions);
@@ -385,13 +390,13 @@ export async function loadVolve(baseUrl: string, onProgress?: (msg: string, frac
     field.wells.push(w);
   }
 
-  onProgress?.('Interpolating structural surfaces from picks', 0.24);
+  await onProgress('Interpolating structural surfaces from picks', 0.24);
   field.rebuildHorizons();
 
   const primary = field.primary;
-  onProgress?.(`Loading ${primary.name} logs`, 0.3);
-  await field.ensureLoaded(primary, (m) => onProgress?.(m, 0.5));
-  onProgress?.('Building scene', 0.8);
+  await onProgress(`Loading ${primary.name} logs`, 0.3);
+  await field.ensureLoaded(primary, (m) => report?.(m, 0.5));
+  await onProgress('Building scene', 0.8);
   return field;
 }
 

@@ -7,7 +7,7 @@ import { CompactSelect, Note, SelectField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { ToolWindow, fitCanvas } from '../ui/toolWindow';
 import { Live, Rev, Signal } from '../ui/signal';
-import { font, ink } from '../ui/tokens';
+import { font, ink, wash } from '../ui/tokens';
 import { CURVES, CURVE_BY_KEY } from './curves';
 import { niceStep } from './geosteer';
 import type { FeatureModule } from './registry';
@@ -444,7 +444,7 @@ export class CorrelationFeature implements FeatureModule {
         g.lineTo(x0 + tw + 4, y);
         g.stroke();
       }
-      g.strokeStyle = c.well === active ? '#7fe3ff' : 'rgba(255,255,255,0.18)';
+      g.strokeStyle = c.well === active ? '#7fe3ff' : wash(0.18);
       g.lineWidth = c.well === active ? 1.5 : 1;
       g.strokeRect(x0 + 0.5, PT, tw - 1, H - PT - PB);
     });

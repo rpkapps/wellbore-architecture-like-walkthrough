@@ -6,7 +6,7 @@ import { DEFAULT_TRACKS, defaultLayout, parseLayout, resolveCurve, visibleTracks
 import type { Curve } from '../data/types';
 import { fmt } from './dom';
 import { Rev, Signal } from './signal';
-import { cssVar, font, ink } from './tokens';
+import { cssVar, font, ink, wash } from './tokens';
 
 const LAYOUT_KEY = 'vwt.logtracks.v1';
 
@@ -374,17 +374,17 @@ export class LogTracks {
     }
     this.layout.push({ x: x + 1, w: PAY_W, kind: 'pay' });
 
-    g.fillStyle = 'rgba(255,255,255,0.028)';
+    g.fillStyle = wash(0.028);
     g.fillRect(0, 0, W, this.headH);
     g.font = font.mono(9.5);
     g.textBaseline = 'middle';
     // depth track
     const step = niceStep(this.window / 8);
-    g.fillStyle = 'rgba(255,255,255,0.02)';
+    g.fillStyle = wash(0.02);
     g.fillRect(2, this.headH, DEPTH_W, bodyH);
     for (let d = Math.ceil(top / step) * step; d <= bot; d += step) {
       const y = yOf(d);
-      g.strokeStyle = 'rgba(255,255,255,0.06)';
+      g.strokeStyle = wash(0.06);
       g.beginPath();
       g.moveTo(DEPTH_W + 2, y);
       g.lineTo(W, y);
@@ -399,7 +399,7 @@ export class LogTracks {
     }
     // minor grid
     const minor = step / 5;
-    g.strokeStyle = 'rgba(255,255,255,0.025)';
+    g.strokeStyle = wash(0.025);
     for (let d = Math.ceil(top / minor) * minor; d <= bot; d += minor) {
       const y = Math.round(yOf(d)) + 0.5;
       g.beginPath();
@@ -538,7 +538,7 @@ export class LogTracks {
       const t = this.shownTracks();
       const src = t.find((l) => l.spec === gs.spec);
       if (src) {
-        g.fillStyle = 'rgba(255,255,255,0.05)';
+        g.fillStyle = wash(0.05);
         g.fillRect(src.x, 0, src.w, H);
       }
       const before = t.find((l) => gs.x < l.x + l.w / 2 && l.spec !== gs.spec);
@@ -553,12 +553,12 @@ export class LogTracks {
     const bodyTop = this.headH;
     const bodyH = H - this.headH;
     // frame
-    g.fillStyle = 'rgba(255,255,255,0.018)';
+    g.fillStyle = wash(0.018);
     g.fillRect(x + 1, bodyTop, w - 2, bodyH);
-    g.strokeStyle = 'rgba(255,255,255,0.07)';
+    g.strokeStyle = wash(0.07);
     g.strokeRect(x + 1.5, 2.5, w - 3, H - 4);
     // vertical grid
-    g.strokeStyle = 'rgba(255,255,255,0.045)';
+    g.strokeStyle = wash(0.045);
     const s0 = t.curves[0].scale;
     if (t.grid === 'log' && s0.log) {
       const a = Math.log10(Math.min(s0.min, s0.max));
@@ -570,7 +570,7 @@ export class LogTracks {
           if (v < a || v > b) continue;
           const f = (v - a) / (b - a);
           const gx = x + 1 + (rev ? 1 - f : f) * (w - 2);
-          g.strokeStyle = k === 1 ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.03)';
+          g.strokeStyle = k === 1 ? wash(0.09) : wash(0.03);
           g.beginPath();
           g.moveTo(gx, bodyTop);
           g.lineTo(gx, H);
@@ -727,7 +727,7 @@ export class LogTracks {
 
     // header: provenance bar and title, then per curve its name, a line in its colour and dash, and the scale ends
     g.save();
-    g.fillStyle = 'rgba(255,255,255,0.03)';
+    g.fillStyle = wash(0.03);
     g.fillRect(x + 1, 3, w - 2, this.headH - 3);
     g.fillStyle = cssVar(`--tecton-palette-${{ measured: 'azure', calculated: 'saffron', interpreted: 'violet', mixed: 'saffron' }[t.prov]}-560`);
     g.fillRect(x + 2, 3, w - 4, 2);
