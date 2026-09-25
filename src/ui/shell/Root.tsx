@@ -37,6 +37,8 @@ export function Root() {
           const o = e.overviewPose();
           e.rig.setMode('explore');
           e.rig.setExploreView('orbit');
+          // the view toolbar shows the navigation mode from the view revision
+          app.viewRev.bump();
           e.camera.position
             .copy(o.pos)
             .multiplyScalar(1.8)

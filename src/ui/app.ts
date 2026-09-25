@@ -44,7 +44,7 @@ export interface Hud {
   camY: number;
 }
 
-/** A command a feature adds to the top-bar toolbar (measure, snapshot, saved views). */
+/** A command a feature adds to the viewport toolbar (measure, snapshot, saved views). */
 export interface ToolEntry {
   id: string;
   label: string;
@@ -59,10 +59,14 @@ export interface ToolEntry {
   watch?: Signal<unknown>;
 }
 
-/** A read-out a feature adds under the compass (geosteering status, measuring hint). */
+/** A read-out a feature adds to the position details (geosteering status, measuring hint). */
 export interface HudEntry {
   id: string;
   render: () => ReactNode;
+  /** a few words for the timeline's position read-out, beside the depth (geosteering: IN ZONE) */
+  chip?: () => ReactNode;
+  /** an instruction for what the next click does (measuring): shown over the 3D view, above its toolbar, not tucked into the details */
+  prompt?: boolean;
 }
 
 /** Near-well display options that belong to the wellbore, reapplied whenever it is rebuilt. */
@@ -144,6 +148,12 @@ export class App {
   readonly heading = new FrameValue();
   readonly playing = new Signal(false);
   readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
+  /**
+   * The chapter card shows over the timeline (guided mode only): going to a
+   * chapter (a marker, N / P, the tour) or playing opens it; its close
+   * button, pausing and Explore put it away, leaving the numbered markers.
+   */
+  readonly chapterCard = new Signal(false);
   readonly inspector = new Signal<InspectorView | null>(null);
   readonly tools = new Signal<ToolEntry[]>([]);
   readonly huds = new Signal<HudEntry[]>([]);
@@ -277,7 +287,7 @@ export class App {
     else toast(msg);
   }
 
-  // ------------------------------------------------------------------ top-bar and HUD slots
+  // ------------------------------------------------------------------ viewport toolbar and HUD slots
   addTool(t: ToolEntry) {
     this.tools.update((l) => [...l.filter((x) => x.id !== t.id), t]);
   }
@@ -485,6 +495,7 @@ export class App {
     if (mode === 'explore') {
       this.stopTour();
       rig.playing = false;
+      this.chapterCard.set(false);
       this.toast('Explore — drag to look · WASD / QE to fly · Shift to boost · wheel sets speed · double-click to focus');
     }
     this.viewRev.bump();
@@ -733,6 +744,7 @@ export class App {
     if (rig.md >= rig.mdMax - 1) rig.setMd(0);
     rig.playing = !rig.playing;
     rig.targetMd = null;
+    this.chapterCard.set(rig.playing);
   }
 
   setSpeed(v: number) {
@@ -781,6 +793,7 @@ export class App {
     this.setGuidedView(c.view);
     this.travelTo(c.md);
     this.chapter.set({ index: k, touring: this.tourTimer !== null });
+    this.chapterCard.set(true);
   }
 
   startTour() {

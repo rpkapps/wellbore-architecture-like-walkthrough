@@ -69,15 +69,18 @@ export function CollapseButton({ collapsed, onChange, name }: { collapsed: boole
   );
 }
 
-/** The collapsed form of an overlay: its essentials on one line, with the expand button at the end. */
-export function OverlayChip({ name, onExpand, children, end }: { name: string; onExpand: () => void; children: ReactNode; end?: ReactNode }) {
+/**
+ * The collapsed form of an overlay: its essentials on one line, with the
+ * expand button at the end (none where the chip is all there is room for).
+ */
+export function OverlayChip({ name, onExpand, children, end }: { name: string; onExpand?: () => void; children: ReactNode; end?: ReactNode }) {
   return (
     <Panel variant="elevated" size="sm" aria-label={name} className={`w-fit max-w-full ${SURFACE}`}>
       <div className="flex min-w-0 items-center gap-2 py-1 pr-1 pl-2">
         {children}
         <div className="flex shrink-0 items-center">
           {end}
-          <CollapseButton collapsed name={name} onChange={() => onExpand()} />
+          {onExpand && <CollapseButton collapsed name={name} onChange={() => onExpand()} />}
         </div>
       </div>
     </Panel>

@@ -8,6 +8,7 @@ import type { App } from '../app';
 import { fmt } from '../dom';
 import { IconButton } from '../icon-button';
 import { useRev, useSignal } from '../signal';
+import { PoseReadout } from './Hud';
 import { SURFACE } from './overlay';
 
 const SPEEDS = [15, 45, 120, 300];
@@ -21,9 +22,10 @@ const S_BOT = S_TOP + S_H;
 const LABEL_Y = 51; // depth scale baseline
 
 /**
- * Play along the well and scrub the whole hole. The strip spans the full
- * width of the window: formations, inclination, pay, casing shoes and the
- * tour chapters, with a draggable playhead.
+ * Play along the well and scrub the whole hole. Play, the speed and where
+ * the camera is along the well (which opens the position details), then the
+ * strip across the rest of the window: formations, inclination, pay, casing
+ * shoes and the tour chapters, with a draggable playhead.
  */
 export function Timeline({ app }: { app: App }) {
   const playing = useSignal(app.playing);
@@ -39,6 +41,7 @@ export function Timeline({ app }: { app: App }) {
         {playing ? <PauseIcon /> : <PlayIcon />}
       </IconButton>
       <SpeedMenu app={app} />
+      <PoseReadout app={app} />
       <Strip app={app} />
     </div>
   );
@@ -245,6 +248,8 @@ function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number;
             role="button"
             tabIndex={0}
             aria-label={`Chapter ${i + 1}: ${c.title}`}
+            // the chapter card finds its marker by this, to sit above it
+            data-chapter={i}
             className="cursor-pointer outline-none [&:focus-visible>circle]:stroke-ring"
             onPointerDown={(e) => e.stopPropagation()}
             onPointerEnter={() => onHover(i)}

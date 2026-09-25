@@ -31,6 +31,8 @@ export class GeosteerFeature implements FeatureModule {
   private xmap: { a: number; b: number; x0: number; x1: number; y0: number; y1: number } | null = null;
   private readout = new Signal<ReactNode>(null);
   private hud = new Signal<ReactNode>(null);
+  /** the status alone (IN ZONE), for the timeline's position read-out */
+  private chip = new Signal<ReactNode>(null);
   private lastMd = -1;
   private readoutMd = -1;
   private readoutAt = 0;
@@ -106,7 +108,7 @@ export class GeosteerFeature implements FeatureModule {
         </>
       ),
     });
-    app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} /> });
+    app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} />, chip: () => <Live s={this.chip} /> });
     // the strip draws the uncertainty band when that feature is on
     app.flags.watch('uncertainty', () => this.strip.invalidate());
   }
@@ -123,6 +125,7 @@ export class GeosteerFeature implements FeatureModule {
     clearTimeout(this.readoutTimer);
     this.readoutTimer = 0;
     this.hud.set(null);
+    this.chip.set(null);
   }
 
   onWell() {
@@ -287,6 +290,7 @@ export class GeosteerFeature implements FeatureModule {
     if (!p || !p.window) {
       this.readout.set(<span className="text-muted-foreground">This well does not reach the {FORMATION_BY_ID.get(this.target)?.name ?? this.target} in the model.</span>);
       this.hud.set(null);
+      this.chip.set(null);
       return;
     }
     const s = steerAt(p, md);
@@ -326,6 +330,14 @@ export class GeosteerFeature implements FeatureModule {
           {status} · top {s.dTop >= 0 ? '+' : ''}
           {fmt.n(s.dTop, 1)} m · base {s.dBase >= 0 ? '+' : ''}
           {fmt.n(s.dBase, 1)} m
+        </span>
+      ) : null,
+    );
+    this.chip.set(
+      inWin && s ? (
+        <span className="flex items-center gap-1 font-medium" style={{ color: STATUS_COLOR[s.status] }}>
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s.status] }} />
+          {status}
         </span>
       ) : null,
     );

@@ -83,7 +83,7 @@ export class ViewsFeature implements FeatureModule {
     return (
       <>
         <Note>
-          {this.views.length} saved view{this.views.length === 1 ? '' : 's'}. Open with the bookmark button in the top bar. During a presentation: → / Space next, ← previous, Esc exits.
+          {this.views.length} saved view{this.views.length === 1 ? '' : 's'}. Open with the bookmark button in the view toolbar. During a presentation: → / Space next, ← previous, Esc exits.
         </Note>
         <div>
           <Button variant="ghost" size="sm" onPress={() => this.panel.show()}>
