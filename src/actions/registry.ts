@@ -22,6 +22,10 @@ export interface ActionChoice<I> {
   keywords?: string[];
   /** ticked in the palette: the current value */
   current?: boolean;
+  /** a second line in the palette (a panel's location: "Bottom column · tab 2") */
+  detail?: string;
+  /** what it is, for the palette's search only (matched like an action's description) */
+  description?: string;
 }
 
 export interface Action<S extends z.ZodType = z.ZodType, Ctx = unknown> {
@@ -36,6 +40,12 @@ export interface Action<S extends z.ZodType = z.ZodType, Ctx = unknown> {
   keywords?: string[];
   /** the key that runs it, as shown in the palette (the binding itself lives with the key handler) */
   shortcut?: string;
+  /**
+   * Where the same control lives in the interface, as a short breadcrumb
+   * ("Scene › Section box", "Top bar › Workspace"). The palette shows it on
+   * each result, so finding a command also teaches where to find it next time.
+   */
+  where?: string;
   icon?: ReactNode;
   /** for tools only (reading the app's state): not listed in the palette */
   hidden?: boolean;
