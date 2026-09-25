@@ -84,6 +84,8 @@ export class DataHub {
   private workers = new Map<string, Worker>();
   private queue: { conn: string; frames: Frame[]; next: number; worker: Worker }[] = [];
   private draining = 0;
+  /** wells whose streamed log changed in this drain: their log view is rebuilt once, at its end */
+  private staleLogs = new Map<Well, LiveLog>();
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private lastRefresh = 0;
   private lastRebuild = 0;
@@ -296,6 +298,8 @@ export class DataHub {
         q.worker.postMessage({ type: 'ack' } satisfies ToWorker);
       }
     }
+    for (const [w, log] of this.staleLogs) w.logs = log.view(w.name);
+    this.staleLogs.clear();
     if (this.queue.length) this.schedule();
     else if (this.pendingFocus) this.focusWell(this.pendingFocus);
     this.planRefresh();
@@ -373,7 +377,7 @@ export class DataHub {
     // being drilled: build the 3D hole ahead of the bit, so it is rebuilt every ~50 m instead of every update
     w.buildAhead = BUILD_AHEAD;
     if (l.log.merge(f.key, f.channels, f.step)) l.dirty.curves = true;
-    w.logs = l.log.view(w.name);
+    this.staleLogs.set(w, l.log);
     if (f.key.length) l.dirtyFrom = Math.min(l.dirtyFrom, f.key[0]);
     l.lastDepth = Math.max(l.lastDepth, l.log.last);
     l.dirty.logs = true;

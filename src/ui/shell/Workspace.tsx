@@ -1,5 +1,5 @@
 import { Canvas, CanvasSurface } from '@tecton/react/tecton/canvas';
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Engine } from '../../scene/engine';
 import type { App } from '../app';
 import { useSignal } from '../signal';
@@ -24,7 +24,7 @@ const TIMELINE_H = 64;
  * The application: the top bar, then the workspace, where the 3D view fills
  * the stage and the panels, the overlays and the timeline float over it.
  */
-export function Workspace({ app, brand = true }: { app: App; brand?: boolean }) {
+export const Workspace = memo(function Workspace({ app, brand = true }: { app: App; brand?: boolean }) {
   const ready = useSignal(app.ready);
   const presenting = useSignal(app.presentation) !== null;
   const panels = usePanels(app);
@@ -45,7 +45,7 @@ export function Workspace({ app, brand = true }: { app: App; brand?: boolean }) 
       />
     </div>
   );
-}
+});
 
 /**
  * Feature tool windows open and close through their features; the workspace
@@ -99,6 +99,12 @@ function Viewport({ app }: { app: App }) {
 function Overlays({ app }: { app: App }) {
   const presentation = useSignal(app.presentation);
   const inspecting = useSignal(app.inspector) !== null;
+  // the same elements every time: opening the inspector re-renders these wrappers, not the widgets
+  const hud = useMemo(() => <Hud app={app} />, [app]);
+  const legend = useMemo(() => <Legend app={app} />, [app]);
+  const inspector = useMemo(() => <InspectorCard app={app} />, [app]);
+  const narrative = useMemo(() => <Narrative app={app} />, [app]);
+  const controls = useMemo(() => <ViewControls app={app} />, [app]);
   if (presentation !== null)
     return (
       <div className="absolute inset-x-0 bottom-8 flex justify-center px-4">
@@ -109,27 +115,21 @@ function Overlays({ app }: { app: App }) {
     <>
       <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto">
-          <Morph anchor="tl">
-            <Hud app={app} />
-          </Morph>
+          <Morph anchor="tl">{hud}</Morph>
         </div>
       </div>
       <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
         <div className="pointer-events-auto flex min-h-0 flex-col">
-          <Morph anchor="tr">{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</Morph>
+          <Morph anchor="tr">{inspecting ? inspector : legend}</Morph>
         </div>
       </div>
       <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
         <div className="pointer-events-auto">
-          <Morph anchor="bl">
-            <Narrative app={app} />
-          </Morph>
+          <Morph anchor="bl">{narrative}</Morph>
         </div>
       </div>
       <div className="absolute right-2 bottom-2">
-        <div className="pointer-events-auto">
-          <ViewControls app={app} />
-        </div>
+        <div className="pointer-events-auto">{controls}</div>
       </div>
     </>
   );

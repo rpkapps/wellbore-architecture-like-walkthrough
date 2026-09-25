@@ -31,8 +31,9 @@ import {
   SearchIcon,
   SlidersHorizontalIcon,
   UploadIcon,
+  type LucideIcon,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { memo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
 import type { PropertyMode } from '../../scene/wellbore';
@@ -105,139 +106,41 @@ export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<st
   );
 }
 
-function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
-  useRev(app.viewRev, app.wellRev);
-  const optional = useSignal(app.optionalModes);
-  const tools = useSignal(app.tools);
-  const L = useSignal(app.workspace.layout);
-  const ws = app.workspace;
-  const production = useSignal(app.productionOpen);
-  const data = useSignal(app.dataOpen);
-  const help = useSignal(app.helpOpen);
-  const personalise = useSignal(app.personaliseOpen);
-  const roomy = useMinWidth(1360);
-  const windowMenu = useWindowMenu(app, panels);
-  const workspaceMenu = useWorkspaceMenu(app, panels);
-  const e = app.engine;
-  const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
-  const tab = (t: 'interpretation' | 'features') => ws.isShown(t);
-  const leftOpen = L.left.stacks.length > 0 && !L.left.collapsed;
-  const logsOpen = ws.isShown('logs');
+/**
+ * Subscribes to one part of a signal (a flag, a count): the caller renders
+ * again only when that part changes, not on every change of the signal.
+ */
+function useSignalPart<T, R extends string | number | boolean | null>(s: Signal<T>, part: (v: T) => R): R {
+  return useSyncExternalStore(s.subscribe, () => part(s.value));
+}
+
+/** Is the panel open and showing? Re-renders the caller only when that flips, not on every layout change. */
+function useShown(app: App, id: string) {
+  return useSignalPart(app.workspace.layout, () => app.workspace.isShown(id));
+}
+
+/**
+ * The row itself subscribes to nothing: every control that shows state
+ * subscribes to just that state, so a layout change, a view change or a
+ * dialog opening re-renders one button, not the whole row with its tooltips.
+ */
+const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
   const fullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
   const palette = isMac ? '⌘K' : 'Ctrl K';
   return (
     <>
       <Divider />
-      <Select
-        aria-label="Active wellbore"
-        selectedKey={e.activeWell.id}
-        onSelectionChange={(k: Key | null) => {
-          if (k !== null && k !== e.activeWell.id) app.selectWell(String(k));
-        }}
-        // shrinks before anything leaves the row, down to a readable name
-        className="w-48 min-w-28 shrink"
-      >
-        <SelectTrigger size="sm" className="w-full min-w-0">
-          <WellIcon />
-          {/* the name alone, so a long one ends in an ellipsis */}
-          <SelectValue className="min-w-0">{({ selectedText }) => <span className="truncate">{selectedText}</span>}</SelectValue>
-        </SelectTrigger>
-        <SelectContent className="w-max min-w-64">
-          {app.selectableWells().map((w) => (
-            <SelectItem key={w.id} id={w.id} textValue={w.name}>
-              {w.name}
-              {w.liveSource ? (
-                <span className="text-success">live</span>
-              ) : w.userAdded ? (
-                <span className="text-muted-foreground">uploaded</span>
-              ) : (
-                !w.lasFile && <span className="text-muted-foreground">survey + production</span>
-              )}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <WellSelect app={app} />
       <Divider />
       <Overflow role="group" aria-label="View and commands" className="min-w-0 flex-1 flex-nowrap justify-end gap-1">
-        <OverflowItem
-          id="nav"
-          priority={9}
-          labelBehavior="keep"
-          tooltip={false}
-          overflow={<ChoiceMenu id="nav" label="Navigation" icon={<CompassIcon />} value={e.rig.mode} choices={NAV} onChange={(k) => app.setNav(k as NavMode)} />}
-        >
-          <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
-            <TabStrip aria-label="Navigation">
-              {NAV.map((n) => (
-                <Tab key={n.id} id={n.id}>
-                  {n.label}
-                </Tab>
-              ))}
-            </TabStrip>
-          </Tabs>
-        </OverflowItem>
+        <NavItem app={app} />
         <GroupDivider />
-        <OverflowItem
-          id="colour"
-          priority={8}
-          labelBehavior="keep"
-          tooltip={false}
-          overflow={
-            <ChoiceMenu
-              id="colour"
-              label="Colour by"
-              icon={<PaintBucketIcon />}
-              value={e.mode}
-              choices={props.map((p) => ({ id: p.id, label: p.label, icon: <Dot color={p.dot} /> }))}
-              onChange={(k) => app.setProperty(k as PropertyMode)}
-            />
-          }
-        >
-          {roomy ? (
-            <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
-              <TabStrip aria-label="Colour the wellbore by">
-                {props.map((p) => (
-                  <Tab key={p.id} id={p.id}>
-                    <Dot color={p.dot} />
-                    {p.label}
-                  </Tab>
-                ))}
-              </TabStrip>
-            </Tabs>
-          ) : (
-            <Select aria-label="Colour the wellbore by" selectedKey={e.mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
-              <SelectTrigger size="sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="w-max min-w-(--trigger-width)">
-                {props.map((p) => (
-                  <SelectItem key={p.id} id={p.id} textValue={p.label}>
-                    {/* the item's own row does not centre its children vertically */}
-                    <span className="flex items-center gap-2">
-                      <Dot color={p.dot} />
-                      {p.label}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </OverflowItem>
+        <ColourItem app={app} />
         {/* the spacer comes first, so the divider stays beside the commands, not before the gap */}
         <OverflowSpacer />
         <GroupDivider />
-        <OverflowItem id="interpretation" priority={6} label="Interpretation" icon={<FlaskConicalIcon />} onAction={() => app.showSidebar('interpretation', true)}>
-          <Button variant={tab('interpretation') ? 'secondary' : 'ghost'} size="sm">
-            <FlaskConicalIcon data-icon="inline-start" />
-            <OverflowLabel>Interpretation</OverflowLabel>
-          </Button>
-        </OverflowItem>
-        <OverflowItem id="features" priority={5} label="Features" icon={<SlidersHorizontalIcon />} onAction={() => app.showSidebar('features', true)}>
-          <Button variant={tab('features') ? 'secondary' : 'ghost'} size="sm">
-            <SlidersHorizontalIcon data-icon="inline-start" />
-            <OverflowLabel>Features</OverflowLabel>
-          </Button>
-        </OverflowItem>
+        <PanelItem app={app} id="interpretation" priority={6} label="Interpretation" Icon={FlaskConicalIcon} />
+        <PanelItem app={app} id="features" priority={5} label="Features" Icon={SlidersHorizontalIcon} />
         <OverflowItem id="production" priority={4} label="Production" icon={<ChartColumnIcon />} onAction={() => app.productionOpen.set(true)}>
           <Button variant="ghost" size="sm">
             <ChartColumnIcon data-icon="inline-start" />
@@ -251,10 +154,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
           </Button>
         </OverflowItem>
         <LiveItem app={app} />
-        {tools.length > 0 && <GroupDivider />}
-        {tools.map((t) => (
-          <Tool key={t.id} t={t} />
-        ))}
+        <Tools app={app} />
         <GroupDivider />
         <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
         <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
@@ -269,36 +169,200 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
             </OverflowLabel>
           </Button>
         </OverflowItem>
-        <MenuItem id="window" priority={5} label="Window" icon={<AppWindowIcon />} items={windowMenu} className="min-w-56" />
-        <MenuItem id="workspace" priority={5} label="Workspace" icon={<LayoutDashboardIcon />} items={workspaceMenu.items} className="min-w-60" />
-        <IconItem
-          id="left"
-          priority={7}
-          label="Left column: fold to icons / expand"
-          menuLabel={leftOpen ? 'Fold the left column' : 'Expand the left column'}
-          icon={<PanelLeftIcon />}
-          onAction={() => app.togglePanel('left')}
-          isActive={leftOpen}
-        />
-        <IconItem
-          id="logs"
-          priority={7}
-          label="Well logs"
-          menuLabel={logsOpen ? 'Hide well logs' : 'Show well logs'}
-          icon={<LogCurveIcon />}
-          onAction={() => app.togglePanel('right')}
-          isActive={logsOpen}
-        />
+        <WindowMenu app={app} panels={panels} />
+        <WorkspaceMenu app={app} panels={panels} />
+        <LeftToggle app={app} />
+        <LogsToggle app={app} />
       </Overflow>
-      {workspaceMenu.dialogs}
-      <ProductionSheet app={app} isOpen={production} onOpenChange={(o) => app.productionOpen.set(o)} />
-      <DataDialog app={app} isOpen={data} onOpenChange={(o) => app.dataOpen.set(o)} />
-      <HelpDialog app={app} isOpen={help} onOpenChange={(o) => app.helpOpen.set(o)} />
-      <PersonaliseDialog app={app} isOpen={personalise} onOpenChange={(o) => app.personaliseOpen.set(o)} />
+      <Opens s={app.productionOpen}>{(isOpen, onOpenChange) => <ProductionSheet app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
+      <Opens s={app.dataOpen}>{(isOpen, onOpenChange) => <DataDialog app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
+      <Opens s={app.helpOpen}>{(isOpen, onOpenChange) => <HelpDialog app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
+      <Opens s={app.personaliseOpen}>{(isOpen, onOpenChange) => <PersonaliseDialog app={app} isOpen={isOpen} onOpenChange={onOpenChange} />}</Opens>
       <CommandPalette app={app} />
       <ConnectDialog app={app} />
     </>
   );
+});
+
+/** A dialog opened by a signal; only it renders when the signal flips. */
+function Opens({ s, children }: { s: Signal<boolean>; children: (isOpen: boolean, onOpenChange: (o: boolean) => void) => ReactNode }) {
+  return children(useSignal(s), s.set.bind(s));
+}
+
+function WellSelect({ app }: { app: App }) {
+  useRev(app.wellRev);
+  const e = app.engine;
+  return (
+    <Select
+      aria-label="Active wellbore"
+      selectedKey={e.activeWell.id}
+      onSelectionChange={(k: Key | null) => {
+        if (k !== null && k !== e.activeWell.id) app.selectWell(String(k));
+      }}
+      // shrinks before anything leaves the row, down to a readable name
+      className="w-48 min-w-28 shrink"
+    >
+      <SelectTrigger size="sm" className="w-full min-w-0">
+        <WellIcon />
+        {/* the name alone, so a long one ends in an ellipsis */}
+        <SelectValue className="min-w-0">{({ selectedText }) => <span className="truncate">{selectedText}</span>}</SelectValue>
+      </SelectTrigger>
+      <SelectContent className="w-max min-w-64">
+        {app.selectableWells().map((w) => (
+          <SelectItem key={w.id} id={w.id} textValue={w.name}>
+            {w.name}
+            {w.liveSource ? (
+              <span className="text-success">live</span>
+            ) : w.userAdded ? (
+              <span className="text-muted-foreground">uploaded</span>
+            ) : (
+              !w.lasFile && <span className="text-muted-foreground">survey + production</span>
+            )}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function NavItem({ app }: { app: App }) {
+  useRev(app.viewRev);
+  const mode = app.engine.rig.mode;
+  return (
+    <OverflowItem
+      id="nav"
+      priority={9}
+      labelBehavior="keep"
+      tooltip={false}
+      overflow={<ChoiceMenu id="nav" label="Navigation" icon={<CompassIcon />} value={mode} choices={NAV} onChange={(k) => app.setNav(k as NavMode)} />}
+    >
+      <Tabs selectedKey={mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
+        <TabStrip aria-label="Navigation">
+          {NAV.map((n) => (
+            <Tab key={n.id} id={n.id}>
+              {n.label}
+            </Tab>
+          ))}
+        </TabStrip>
+      </Tabs>
+    </OverflowItem>
+  );
+}
+
+function ColourItem({ app }: { app: App }) {
+  useRev(app.viewRev);
+  const optional = useSignal(app.optionalModes);
+  const roomy = useMinWidth(1360);
+  const mode = app.engine.mode;
+  const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
+  return (
+    <OverflowItem
+      id="colour"
+      priority={8}
+      labelBehavior="keep"
+      tooltip={false}
+      overflow={
+        <ChoiceMenu
+          id="colour"
+          label="Colour by"
+          icon={<PaintBucketIcon />}
+          value={mode}
+          choices={props.map((p) => ({ id: p.id, label: p.label, icon: <Dot color={p.dot} /> }))}
+          onChange={(k) => app.setProperty(k as PropertyMode)}
+        />
+      }
+    >
+      {roomy ? (
+        <Tabs selectedKey={mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
+          <TabStrip aria-label="Colour the wellbore by">
+            {props.map((p) => (
+              <Tab key={p.id} id={p.id}>
+                <Dot color={p.dot} />
+                {p.label}
+              </Tab>
+            ))}
+          </TabStrip>
+        </Tabs>
+      ) : (
+        <Select aria-label="Colour the wellbore by" selectedKey={mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
+          <SelectTrigger size="sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="w-max min-w-(--trigger-width)">
+            {props.map((p) => (
+              <SelectItem key={p.id} id={p.id} textValue={p.label}>
+                {/* the item's own row does not centre its children vertically */}
+                <span className="flex items-center gap-2">
+                  <Dot color={p.dot} />
+                  {p.label}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </OverflowItem>
+  );
+}
+
+/** A panel's button (Interpretation, Features): highlighted while the panel shows. */
+function PanelItem({ app, id, priority, label, Icon }: { app: App; id: 'interpretation' | 'features'; priority: number; label: string; Icon: LucideIcon }) {
+  const shown = useShown(app, id);
+  return (
+    <OverflowItem id={id} priority={priority} label={label} icon={<Icon />} onAction={() => app.showSidebar(id, true)}>
+      <Button variant={shown ? 'secondary' : 'ghost'} size="sm">
+        <Icon data-icon="inline-start" />
+        <OverflowLabel>{label}</OverflowLabel>
+      </Button>
+    </OverflowItem>
+  );
+}
+
+function Tools({ app }: { app: App }) {
+  const tools = useSignal(app.tools);
+  return (
+    <>
+      {tools.length > 0 && <GroupDivider />}
+      {tools.map((t) => (
+        <Tool key={t.id} t={t} />
+      ))}
+    </>
+  );
+}
+
+function WindowMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
+  const items = useWindowMenu(app, panels);
+  return <MenuItem id="window" priority={5} label="Window" icon={<AppWindowIcon />} items={items} className="min-w-56" />;
+}
+
+function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
+  const menu = useWorkspaceMenu(app, panels);
+  return (
+    <>
+      <MenuItem id="workspace" priority={5} label="Workspace" icon={<LayoutDashboardIcon />} items={menu.items} className="min-w-60" />
+      {menu.dialogs}
+    </>
+  );
+}
+
+function LeftToggle({ app }: { app: App }) {
+  const open = useSignalPart(app.workspace.layout, (L) => L.left.stacks.length > 0 && !L.left.collapsed);
+  return (
+    <IconItem
+      id="left"
+      priority={7}
+      label="Left column: fold to icons / expand"
+      menuLabel={open ? 'Fold the left column' : 'Expand the left column'}
+      icon={<PanelLeftIcon />}
+      onAction={() => app.togglePanel('left')}
+      isActive={open}
+    />
+  );
+}
+
+function LogsToggle({ app }: { app: App }) {
+  const open = useShown(app, 'logs');
+  return <IconItem id="logs" priority={7} label="Well logs" menuLabel={open ? 'Hide well logs' : 'Show well logs'} icon={<LogCurveIcon />} onAction={() => app.togglePanel('right')} isActive={open} />;
 }
 
 const NAV: { id: NavMode; label: string }[] = [
@@ -476,12 +540,13 @@ function Tool({ t }: { t: ToolEntry }) {
 
 /** Live data: a pulsing dot while any source is streaming. */
 function LiveItem({ app }: { app: App }) {
-  const list = useSignal(app.hub.connections);
-  const live = list.filter((c) => (c.status === 'live' || c.status === 'connecting' || c.status === 'reconnecting') && !c.paused).length;
+  // connections change with every stats report: only the count of streaming ones matters here
+  const live = useSignalPart(app.hub.connections, (list) => list.filter((c) => (c.status === 'live' || c.status === 'connecting' || c.status === 'reconnecting') && !c.paused).length);
+  const shown = useShown(app, 'sources');
   const label = live ? `Live data (${live} streaming)` : 'Live data';
   return (
     <OverflowItem id="live" priority={4} label={label} icon={<RadioTowerIcon />} onAction={() => app.openSources()}>
-      <Button variant={app.workspace.isShown('sources') ? 'secondary' : 'ghost'} size="sm" aria-label={label}>
+      <Button variant={shown ? 'secondary' : 'ghost'} size="sm" aria-label={label}>
         <span className="relative flex" data-icon="inline-start">
           <RadioTowerIcon className="size-4" />
           {live > 0 && <span aria-hidden className="absolute -top-0.5 -right-0.5 size-1.5 animate-pulse rounded-full bg-success ring-2 ring-background" />}

@@ -19,7 +19,6 @@ export function Root() {
   const [boot, setBoot] = useState<Boot>({ stage: 'loading', msg: 'Initialising…', f: 0 });
   const [progress, setProgress] = useState({ msg: 'Initialising…', f: 0 });
   const [loader, setLoader] = useState<'shown' | 'leaving' | 'gone'>('shown');
-  const theme = resolvedTheme(useSignal(prefs));
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +78,13 @@ export function Root() {
     <>
       {boot.stage === 'running' && <Workspace app={boot.app} brand={loader === 'gone'} />}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
-      <Toaster theme={theme} position="top-center" offset={56} />
+      <Toasts />
     </>
   );
+}
+
+/** The toaster follows the theme; subscribing here keeps a preference change from re-rendering the app. */
+function Toasts() {
+  const theme = resolvedTheme(useSignal(prefs));
+  return <Toaster theme={theme} position="top-center" offset={56} />;
 }

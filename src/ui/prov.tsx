@@ -1,6 +1,6 @@
 import { Badge } from '@tecton/react/components/badge';
 import { cn } from 'cn';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 
 /** Where a value comes from; every value on screen carries one. */
 export type Provenance = 'measured' | 'calculated' | 'interpreted' | 'reconstructed' | 'definitive' | 'schematic' | 'user';
@@ -62,7 +62,7 @@ export function isProvenance(p: string | undefined): p is Provenance {
 }
 
 /** Provenance label. `short` prints the one-letter code (M, C, I …) for dense rows. */
-export function ProvBadge({ prov, short, children, className }: { prov: Provenance; short?: boolean; children?: ReactNode; className?: string }) {
+export const ProvBadge = memo(function ProvBadge({ prov, short, children, className }: { prov: Provenance; short?: boolean; children?: ReactNode; className?: string }) {
   // quiet: a small tinted tag, never louder than the data it qualifies
   return (
     <Badge
@@ -73,4 +73,4 @@ export function ProvBadge({ prov, short, children, className }: { prov: Provenan
       {children ?? (short ? SHORT[prov] : LABEL[prov])}
     </Badge>
   );
-}
+});

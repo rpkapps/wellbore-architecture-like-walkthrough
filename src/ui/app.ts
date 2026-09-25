@@ -86,6 +86,27 @@ export interface SceneDisplay {
 export type LayerPreset = 'default' | 'solid' | 'reservoir' | 'pay';
 
 /**
+ * A number that changes every frame (the camera heading). Unlike a Signal it
+ * renders nothing and asks for no redraw: subscribers write it straight to
+ * the DOM (the compass needle turns with the camera without a React render).
+ */
+export class FrameValue {
+  private listeners: ((v: number) => void)[] = [];
+  value = 0;
+
+  set(v: number) {
+    if (v === this.value) return;
+    this.value = v;
+    for (let i = 0; i < this.listeners.length; i++) this.listeners[i](v);
+  }
+
+  subscribe(l: (v: number) => void): () => void {
+    this.listeners = [...this.listeners, l];
+    return () => (this.listeners = this.listeners.filter((x) => x !== l));
+  }
+}
+
+/**
  * The application controller. It owns the engine, the feature modules and the
  * state the React chrome renders; the chrome subscribes to its signals and
  * calls its methods. Nothing here builds DOM.
@@ -115,7 +136,10 @@ export class App {
   readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
   private poseTextAt = 0;
   readonly pose = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
+  /** camera read-out text, updated at most ~15 times a second (and at once when the place or the mode changes) */
   readonly hud = new Signal<Hud>({ heading: 0, where: '', nav: '', camY: 0 });
+  /** the camera heading in degrees, every frame it turns: for the compass needle */
+  readonly heading = new FrameValue();
   readonly playing = new Signal(false);
   readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
   readonly inspector = new Signal<InspectorView | null>(null);
@@ -146,7 +170,6 @@ export class App {
   private zoneCache: ZoneSummary[] | null = null;
   private tourTimer: number | null = null;
   private chapterIdx = -1;
-  private lastHover = 0;
   private resolveReady!: () => void;
   /** resolves once the first well is on screen */
   readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
@@ -215,6 +238,7 @@ export class App {
     this.bindPicking();
     this.bindKeys();
     for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
+    this.frameModules = [...this.modules.values()].filter((m) => m.frame);
     void this.loadWell(this.field.primary.id, false).then(() => {
       const w = this.engine.activeWell;
       const hug = w.zones.find((z) => z.formationId === 'hugin');
@@ -814,16 +838,52 @@ export class App {
       const dist = Math.min(this.engine.camera.position.distanceTo(p.point) * 0.45, 900);
       rig.flyTo(p.point.clone().addScaledVector(dir, Math.max(25, dist)), p.point, 1.6);
     });
-    cv.addEventListener('pointermove', (e) => {
+    // hover: the latest pointer position is picked once per frame at most (and no more than
+    // ~20 times a second), never while a button is held (orbiting, or a drag from the chrome)
+    let hx = 0;
+    let hy = 0;
+    let hoverRaf = 0;
+    let hoverAt = 0;
+    const setHover = (md: number | null, over: boolean) => {
+      if (md !== this.logs.hoverMd) {
+        const wb = this.engine.wellbore;
+        if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
+        this.logs.hoverMd = md;
+        this.logs.invalidate();
+        this.engine.requestRender(200);
+      }
+      const c = over ? 'pointer' : '';
+      if (cv.style.cursor !== c) cv.style.cursor = c;
+    };
+    const cancel = () => {
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
+      hoverRaf = 0;
+    };
+    const hover = () => {
+      hoverRaf = 0;
       const now = performance.now();
-      if (now - this.lastHover < 120 || e.buttons) return;
-      this.lastHover = now;
-      const p = this.engine.pick(e.clientX, e.clientY, true);
-      const wb = this.engine.wellbore;
-      if (wb) wb.uniforms.uHoverMd.value = p?.md ?? -1e6;
-      this.logs.hoverMd = p?.md ?? null;
-      this.logs.invalidate();
-      cv.style.cursor = p ? 'pointer' : '';
+      if (now - hoverAt < 50) {
+        hoverRaf = requestAnimationFrame(hover);
+        return;
+      }
+      hoverAt = now;
+      const p = this.engine.pick(hx, hy, true);
+      setHover(p?.md ?? null, !!p);
+    };
+    cv.addEventListener(
+      'pointermove',
+      (e) => {
+        if (e.buttons) return cancel();
+        hx = e.clientX;
+        hy = e.clientY;
+        if (!hoverRaf) hoverRaf = requestAnimationFrame(hover);
+      },
+      { passive: true },
+    );
+    // the pointer went onto the chrome (or out of the window): nothing is hovered in the view
+    cv.addEventListener('pointerleave', () => {
+      cancel();
+      setHover(null, false);
     });
   }
 
@@ -855,15 +915,33 @@ export class App {
   }
 
   // ------------------------------------------------------------------ per-frame sync
+  /** the feature modules with a per-frame hook */
+  private frameModules: FeatureModule[] = [];
   private lastMdShown = -1;
+  // camera read-out state: recomputed only when the camera or the navigation mode changes
+  private readonly camDir = new THREE.Vector3();
+  private readonly camPos = new THREE.Vector3(NaN, NaN, NaN);
+  private readonly camQuat = new THREE.Quaternion(NaN, NaN, NaN, NaN);
+  private camY = 0;
+  private camAbove = false;
+  private navOf: [NavMode | null, GuidedView | null, string | null] = [null, null, null];
+  private nav = '';
+  private whereOf: [string | null | undefined, boolean] = [undefined, false];
+  private where = '';
+  private hudAt = 0;
+
+  /** Runs every animation frame, so its idle path allocates nothing and sets no signal that has not changed. */
   private frame(dt = 0.016) {
-    for (const m of this.modules.values())
-      if (m.frame && this.flags.on(m.id))
+    const mods = this.frameModules;
+    for (let i = 0; i < mods.length; i++) {
+      const m = mods[i];
+      if (this.flags.on(m.id))
         try {
-          m.frame(dt);
+          m.frame!(dt);
         } catch (err) {
           console.error(`feature ${m.id}`, err);
         }
+    }
     const e = this.engine;
     const rig = e.rig;
     const w = e.activeWell;
@@ -890,22 +968,32 @@ export class App {
       this.poseTextAt = now;
       this.poseText.set(this.pose.value);
     }
-    const dir = new THREE.Vector3();
-    e.camera.getWorldDirection(dir);
-    const heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI;
-    const cam = e.camera.position;
-    const where =
-      e.cameraFormation === 'sea'
-        ? 'In the water column'
-        : e.cameraFormation
-          ? `Inside ${FORMATION_BY_ID.get(e.cameraFormation)?.name ?? e.cameraFormation}`
-          : cam.y > 0
-            ? 'Above sea level'
-            : 'Outside model';
-    const nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
+    // the compass needle follows every frame (straight to the DOM); the text at a readable pace
+    const cam = e.camera;
+    if (!cam.position.equals(this.camPos) || !cam.quaternion.equals(this.camQuat)) {
+      this.camPos.copy(cam.position);
+      this.camQuat.copy(cam.quaternion);
+      cam.getWorldDirection(this.camDir);
+      this.heading.set(Math.round((Math.atan2(this.camDir.x, -this.camDir.z) * 1800) / Math.PI) / 10);
+      this.camY = Math.round(cam.position.y);
+      this.camAbove = cam.position.y > 0;
+    }
+    const nv = this.navOf;
+    if (nv[0] !== rig.mode || nv[1] !== rig.guidedView || nv[2] !== rig.exploreView) {
+      this.navOf = [rig.mode, rig.guidedView, rig.exploreView];
+      this.nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
+    }
+    const f = e.cameraFormation;
+    const above = this.camAbove;
+    if (this.whereOf[0] !== f || this.whereOf[1] !== above) {
+      this.whereOf = [f, above];
+      this.where = f === 'sea' ? 'In the water column' : f ? `Inside ${FORMATION_BY_ID.get(f)?.name ?? f}` : above ? 'Above sea level' : 'Outside model';
+    }
     const h = this.hud.value;
-    const hd = Math.round(heading);
-    const cy = Math.round(cam.y);
-    if (h.heading !== hd || h.camY !== cy || h.where !== where || h.nav !== nav) this.hud.set({ heading: hd, where, nav, camY: cy });
+    const hd = Math.round(this.heading.value);
+    if (h.where !== this.where || h.nav !== this.nav || ((h.heading !== hd || h.camY !== this.camY) && now - this.hudAt > 66)) {
+      this.hudAt = now;
+      this.hud.set({ heading: hd, where: this.where, nav: this.nav, camY: this.camY });
+    }
   }
 }

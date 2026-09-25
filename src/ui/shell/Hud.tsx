@@ -1,5 +1,6 @@
 import { Separator } from '@tecton/react/components/separator';
 import { Panel, PanelContent } from '@tecton/react/tecton/panel';
+import { useLayoutEffect, useRef } from 'react';
 import type { App } from '../app';
 import { fmt } from '../dom';
 import { useSignal } from '../signal';
@@ -27,32 +28,53 @@ export function Hud({ app }: { app: App }) {
 }
 
 function HudChip({ app, onExpand }: { app: App; onExpand: () => void }) {
-  const hud = useSignal(app.hud);
-  const p = useSignal(app.poseText);
   return (
     <OverlayChip name="position" onExpand={onExpand}>
-      <Compass heading={hud.heading} azi={p.azi} className="size-6" />
+      <Compass app={app} className="size-6" />
+      <ChipText app={app} />
+    </OverlayChip>
+  );
+}
+
+function ChipText({ app }: { app: App }) {
+  const p = useSignal(app.poseText);
+  return (
+    <>
       <span className="type-value whitespace-nowrap">
         {fmt.n(p.md, 0)} <span className="type-unit">MD</span> <span className="text-fg-3">·</span> {fmt.n(p.tvdss, 0)} <span className="type-unit">TVDSS</span> <span className="text-fg-3">·</span>{' '}
         {fmt.n(p.inc, 0)}°
       </span>
       <span className="type-caption hidden max-w-32 truncate @3xl:inline">{p.zone}</span>
-    </OverlayChip>
+    </>
   );
 }
 
 /**
  * Compass that turns with the camera: red north, and the well's azimuth as
- * the primary-coloured arrow.
+ * the primary-coloured arrow. It turns every frame the camera does, so the
+ * rotation is written straight to the SVG, not rendered.
  */
-function Compass({ heading, azi, className }: { heading: number; azi: number; className: string }) {
-  const hdg = fmt.n((heading + 360) % 360, 0);
+function Compass({ app, className }: { app: App; className: string }) {
+  const azi = useSignal(app.poseText).azi;
+  const rose = useRef<SVGGElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
+  useLayoutEffect(() => {
+    let said = NaN;
+    const turn = (h: number) => {
+      rose.current?.setAttribute('transform', `rotate(${-h} 21 21)`);
+      // the label names whole degrees: rewritten only when those change
+      const d = Math.round(h);
+      if (d !== said) svg.current?.setAttribute('aria-label', label((said = d), azi));
+    };
+    turn(app.heading.value);
+    return app.heading.subscribe(turn);
+  }, [app, azi]);
   const a = (azi * Math.PI) / 180;
   const tip = [21 + 15 * Math.sin(a), 21 - 15 * Math.cos(a)];
   return (
-    <svg viewBox="0 0 42 42" className={`${className} shrink-0`} role="img" aria-label={`Heading ${hdg}°, well azimuth ${fmt.n(azi, 0)}°`}>
+    <svg ref={svg} viewBox="0 0 42 42" className={`${className} shrink-0`} role="img" aria-label={label(app.heading.value, azi)}>
       <circle cx="21" cy="21" r="19.5" className="fill-muted stroke-border" />
-      <g transform={`rotate(${-heading} 21 21)`}>
+      <g ref={rose} transform={`rotate(${-app.heading.value} 21 21)`}>
         {[0, 90, 180, 270].map((d) => (
           <rect key={d} x="20.5" y="2.5" width="1" height="3" className="fill-muted-foreground/60" transform={`rotate(${d} 21 21)`} />
         ))}
@@ -66,29 +88,37 @@ function Compass({ heading, azi, className }: { heading: number; azi: number; cl
   );
 }
 
+const label = (heading: number, azi: number) => `Heading ${fmt.n((heading + 360) % 360, 0)}°, well azimuth ${fmt.n(azi, 0)}°`;
+
+/** The compass, then where the camera is; only the read-outs render as it moves (at most ~15 times a second). */
 function Camera({ app, end }: { app: App; end: React.ReactNode }) {
-  const hud = useSignal(app.hud);
-  const p = useSignal(app.poseText);
-  const hdg = fmt.n((hud.heading + 360) % 360, 0);
   return (
     <div className="flex items-center gap-2">
-      <Compass heading={hud.heading} azi={p.azi} className="size-9" />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="type-title truncate" title={hud.where}>
-          {hud.where}
-        </span>
-        {/* the navigation mode gives way first; the camera's elevation and heading always show */}
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="type-caption min-w-0 flex-1 truncate" title={hud.nav}>
-            {hud.nav}
-          </span>
-          <span className="type-caption shrink-0 font-mono tabular-nums" title="Camera elevation and heading">
-            {hud.camY >= 0 ? '+' : ''}
-            {fmt.n(hud.camY, 0)} m · {hdg}°
-          </span>
-        </span>
-      </div>
+      <Compass app={app} className="size-9" />
+      <CameraText app={app} />
       <div className="self-start">{end}</div>
+    </div>
+  );
+}
+
+function CameraText({ app }: { app: App }) {
+  const hud = useSignal(app.hud);
+  const hdg = fmt.n((hud.heading + 360) % 360, 0);
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <span className="type-title truncate" title={hud.where}>
+        {hud.where}
+      </span>
+      {/* the navigation mode gives way first; the camera's elevation and heading always show */}
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="type-caption min-w-0 flex-1 truncate" title={hud.nav}>
+          {hud.nav}
+        </span>
+        <span className="type-caption shrink-0 font-mono tabular-nums" title="Camera elevation and heading">
+          {hud.camY >= 0 ? '+' : ''}
+          {fmt.n(hud.camY, 0)} m · {hdg}°
+        </span>
+      </span>
     </div>
   );
 }
