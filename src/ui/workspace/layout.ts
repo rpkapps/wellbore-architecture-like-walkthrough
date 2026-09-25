@@ -271,9 +271,13 @@ export class Workspace {
   }
 
   activate(id: string) {
-    const M = clone(this.value);
-    const p = locate(M, id);
-    if (!p) return;
+    const L = this.value;
+    const at = locate(L, id);
+    if (!at) return;
+    // already showing (and in front): nothing to render
+    if (at.kind === 'dock' ? at.stack.active === id && !L[at.zone].collapsed : at.win.active === id && at.index === L.floating.length - 1) return;
+    const M = clone(L);
+    const p = locate(M, id)!;
     if (p.kind === 'dock') {
       p.stack.active = id;
       M[p.zone].collapsed = false;

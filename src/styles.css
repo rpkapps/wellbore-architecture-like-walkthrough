@@ -301,8 +301,9 @@ html[data-vt-loader] .brand-logo {
 
 /* Panels and overlays are translucent glass. A view-transition snapshot
    cannot carry a backdrop blur, so the moving box itself blurs what is
-   behind it, keeps the rounded corners and clips the snapshot: the glass
-   never drops out or lingers. */
+   behind it (when a blur is set: a backdrop filter is costly over the 3D
+   view even at 0px), keeps the rounded corners and clips the snapshot: the
+   glass never drops out or lingers. */
 ::view-transition-group(.ws-morph),
 ::view-transition-group(.ws-enter),
 ::view-transition-group(.ws-exit),
@@ -312,6 +313,14 @@ html[data-vt-loader] .brand-logo {
 ::view-transition-group(.ov-br) {
   border-radius: var(--radius-lg);
   overflow: clip;
+}
+:root[data-panel-blur]::view-transition-group(.ws-morph),
+:root[data-panel-blur]::view-transition-group(.ws-enter),
+:root[data-panel-blur]::view-transition-group(.ws-exit),
+:root[data-panel-blur]::view-transition-group(.ov-tl),
+:root[data-panel-blur]::view-transition-group(.ov-tr),
+:root[data-panel-blur]::view-transition-group(.ov-bl),
+:root[data-panel-blur]::view-transition-group(.ov-br) {
   backdrop-filter: blur(var(--panel-blur));
 }
 /* a group that moves or resizes: the box glides, its new content is shown at
