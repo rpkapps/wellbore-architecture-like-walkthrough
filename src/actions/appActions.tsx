@@ -11,6 +11,7 @@ import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
 import { PRESETS, type PresetId } from '../ui/workspace/layout';
+import { describeLocation } from '../ui/workspace/where';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -27,6 +28,44 @@ const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
 const NUMERIC_PARAMS = (Object.keys(DEFAULT_PARAMS) as (keyof PetroParams)[]).filter((k) => typeof DEFAULT_PARAMS[k] === 'number') as [string, ...string[]];
+
+/**
+ * The features that bring a tool window, by its panel id: its title, and words
+ * people search for it by. Listed as panels even while the feature is off.
+ */
+const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: string[] }>> = {
+  geosteer: { title: 'Geosteering', keywords: ['distance to boundary', 'dtb', 'target', 'landing'] },
+  section: { title: 'Section along the well', keywords: ['cross-section', 'profile'] },
+  correlation: { title: 'Well correlation', keywords: ['tops', 'flatten', 'side by side'] },
+  crossplot: { title: 'Crossplot', keywords: ['porosity', 'density', 'neutron', 'rhob', 'nphi', 'pickett', 'buckles', 'scatter'] },
+  mapview: { title: 'Map', keywords: ['plan view', 'top view'] },
+  simulation: { title: 'Reservoir simulation', keywords: ['eclipse', 'pressure', 'saturation', 'grid'] },
+  views: { title: 'Saved views', keywords: ['bookmarks', 'presentation', 'camera'] },
+};
+
+type PanelPlace = { id: string; title: string; location: string; about?: string; keywords?: string[] };
+
+/**
+ * Every panel there is, with where it is now in words ("Left column · tab 2",
+ * "Hidden"), including the windows of features that are off: the palette's
+ * "where is it?" answer, and what `panels.reveal` can bring into view.
+ */
+function panelPlaces(app: App): PanelPlace[] {
+  const L = app.workspace.layout.value;
+  const all = app.workspace.hidden.value;
+  const out: PanelPlace[] = Object.entries(panelIds()).map(([id, title]) => {
+    const where = describeLocation(L, id);
+    return { id, title, location: all && where !== 'Hidden' ? `${where} · all panels hidden (Tab)` : where };
+  });
+  for (const [id, w] of Object.entries(FEATURE_WINDOWS) as [FeatureId, { title: string; keywords: string[] }][]) {
+    const about = FEATURES.find((f) => f.id === id)?.desc;
+    const off = !app.flags.on(id);
+    const p = out.find((x) => x.id === id);
+    if (p) Object.assign(p, { about, keywords: w.keywords, location: off ? 'Hidden · feature off' : p.location });
+    else out.push({ id, title: w.title, about, keywords: w.keywords, location: 'Hidden · feature off' });
+  }
+  return out;
+}
 
 /** Every panel that can be shown now: the built-in ones and the open features' tool windows. */
 function panelIds(): Record<string, string> {
@@ -69,6 +108,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Play / pause the walk along the well',
       description: 'Starts or stops travelling down the active well in guided mode.',
       category: 'Navigate',
+      where: 'Timeline › Play',
       shortcut: 'Space',
       keywords: ['walk', 'animate', 'travel'],
       run: (app) => (app.togglePlay(), { playing: app.engine.rig.playing }),
@@ -78,6 +118,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Navigation',
       description: 'Guided follows the well path (tunnel, chase or orbit camera); Explore frees the camera to orbit or fly.',
       category: 'Navigate',
+      where: 'Top bar › Navigation',
       input: z.object({ mode: z.enum(['guided', 'explore']) }),
       choices: (app) => [
         { label: 'Guided', input: { mode: 'guided' }, current: app.engine.rig.mode === 'guided' },
@@ -90,6 +131,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Guided camera',
       description: 'Where the camera sits in guided mode: inside the hole, chasing the bit, or orbiting it.',
       category: 'Navigate',
+      where: '3D view › Camera',
       input: z.object({ view: z.enum(['tunnel', 'chase', 'orbit']) }),
       choices: (app) =>
         (
@@ -109,6 +151,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Go to depth',
       description: 'Travels the camera to a measured depth (MD, metres) along the active well.',
       category: 'Navigate',
+      where: 'Timeline',
       keywords: ['md', 'jump', 'travel'],
       input: z.object({ md: z.number().min(0).meta({ description: 'Measured depth along the active well, in metres' }) }),
       prompt: {
@@ -131,6 +174,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Go to chapter',
       description: 'Jumps to a chapter of the guided story along the well (casing points, reservoir entry, TD…).',
       category: 'Navigate',
+      where: 'Timeline › Chapters',
       shortcut: 'N / P',
       input: z.object({ index: z.number().int().min(0) }),
       choices: (app) => app.chapters.map((c, i) => ({ label: `${i + 1}. ${c.title}`, input: { index: i }, current: app.chapter.value?.index === i })),
@@ -141,6 +185,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Start the auto tour',
       description: 'Plays every chapter in turn; any interaction pauses it.',
       category: 'Navigate',
+      where: 'Story card › Auto tour',
       run: (app) => app.startTour(),
     }),
     A({
@@ -148,6 +193,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Field overview',
       description: 'Flies the camera out to the whole Volve field.',
       category: 'Navigate',
+      where: 'Top bar › Field overview',
       keywords: ['home', 'reset camera', 'zoom out'],
       run: (app) => app.overview(),
     }),
@@ -156,6 +202,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Open well',
       description: 'Makes another wellbore the active one (its logs, trajectory and interpretation).',
       category: 'Navigate',
+      where: 'Top bar › Well',
       keywords: ['wellbore', 'switch'],
       input: z.object({ id: z.string().meta({ description: 'Well id, from the choices' }) }),
       choices: (app) => app.selectableWells().map((w) => ({ label: w.name, input: { id: w.id }, current: w.id === app.engine.activeWell.id })),
@@ -171,6 +218,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Colour the wellbore by',
       description: 'The property painted on the borehole wall and halo: resistivity, hydrocarbons (pore fluids), lithology, or drilling speed.',
       category: 'View',
+      where: 'Top bar › Colour by',
       shortcut: 'V',
       input: z.object({ mode: z.enum(PROPERTY_MODES) }),
       choices: (app) =>
@@ -185,6 +233,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Resistivity colours',
       description: 'The colour map for resistivity in 3D and in the log tracks.',
       category: 'View',
+      where: 'Scene › Display',
       input: z.object({ map: z.enum(COLORMAPS.map((c) => c.id) as [ColormapName, ...ColormapName[]]) }),
       choices: (app) => COLORMAPS.map((c) => ({ label: c.label, input: { map: c.id }, current: app.colormapName === c.id })),
       run: (app, { map }) => app.setColormap(map),
@@ -194,6 +243,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Scene layers',
       description: 'Shows or hides labels, the other Volve wellbores, the sea and platform, structural contours, and the glow effect.',
       category: 'Scene',
+      where: 'Scene › Layers',
       input: z.object({ labels: z.boolean().optional(), otherWells: z.boolean().optional(), sea: z.boolean().optional(), contours: z.boolean().optional(), postFx: z.boolean().optional() }),
       choices: (app) =>
         (
@@ -213,6 +263,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Layer preset',
       description: 'Sets every formation’s visibility and opacity at once.',
       category: 'Scene',
+      where: 'Scene › Layers › Presets',
       input: z.object({ preset: z.enum(['default', 'solid', 'reservoir', 'pay']) }),
       choices: () =>
         (
@@ -230,6 +281,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Formation visibility and opacity',
       description: 'Shows, hides or sets the opacity (0–1) of one formation of the structural model.',
       category: 'Scene',
+      where: 'Scene › Layers',
       input: z.object({ formation: z.enum(FORMATIONS), visible: z.boolean().optional(), opacity: z.number().min(0).max(1).optional() }),
       run: (app, { formation, visible, opacity }) => app.setLayer(formation, { visible, opacity }),
     }),
@@ -238,6 +290,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Isolate formation',
       description: 'Fades every other formation to a ghost so one stands alone; without a formation, shows them all again.',
       category: 'Scene',
+      where: 'Scene › Layers › formation ⋯',
       input: z.object({ formation: z.enum(FORMATIONS).nullable() }),
       choices: (app) => [
         ...(app.engine.geology.isolatedId ? [{ label: 'Show all formations', input: { formation: null } }] : []),
@@ -250,6 +303,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Show formation details',
       description: 'Opens the details card of a formation (age, lithology, depths, pay in the active well).',
       category: 'Scene',
+      where: 'Scene › Layers › formation ⋯',
       input: z.object({ formation: z.enum(FORMATIONS) }),
       choices: () => MODEL_HORIZONS.map((id) => ({ label: formationName(id), input: { formation: id } })),
       run: (app, { formation }) => app.inspectFormation(formation),
@@ -261,6 +315,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Show panel',
       description: 'Opens a panel (or brings it to the front) where it was last docked.',
       category: 'Panels',
+      where: 'Top bar › Window',
       input: z.object({ panel: z.string().meta({ description: 'Panel id, from the choices' }) }),
       choices: (app) => Object.entries(panelIds()).map(([panel, label]) => ({ label, input: { panel }, current: app.workspace.isShown(panel) })),
       run: (app, { panel }) => {
@@ -271,10 +326,44 @@ export function appActions(): AnyAction<App>[] {
       },
     }),
     A({
+      id: 'panels.reveal',
+      title: 'Go to panel',
+      description: 'Says where a panel is (its column and tab, floating, or hidden) and brings it into view: unfolds its column, brings its tab to the front, and turns its feature on if needed.',
+      category: 'Panels',
+      where: 'Top bar › Window',
+      keywords: ['where', 'find', 'locate', 'reveal', 'panel', 'window', 'tab'],
+      input: z.object({ panel: z.string().meta({ description: 'Panel id, from the choices' }) }),
+      choices: (app) =>
+        panelPlaces(app).map(({ id, title, location, about, keywords = [] }) => ({
+          label: title,
+          input: { panel: id },
+          detail: location,
+          description: about,
+          keywords: ['panel', 'window', ...keywords],
+          current: app.workspace.isShown(id),
+        })),
+      run: (app, { panel }) => {
+        const place = panelPlaces(app).find((p) => p.id === panel);
+        if (!place) throw new Error(`No panel "${panel}".`);
+        const tool = toolWindows.value.find((w) => w.opts.id === panel);
+        // a feature that is off: turning it on opens its window (as the Window menu does)
+        const feature = panel in FEATURE_WINDOWS && !app.flags.on(panel as FeatureId);
+        withTransition(() => {
+          if (app.workspace.hidden.value) app.workspace.hidden.set(false);
+          if (feature) return;
+          if (tool) tool.show();
+          else if (panel in BUILTIN_PANELS) app.workspace.open(panel);
+        });
+        if (feature) app.flags.set(panel as FeatureId, true);
+        return { panel, was: place.location, now: describeLocation(app.workspace.layout.value, panel) };
+      },
+    }),
+    A({
       id: 'panels.close',
       title: 'Close panel',
       description: 'Closes a panel.',
       category: 'Panels',
+      where: 'Panel tab › ×',
       input: z.object({ panel: z.string() }),
       choices: (app) =>
         Object.entries(panelIds())
@@ -291,6 +380,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Hide / show all panels',
       description: 'Clears every panel off the 3D view, or brings them back.',
       category: 'Panels',
+      where: 'Top bar › Window',
       shortcut: 'Tab',
       run: (app) => withTransition(() => app.workspace.hidden.set(!app.workspace.hidden.value)),
     }),
@@ -299,6 +389,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Overlays',
       description: 'Collapses the widgets over the 3D view (position, colour key, story) to one-line chips, or expands them.',
       category: 'Panels',
+      where: 'Personalise › Overlays',
       input: z.object({ collapsed: z.boolean() }),
       choices: () => [
         { label: 'Collapse all', input: { collapsed: true } },
@@ -311,6 +402,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Workspace',
       description: 'Arranges the panels for a task, or as a saved workspace.',
       category: 'Workspace',
+      where: 'Top bar › Workspace',
       input: z.object({ id: z.string().meta({ description: 'A built-in layout (walkthrough, petrophysics, geosteering) or a saved workspace id' }) }),
       choices: (app) => [
         ...PRESETS.map((p) => ({ label: p.label, input: { id: p.id }, current: app.workspace.current.value === p.id })),
@@ -328,6 +420,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Save workspace as',
       description: 'Saves the current panel layout under a name (a name in use is replaced).',
       category: 'Workspace',
+      where: 'Top bar › Workspace',
       input: z.object({ name: z.string().min(1).max(60) }),
       prompt: { label: 'Workspace name', placeholder: 'e.g. Logs review', parse: (t) => (t.trim() ? { name: t.trim() } : null) },
       run: (app, { name }) => ({ id: app.workspace.saveAs(name) }),
@@ -337,6 +430,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Delete saved workspace',
       description: 'Removes one of your saved workspaces.',
       category: 'Workspace',
+      where: 'Top bar › Workspace',
       needsApproval: true,
       input: z.object({ id: z.string() }),
       choices: (app) => app.workspace.saved.value.map((w) => ({ label: w.name, input: { id: w.id } })),
@@ -349,8 +443,9 @@ export function appActions(): AnyAction<App>[] {
       title: 'Feature',
       description: 'Turns an optional feature (geosteering, cross-section, crossplots, simulation…) on or off.',
       category: 'Features',
+      where: 'Features',
       input: z.object({ feature: z.enum(FEATURE_IDS), on: z.boolean() }),
-      choices: (app) => FEATURES.map((f) => ({ label: `${app.flags.on(f.id) ? 'Turn off' : 'Turn on'} ${f.name}`, input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group] })),
+      choices: (app) => FEATURES.map((f) => ({ label: `${app.flags.on(f.id) ? 'Turn off' : 'Turn on'} ${f.name}`, input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group], description: f.desc })),
       run: (app, { feature, on }) => app.flags.set(feature, on),
     }),
     A({
@@ -358,6 +453,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Tool',
       description: 'Runs a command of an enabled feature (measure, snapshot, crossplot type…).',
       category: 'Features',
+      where: 'Top bar › Tools',
       input: z.object({ tool: z.string(), item: z.string().optional() }),
       choices: (app) =>
         app.tools.value.flatMap((t) =>
@@ -381,6 +477,7 @@ export function appActions(): AnyAction<App>[] {
       description:
         'Changes a petrophysical parameter of the active well (Vsh from GR, porosity, Archie / Simandoux saturation, net pay cut-offs) and re-interprets. Keys: grClean, grShale, rhoMa, rhoFl, a, m, n, rw, rwTemp, rsh, cutVsh, cutPhi, cutSw.',
       category: 'Interpretation',
+      where: 'Interpretation',
       input: z.object({ key: z.enum(NUMERIC_PARAMS), value: z.number() }),
       prompt: {
         label: 'Parameter and value',
@@ -403,6 +500,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Export interpreted curves (CSV)',
       description: 'Downloads Vsh, porosity, saturation and the pay flag of the active well as CSV.',
       category: 'Interpretation',
+      where: 'Interpretation › Export curves',
       enabled: (app) => !!app.engine.activeWell.petro,
       run: (app) => exportCsv(app),
     }),
@@ -413,6 +511,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Import data',
       description: 'Opens the import dialog for LAS, CSV and XLSX files.',
       category: 'Data',
+      where: 'Top bar › Data',
       keywords: ['upload', 'las', 'csv', 'xlsx'],
       run: (app) => app.dataOpen.set(true),
     }),
@@ -421,6 +520,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Production data',
       description: 'Opens the monthly production sheet of the field.',
       category: 'Data',
+      where: 'Top bar › Production',
       run: (app) => app.productionOpen.set(true),
     }),
 
@@ -430,6 +530,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Live data',
       description: 'Shows the live and streamed data connections: their state, rate and messages.',
       category: 'Data',
+      where: 'Top bar › Live data',
       keywords: ['stream', 'realtime', 'real-time', 'connections', 'sources', 'kafka', 'witsml'],
       run: (app) => app.openSources(),
     }),
@@ -438,6 +539,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Connect a data source',
       description: 'Opens the connect dialog: files, URLs, REST polling, server-sent events, WebSocket, MQTT, or the relay (Kafka, WITSML, ETP, OSDU, TCP).',
       category: 'Data',
+      where: 'Live data › Connect',
       keywords: ['connect', 'stream', 'kafka', 'mqtt', 'websocket', 'witsml', 'etp', 'osdu', 'api', 'realtime'],
       run: (app) => app.connectRequest.set({}),
     }),
@@ -446,6 +548,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Live charts',
       description: 'Shows the strip charts of readings arriving by time (drilling parameters, sensors).',
       category: 'Data',
+      where: 'Top bar › Live data',
       keywords: ['strip chart', 'realtime', 'drilling parameters', 'trend'],
       run: (app) => app.openLive(),
     }),
@@ -454,6 +557,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Replay a well live',
       description: 'Drills a Volve well again as a live feed (rig readings, MWD sensors behind the bit, surveys every stand), faster than real time. Creates a new well that grows as it is drilled.',
       category: 'Data',
+      where: 'Data › Replay a well live',
       keywords: ['simulate', 'demo', 'drilling', 'realtime', 'stream'],
       input: z.object({
         well: z.string().optional().describe('Well id or name (default: the main well)'),
@@ -555,6 +659,7 @@ export function appActions(): AnyAction<App>[] {
         title,
         description,
         category: 'Data',
+        where: 'Live data › connection ⋯',
         needsApproval: verb === 'remove',
         input: z.object({ id: z.string().describe('Connection id (see data.list)') }),
         enabled: (app) => app.hub.connections.value.some(when),
@@ -571,6 +676,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Follow the bit',
       description: 'While a well is being drilled, keep the view and the log tracks at the bottom of the hole.',
       category: 'Data',
+      where: 'Live data › Follow the bit',
       input: z.object({ on: z.boolean() }),
       choices: (app) => [
         { label: 'On', input: { on: true }, current: app.hub.followBit.value },
@@ -585,6 +691,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Theme',
       description: 'Dark, light, or follow the system setting.',
       category: 'Preferences',
+      where: 'Personalise',
       keywords: ['dark mode', 'light mode', 'appearance'],
       input: z.object({ theme: z.enum(['dark', 'light', 'system']) }),
       choices: () => (['dark', 'light', 'system'] as Theme[]).map((theme) => ({ label: theme[0].toUpperCase() + theme.slice(1), input: { theme }, current: prefs.value.theme === theme })),
@@ -595,6 +702,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Density',
       description: 'The size of text and controls.',
       category: 'Preferences',
+      where: 'Personalise',
       input: z.object({ density: z.enum(['compact', 'default', 'comfortable']) }),
       choices: () =>
         (['compact', 'default', 'comfortable'] as Density[]).map((density) => ({ label: density[0].toUpperCase() + density.slice(1), input: { density }, current: prefs.value.density === density })),
@@ -605,6 +713,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Accent colour',
       description: 'The colour of the cursor, playhead and selections.',
       category: 'Preferences',
+      where: 'Personalise',
       input: z.object({ accent: z.enum(ACCENTS.map((a) => a.id) as [Accent, ...Accent[]]) }),
       choices: () => ACCENTS.map((a) => ({ label: a.label, input: { accent: a.id }, current: prefs.value.accent === a.id })),
       run: (_app, { accent }) => setPrefs({ accent }),
@@ -614,6 +723,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Personalise…',
       description: 'Opens the personalisation dialog (theme, density, accent, panel glass, labels, motion).',
       category: 'Preferences',
+      where: 'Top bar › Personalise',
       run: (app) => app.personaliseOpen.set(true),
     }),
     A({
@@ -621,6 +731,8 @@ export function appActions(): AnyAction<App>[] {
       title: 'Controls and data notes',
       description: 'Opens the help: keys, mouse controls and where the data comes from.',
       category: 'Help',
+      where: 'Top bar › Help',
+      keywords: ['help', 'shortcuts', 'keys', 'keyboard', 'mouse', 'controls', 'sources', 'licence'],
       shortcut: '?',
       run: (app) => app.helpOpen.set(true),
     }),
@@ -629,6 +741,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Full screen',
       description: 'Enters or leaves full screen.',
       category: 'View',
+      where: 'Top bar › Full screen',
       run: () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()),
     }),
   ];
