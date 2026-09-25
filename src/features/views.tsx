@@ -1,11 +1,10 @@
 import { Button } from '@tecton/react/components/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
 import { Input } from '@tecton/react/components/input';
-import { Item, ItemActions, ItemContent, ItemGroup, ItemMedia } from '@tecton/react/components/item';
 import { Progress } from '@tecton/react/components/progress';
 import { ScrollArea } from '@tecton/react/components/scroll-area';
 import { Panel, PanelContent } from '@tecton/react/tecton/panel';
-import { BookmarkIcon, BookmarkPlusIcon, CameraIcon, ChevronUpIcon, PlayIcon, PresentationIcon, Trash2Icon } from 'lucide-react';
+import { BookmarkIcon, BookmarkPlusIcon, CameraIcon, PlayIcon, PresentationIcon, Trash2Icon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import type { GuidedView, NavMode } from '../scene/cameraRig';
@@ -16,6 +15,7 @@ import { CompactSelect, Note } from '../ui/controls';
 import { ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
 import { Rev } from '../ui/signal';
+import { SortableList } from '../ui/sortable';
 import type { FeatureModule } from './registry';
 
 export interface SavedView {
@@ -170,17 +170,51 @@ export class ViewsFeature implements FeatureModule {
     const o = e.overviewPose();
     const box = { ...e.geology.fullBox };
     const layers = (op: (id: string) => number, vis: (id: string) => boolean = () => true): [string, boolean, number][] => [...e.geology.state.keys()].map((id) => [id, vis(id), op(id)]);
-    const glass: Record<string, number> = { nordland: 0.2, utsira: 0.22, hordaland: 0.14, ty: 0.18, ekofisk: 0.3, hod: 0.26, draupne: 0.55, heather: 0.5, hugin: 0.92, sleipner: 0.75, skagerrak: 0.8, smithbank: 0.85 };
+    const glass: Record<string, number> = {
+      nordland: 0.2,
+      utsira: 0.22,
+      hordaland: 0.14,
+      ty: 0.18,
+      ekofisk: 0.3,
+      hod: 0.26,
+      draupne: 0.55,
+      heather: 0.5,
+      hugin: 0.92,
+      sleipner: 0.75,
+      skagerrak: 0.8,
+      smithbank: 0.85,
+    };
     const hug = w.zones.find((z) => z.formationId === 'hugin');
     const land = hug ? hug.topMD : w.tdMD * 0.7;
     const base = { wellId: w.id, guidedView: 'chase' as GuidedView, exploreView: 'orbit' as const, box, mode: 'resistivity' as PropertyMode };
-    const mk = (p: Partial<SavedView>): SavedView => ({ id: Math.random().toString(36).slice(2, 9), caption: '', nav: 'explore', md: land, pos: o.pos.toArray() as [number, number, number], target: o.target.toArray() as [number, number, number], layers: layers((id) => glass[id] ?? 1), ...base, ...p });
+    const mk = (p: Partial<SavedView>): SavedView => ({
+      id: Math.random().toString(36).slice(2, 9),
+      caption: '',
+      nav: 'explore',
+      md: land,
+      pos: o.pos.toArray() as [number, number, number],
+      target: o.target.toArray() as [number, number, number],
+      layers: layers((id) => glass[id] ?? 1),
+      ...base,
+      ...p,
+    });
     this.views.push(
       mk({ caption: `The ${app.field.meta.name} field: ${app.field.wells.length} detailed wellbores beneath a jack-up in ${app.field.meta.waterDepth.toFixed(0)} m of water`, md: 0 }),
       mk({ caption: 'The platform and the conductor entering the seabed', md: 120, pos: [-160, 70, 190], target: [0, -40, 0] }),
       mk({ caption: `${w.name}: landing in the Hugin reservoir — measured resistivity`, nav: 'guided', guidedView: 'chase', md: land - 40 }),
       mk({ caption: 'Inside the hole across the reservoir — interpreted hydrocarbons (calculated)', nav: 'guided', guidedView: 'tunnel', md: land + 30, mode: 'hydrocarbon' }),
-      mk({ caption: 'Reservoir focus: the Hugin sandstone with the overburden removed', md: land, box: { ...box, stripTo: 2750 }, layers: layers((id) => (id === 'hugin' ? 0.85 : 0.25), (id) => ['draupne', 'heather', 'hugin', 'sleipner'].includes(id)), mode: 'hydrocarbon', pos: [o.target.x - 900, -2300, o.target.z + 1100], target: [o.target.x + 300, -2900, o.target.z] }),
+      mk({
+        caption: 'Reservoir focus: the Hugin sandstone with the overburden removed',
+        md: land,
+        box: { ...box, stripTo: 2750 },
+        layers: layers(
+          (id) => (id === 'hugin' ? 0.85 : 0.25),
+          (id) => ['draupne', 'heather', 'hugin', 'sleipner'].includes(id),
+        ),
+        mode: 'hydrocarbon',
+        pos: [o.target.x - 900, -2300, o.target.z + 1100],
+        target: [o.target.x + 300, -2900, o.target.z],
+      }),
     );
     this.changed();
   }
@@ -226,29 +260,32 @@ export class ViewsFeature implements FeatureModule {
               </EmptyHeader>
             </Empty>
           ) : (
-            <ItemGroup aria-label="Saved views">
-              {this.views.map((v, i) => (
-                <Item key={v.id} role="listitem" size="xs" variant="outline">
-                  <ItemMedia>
-                    <span className="font-mono text-xs text-muted-foreground">{num(i)}</span>
-                  </ItemMedia>
-                  <ItemContent className="min-w-0">
-                    <Input
-                      aria-label={`Caption of view ${num(i)}, shown in the presentation`}
-                      variant="filled"
-                      defaultValue={v.caption}
-                      onChange={(e) => {
-                        v.caption = e.target.value;
-                        this.persist();
-                      }}
-                    />
-                  </ItemContent>
-                  <ItemActions className="gap-0.5">
+            <SortableList
+              label="Saved views"
+              items={this.views}
+              itemLabel={(v) => v.caption || 'Untitled view'}
+              deps={[this.views.length, this.rev.value]}
+              onReorder={(ids) => {
+                this.views = ids.map((id) => this.views.find((v) => v.id === id)!);
+                this.changed();
+              }}
+            >
+              {(v, i) => (
+                <>
+                  <span className="w-5 shrink-0 text-center font-mono text-xs text-muted-foreground">{num(i)}</span>
+                  <Input
+                    aria-label={`Caption of view ${num(i)}, shown in the presentation`}
+                    variant="filled"
+                    className="h-7 min-w-0 flex-1"
+                    defaultValue={v.caption}
+                    onChange={(e) => {
+                      v.caption = e.target.value;
+                      this.persist();
+                    }}
+                  />
+                  <div className="flex shrink-0 items-center gap-0.5">
                     <IconButton label={`Go to view ${num(i)}`} size="icon-xs" onPress={() => void this.apply(v)}>
                       <PlayIcon />
-                    </IconButton>
-                    <IconButton label={`Move view ${num(i)} up`} size="icon-xs" isDisabled={i === 0} onPress={() => this.move(i, -1)}>
-                      <ChevronUpIcon />
                     </IconButton>
                     <IconButton
                       label={`Replace view ${num(i)} with the current view`}
@@ -270,10 +307,10 @@ export class ViewsFeature implements FeatureModule {
                     >
                       <Trash2Icon />
                     </IconButton>
-                  </ItemActions>
-                </Item>
-              ))}
-            </ItemGroup>
+                  </div>
+                </>
+              )}
+            </SortableList>
           )}
         </ScrollArea>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -286,13 +323,6 @@ export class ViewsFeature implements FeatureModule {
         </div>
       </>
     );
-  }
-
-  private move(i: number, d: number) {
-    const j = i + d;
-    if (j < 0 || j >= this.views.length) return;
-    [this.views[i], this.views[j]] = [this.views[j], this.views[i]];
-    this.changed();
   }
 
   present(i: number) {

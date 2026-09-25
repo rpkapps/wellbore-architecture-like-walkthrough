@@ -7,6 +7,7 @@ import type { App } from '../app';
 import { Note } from '../controls';
 import { ProvBadge, type Provenance } from '../prov';
 import { useRev } from '../signal';
+import { CollapseButton, OverlayChip, useCollapsed } from './overlay';
 
 const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
@@ -20,18 +21,21 @@ export function Legend({ app }: { app: App }) {
     const lmin = Math.log10(RES_RANGE.min);
     const lmax = Math.log10(RES_RANGE.max);
     return (
-      <Frame title="Resistivity · Ω·m" prov="measured">
+      <Frame title="Resistivity · Ω·m" prov="measured" compact={<MiniRamp stops={stops} lo="0.2" hi="1000" />}>
         <Ramp stops={stops} ticks={[0.2, 1, 10, 100, 1000].map((v) => [v, (Math.log10(v) - lmin) / (lmax - lmin)])} />
-        <Note>
-          Log scale · wall = shallow reading, halo → deep (RT) · radial ×{app.engine.radialScale}
-        </Note>
+        <Note>Log scale · wall = shallow reading, halo → deep (RT) · radial ×{app.engine.radialScale}</Note>
       </Frame>
     );
   }
   if (m === 'rop') {
     const stops = Array.from({ length: 16 }, (_, i) => {
       const t = i / 15;
-      const c = t < 0.33 ? mix([0.13, 0.04, 0.32], [0.72, 0.16, 0.42], t / 0.33) : t < 0.66 ? mix([0.72, 0.16, 0.42], [0.98, 0.55, 0.2], (t - 0.33) / 0.33) : mix([0.98, 0.55, 0.2], [0.99, 0.95, 0.62], (t - 0.66) / 0.34);
+      const c =
+        t < 0.33
+          ? mix([0.13, 0.04, 0.32], [0.72, 0.16, 0.42], t / 0.33)
+          : t < 0.66
+            ? mix([0.72, 0.16, 0.42], [0.98, 0.55, 0.2], (t - 0.33) / 0.33)
+            : mix([0.98, 0.55, 0.2], [0.99, 0.95, 0.62], (t - 0.66) / 0.34);
       return `${toCss(c)} ${(t * 100).toFixed(1)}%`;
     }).join(',');
     const zones = w.logs ? ropByZone(w.logs, w.zones) : [];
@@ -44,7 +48,7 @@ export function Legend({ app }: { app: App }) {
     }
     const tot = [...byF.values()].reduce((s, a) => s + a.h, 0);
     return (
-      <Frame title="ROP · m/h" prov="measured">
+      <Frame title="ROP · m/h" prov="measured" compact={<MiniRamp stops={stops} lo="1" hi="100" />}>
         <Ramp stops={stops} ticks={[1, 3, 10, 30, 100].map((v) => [v, Math.log10(v) / Math.log10(ROP_RANGE.max)])} />
         {zones.length ? (
           <>
@@ -68,16 +72,15 @@ export function Legend({ app }: { app: App }) {
   }
   if (m === 'hydrocarbon') {
     const p = w.params;
+    const fluids: [string, string][] = [
+      ['linear-gradient(90deg,#8a520e,#e0932a)', 'Oil-filled pore space (So)'],
+      ['linear-gradient(90deg,#1b4d7a,#3f86c4)', 'Water-filled pore space (Sw)'],
+      ['#5b4a35', 'Oil-stained borehole wall'],
+      ['#ffc35a', 'Net pay boundaries'],
+    ];
     return (
-      <Frame title="Pore fluids" prov="calculated">
-        <Swatches
-          items={[
-            ['linear-gradient(90deg,#8a520e,#e0932a)', 'Oil-filled pore space (So)'],
-            ['linear-gradient(90deg,#1b4d7a,#3f86c4)', 'Water-filled pore space (Sw)'],
-            ['#5b4a35', 'Oil-stained borehole wall'],
-            ['#ffc35a', 'Net pay boundaries'],
-          ]}
-        />
+      <Frame title="Pore fluids" prov="calculated" compact={<Dots items={fluids} />}>
+        <Swatches items={fluids} />
         <Note>
           {p.satModel === 'archie' ? 'Archie' : 'Simandoux'} Sw · a {p.a}, m {p.m}, n {p.n}, Rw {p.rw} Ω·m @ {p.rwTemp} °C
         </Note>
@@ -93,19 +96,29 @@ export function Legend({ app }: { app: App }) {
     items.push([f.color, f.name]);
   }
   return (
-    <Frame title="Formations" prov="interpreted">
+    <Frame title="Formations" prov="interpreted" compact={<Dots items={items} />}>
       <Swatches items={items} />
     </Frame>
   );
 }
 
-function Frame({ title, prov, children }: { title: string; prov: Provenance; children: ReactNode }) {
+/** The key's card; collapsed, its title and a one-line ramp or row of swatches. */
+function Frame({ title, prov, compact, children }: { title: string; prov: Provenance; compact: ReactNode; children: ReactNode }) {
+  const [collapsed, setCollapsed] = useCollapsed('legend');
+  if (collapsed)
+    return (
+      <OverlayChip name="colour key" onExpand={() => setCollapsed(false)}>
+        <span className="text-xs font-medium whitespace-nowrap">{title}</span>
+        {compact}
+      </OverlayChip>
+    );
   return (
     <Panel variant="elevated" size="sm" className="w-64 max-w-full shrink-0">
       <PanelHeader>
         <PanelTitle>{title}</PanelTitle>
-        <PanelActions className="mr-0">
+        <PanelActions className="mr-0 gap-1">
           <ProvBadge prov={prov} />
+          <CollapseButton collapsed={false} name="colour key" onChange={setCollapsed} />
         </PanelActions>
       </PanelHeader>
       <PanelContent className="flex flex-col gap-2">{children}</PanelContent>
@@ -125,6 +138,27 @@ function Ramp({ stops, ticks }: { stops: string; ticks: [number, number][] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function MiniRamp({ stops, lo, hi }: { stops: string; lo: string; hi: string }) {
+  return (
+    <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+      {lo}
+      <span aria-hidden className="h-1.5 w-20 rounded-full" style={{ background: `linear-gradient(90deg,${stops})` }} />
+      {hi}
+    </span>
+  );
+}
+
+/** A row of colour dots, each named by its tooltip. */
+function Dots({ items }: { items: [string, string][] }) {
+  return (
+    <span className="flex max-w-40 flex-wrap items-center gap-1">
+      {items.map(([c, l]) => (
+        <span key={l} title={l} aria-label={l} role="img" className="size-2.5 rounded-full ring-1 ring-foreground/10" style={{ background: c }} />
+      ))}
+    </span>
   );
 }
 

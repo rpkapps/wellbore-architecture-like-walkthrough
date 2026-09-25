@@ -10,8 +10,8 @@ export function Sidebar({ app }: { app: App }) {
   const tab = useSignal(app.sidebar);
   return (
     <Tabs selectedKey={tab} onSelectionChange={(k) => app.showSidebar(String(k) as SidebarTab)} className="h-full min-h-0 gap-0">
-      <div className="shrink-0 border-b border-border-subtle px-2">
-        <TabsList variant="line" aria-label="Sidebar" className="w-full">
+      <div className="shrink-0 border-b border-border-subtle p-1.5">
+        <TabsList aria-label="Sidebar" className="h-8 w-full p-0.5">
           <TabsTrigger id="scene">Scene</TabsTrigger>
           <TabsTrigger id="interpretation">Interpretation</TabsTrigger>
           <TabsTrigger id="features">Features</TabsTrigger>

@@ -7,20 +7,33 @@ import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
 import { useSignal } from '../signal';
+import { CollapseButton, OverlayChip, useCollapsed } from './overlay';
 
 /** Details of whatever was last clicked in the scene. */
 export function InspectorCard({ app }: { app: App }) {
   const v = useSignal(app.inspector);
+  const [collapsed, setCollapsed] = useCollapsed('inspector');
   if (!v) return null;
+  const close = (
+    <IconButton label="Close" size="icon-xs" onPress={() => app.inspector.set(null)}>
+      <XIcon />
+    </IconButton>
+  );
+  if (collapsed)
+    return (
+      <OverlayChip name="details" onExpand={() => setCollapsed(false)} end={close}>
+        <span aria-hidden className="size-2.5 shrink-0 rounded-[3px]" style={{ background: v.color }} />
+        <span className="max-w-48 truncate text-xs font-medium">{v.title}</span>
+      </OverlayChip>
+    );
   return (
     <Panel variant="elevated" size="sm" aria-label={v.title} className="min-h-0 w-72 max-w-full shrink">
       <PanelHeader className="flex-wrap">
         <span aria-hidden className="mt-0.5 size-3 shrink-0 rounded-[3px]" style={{ background: v.color }} />
         <PanelTitle>{v.title}</PanelTitle>
-        <PanelActions>
-          <IconButton label="Close" size="icon-xs" onPress={() => app.inspector.set(null)}>
-            <XIcon />
-          </IconButton>
+        <PanelActions className="gap-0">
+          <CollapseButton collapsed={false} name="details" onChange={setCollapsed} />
+          {close}
         </PanelActions>
         <PanelDescription>{v.sub}</PanelDescription>
         {v.badge && (

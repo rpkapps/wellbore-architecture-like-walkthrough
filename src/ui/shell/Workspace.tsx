@@ -15,6 +15,7 @@ import { Narrative } from './Narrative';
 import { Sidebar } from './Sidebar';
 import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
+import { ViewControls } from './ViewControls';
 
 /** Below this width the sidebar and the logs open as sheets over the work area. */
 export const WIDE = 1024;
@@ -32,9 +33,9 @@ export function Workspace({ app }: { app: App }) {
   const wide = useMinWidth(WIDE);
   const panels = ready && !presenting;
   return (
-    <AppShell>
+    <AppShell className={presenting ? 'grid-rows-[1fr]' : 'grid-rows-[auto_1fr_auto]'}>
       {!presenting && <TopBar app={app} wide={wide} />}
-      <AppShellBody className={presenting ? 'row-span-2' : undefined}>
+      <AppShellBody>
         <AppShellSplit orientation="horizontal">
           {panels && wide && leftOpen && (
             <>
@@ -49,7 +50,6 @@ export function Workspace({ app }: { app: App }) {
           <AppShellSplitPanel id="work" minSize="320px">
             <AppShellMain className="flex h-full flex-col overflow-hidden">
               <Work app={app} showDock={panels} />
-              {panels && <Timeline app={app} />}
             </AppShellMain>
           </AppShellSplitPanel>
           {panels && wide && rightOpen && (
@@ -64,6 +64,7 @@ export function Workspace({ app }: { app: App }) {
           )}
         </AppShellSplit>
       </AppShellBody>
+      {panels && <Timeline app={app} />}
       {panels && !wide && (
         <>
           <Sheet side="left" isOpen={leftOpen} onOpenChange={(o) => app.leftOpen.set(o)} showCloseButton={false} className="gap-0 data-[side=left]:sm:max-w-sm">
@@ -128,11 +129,14 @@ function Viewport({ app }: { app: App }) {
           <CanvasOverlay position="top-left" className="max-w-[calc(50%-1rem)]">
             <Hud app={app} />
           </CanvasOverlay>
-          <CanvasOverlay position="top-right" className={inspecting ? 'bottom-3 max-w-[calc(50%-1rem)]' : 'bottom-3 hidden max-w-[calc(50%-1rem)] @2xl:flex'}>
+          <CanvasOverlay position="top-right" className={inspecting ? 'bottom-14 max-w-[calc(50%-1rem)]' : 'bottom-14 hidden max-w-[calc(50%-1rem)] @2xl:flex'}>
             {inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}
           </CanvasOverlay>
-          <CanvasOverlay position="bottom-left" className="max-w-[calc(50%-1rem)]">
+          <CanvasOverlay position="bottom-left" className="max-w-[calc(100%-8rem)]">
             <Narrative app={app} />
+          </CanvasOverlay>
+          <CanvasOverlay position="bottom-right">
+            <ViewControls app={app} />
           </CanvasOverlay>
         </>
       )}

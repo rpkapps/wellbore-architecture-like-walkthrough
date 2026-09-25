@@ -9,11 +9,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import { COLORMAPS } from '../../data/colormap';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
-import type { SectionBox } from '../../scene/geology';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
 import { SelectField, SliderField, SwitchField } from '../controls';
 import { ProvBadge } from '../prov';
 import { useRev } from '../signal';
+import { SectionBoxEditor } from '../viz/SectionBoxEditor';
 
 const OPACITY = [1, 0.75, 0.5, 0.25, 0.1];
 const PRESETS: [LayerPreset, string][] = [
@@ -57,7 +57,9 @@ function Layers({ app }: { app: App }) {
   const geo = app.engine.geology;
   const wb = app.wellbore;
   const d = app.display;
-  const toggle = (label: string, visible: boolean, onChange: (v: boolean) => void) => <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${label}`} isVisible={visible} onChange={onChange} />;
+  const toggle = (label: string, visible: boolean, onChange: (v: boolean) => void) => (
+    <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${label}`} isVisible={visible} onChange={onChange} />
+  );
   const leaf = (id: string, label: string, visible: boolean, onChange: (v: boolean) => void, suffix?: ReactNode) => (
     <TreeViewItem id={id} textValue={label} isHidden={!visible}>
       <TreeViewItemContent suffix={suffix} endAdornment={toggle(label, visible, onChange)}>
@@ -158,19 +160,9 @@ function LayerMenu({ app, id, name, opacity }: { app: App; id: string; name: str
 }
 
 function SectionBoxControls({ app }: { app: App }) {
-  const rev = useRev(app.sceneRev);
-  const geo = app.engine.geology;
-  const fb = geo.fullBox;
-  // slider positions follow the drag at once; the box itself rebuilds once per frame
-  const [box, setBox] = useState<SectionBox>(geo.box);
-  useEffect(() => setBox(geo.box), [rev, geo]);
-  const edit = (b: Partial<SectionBox>) => {
-    setBox((x) => ({ ...x, ...b }));
-    app.setBox(b);
-  };
-  const km = (v: number) => `${(v / 1000).toFixed(2)} km`;
+  const fb = app.engine.geology.fullBox;
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-1">
         <Button variant="outline" size="xs" onPress={() => app.setBox({ ...fb }, true)}>
           Full
@@ -182,11 +174,7 @@ function SectionBoxControls({ app }: { app: App }) {
           Reservoir window
         </Button>
       </div>
-      <SliderField label="Strip overburden to" value={box.stripTo} minValue={0} maxValue={3200} step={10} format={(v) => `${v.toFixed(0)} m TVDSS`} onChange={(v) => edit({ stripTo: v })} />
-      <SliderField label="West face" value={box.xMin} minValue={fb.xMin} maxValue={fb.xMax - 100} step={10} format={km} onChange={(v) => edit({ xMin: v })} />
-      <SliderField label="East face" value={box.xMax} minValue={fb.xMin + 100} maxValue={fb.xMax} step={10} format={km} onChange={(v) => edit({ xMax: v })} />
-      <SliderField label="South face" value={box.nMin} minValue={fb.nMin} maxValue={fb.nMax - 100} step={10} format={km} onChange={(v) => edit({ nMin: v })} />
-      <SliderField label="North face" value={box.nMax} minValue={fb.nMin + 100} maxValue={fb.nMax} step={10} format={km} onChange={(v) => edit({ nMax: v })} />
+      <SectionBoxEditor app={app} />
     </div>
   );
 }
@@ -197,9 +185,33 @@ function WellboreControls({ app }: { app: App }) {
   return (
     <div className="flex flex-col gap-3">
       <SliderField label="Radial exaggeration" value={app.engine.radialScale} minValue={1} maxValue={60} step={1} format={(v) => `×${v}`} onChange={(v) => app.setRadialScale(v)} />
-      <SliderField label="Casing transparency" value={d.casingOpacity} minValue={0} maxValue={1} step={0.01} format={(v) => `${Math.round((1 - v) * 100)}%`} onChange={(v) => app.setWellboreDisplay({ casingOpacity: v })} />
-      <SliderField label="Borehole wall opacity" value={d.wallOpacity} minValue={0.05} maxValue={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => app.setWellboreDisplay({ wallOpacity: v })} />
-      <SliderField label="Halo / fluid intensity" value={d.shellOpacity} minValue={0} maxValue={2} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => app.setWellboreDisplay({ shellOpacity: v })} />
+      <SliderField
+        label="Casing transparency"
+        value={d.casingOpacity}
+        minValue={0}
+        maxValue={1}
+        step={0.01}
+        format={(v) => `${Math.round((1 - v) * 100)}%`}
+        onChange={(v) => app.setWellboreDisplay({ casingOpacity: v })}
+      />
+      <SliderField
+        label="Borehole wall opacity"
+        value={d.wallOpacity}
+        minValue={0.05}
+        maxValue={1}
+        step={0.01}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={(v) => app.setWellboreDisplay({ wallOpacity: v })}
+      />
+      <SliderField
+        label="Halo / fluid intensity"
+        value={d.shellOpacity}
+        minValue={0}
+        maxValue={2}
+        step={0.01}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={(v) => app.setWellboreDisplay({ shellOpacity: v })}
+      />
     </div>
   );
 }
@@ -212,7 +224,12 @@ function DisplayControls({ app }: { app: App }) {
   const s: SceneDisplay = app.display;
   return (
     <div className="flex flex-col gap-2.5">
-      <SelectField label="Resistivity colours" value={app.colormapName} onChange={(v) => app.setColormap(v as typeof app.colormapName)} options={COLORMAPS.map((c) => ({ id: c.id, label: c.label }))} />
+      <SelectField
+        label="Resistivity colours"
+        value={app.colormapName}
+        onChange={(v) => app.setColormap(v as typeof app.colormapName)}
+        options={COLORMAPS.map((c) => ({ id: c.id, label: c.label }))}
+      />
       <SwitchField label="Glow & colour grade" isSelected={s.postFx} onChange={(v) => app.setDisplay({ postFx: v })} />
       <SwitchField label="Realistic textures" isSelected={textures} onChange={(v) => app.flags.set('textures', v)} />
     </div>

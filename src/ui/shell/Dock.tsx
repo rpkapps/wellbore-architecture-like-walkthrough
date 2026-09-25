@@ -16,26 +16,31 @@ export function Dock() {
   const current = open.find((p) => p.opts.id === active) ?? open[0];
   if (!current) return null;
   return (
-    <Tabs selectedKey={current.opts.id} onSelectionChange={(k) => activeWindow.set(String(k))} className="h-full min-h-0 gap-0 bg-card">
-      <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle pr-1 pl-2">
-        <TabsList variant="line" aria-label="Tool windows" className="min-w-0 shrink overflow-x-auto">
-          {open.map((p) => (
-            <TabsTrigger key={p.opts.id} id={p.opts.id}>
-              {p.opts.title}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        <IconButton label={`Close ${current.opts.title}`} size="icon-xs" className="ml-auto" onPress={() => current.close()}>
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      <Tabs selectedKey={current.opts.id} onSelectionChange={(k) => activeWindow.set(String(k))} className="min-h-0 flex-1 gap-0">
+        <div className="flex min-w-0 shrink-0 items-center border-b border-border-subtle py-1 pr-9 pl-1.5">
+          <TabsList aria-label="Tool windows" className="h-8 min-w-0 shrink overflow-x-auto p-0.5">
+            {open.map((p) => (
+              <TabsTrigger key={p.opts.id} id={p.opts.id}>
+                {p.opts.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+        {open.map((p) => (
+          <TabsContent key={p.opts.id} id={p.opts.id} className="flex min-h-0 flex-col">
+            <Header win={p} />
+            <Body win={p} />
+          </TabsContent>
+        ))}
+      </Tabs>
+      {/* outside Tabs: React Aria renders everything inside it once more while it collects the tabs */}
+      <div className="absolute top-1.5 right-1">
+        <IconButton label={`Close ${current.opts.title}`} size="icon-xs" onPress={() => current.close()}>
           <XIcon />
         </IconButton>
       </div>
-      <Header win={current} />
-      {open.map((p) => (
-        <TabsContent key={p.opts.id} id={p.opts.id} className="flex min-h-0 flex-col">
-          <Body win={p} />
-        </TabsContent>
-      ))}
-    </Tabs>
+    </div>
   );
 }
 

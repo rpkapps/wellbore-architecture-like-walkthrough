@@ -43,12 +43,15 @@ export function SliderField({
   isDisabled?: boolean;
 }) {
   return (
-    <Field className="gap-1.5" data-disabled={isDisabled || undefined}>
+    <Field className="gap-1" data-disabled={isDisabled || undefined}>
       <div className="flex items-baseline justify-between gap-2">
         <FieldTitle>{label}</FieldTitle>
         <span className="font-mono text-xs text-muted-foreground tabular-nums">{format(value)}</span>
       </div>
-      <Slider aria-label={label} value={value} minValue={minValue} maxValue={maxValue} step={step} isDisabled={isDisabled} onChange={(v) => onChange(Array.isArray(v) ? v[0] : v)} />
+      {/* the thumb overhangs the track ends by half its width */}
+      <div className="px-2.5">
+        <Slider aria-label={label} value={value} minValue={minValue} maxValue={maxValue} step={step} isDisabled={isDisabled} onChange={(v) => onChange(Array.isArray(v) ? v[0] : v)} />
+      </div>
     </Field>
   );
 }
@@ -118,7 +121,7 @@ export function CompactSelect({
   className,
 }: {
   id?: string;
-  label?: string;
+  label: string;
   value: string | null;
   onChange: (v: string) => void;
   options: (Option | OptionGroup)[];

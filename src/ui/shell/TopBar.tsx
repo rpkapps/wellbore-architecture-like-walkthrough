@@ -12,6 +12,7 @@ import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
 import type { PropertyMode } from '../../scene/wellbore';
 import type { App, ToolEntry } from '../app';
+import { IconButton } from '../icon-button';
 import { Logo } from '../logo';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
@@ -93,17 +94,17 @@ function Controls({ app, wide }: { app: App; wide: boolean }) {
         </SelectContent>
       </Select>
       <Divider />
-      <AppShellNav className="gap-2 self-stretch">
-        <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0 justify-center">
-          <TabsList variant="line" aria-label="Navigation">
+      <AppShellNav className="gap-2">
+        <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
+          <TabsList aria-label="Navigation" className="h-8 p-0.5">
             <TabsTrigger id="guided">Guided</TabsTrigger>
             <TabsTrigger id="explore">Explore</TabsTrigger>
           </TabsList>
         </Tabs>
         <Divider />
         {roomy ? (
-          <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0 justify-center">
-            <TabsList variant="line" aria-label="Colour the wellbore by">
+          <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
+            <TabsList aria-label="Colour the wellbore by" className="h-8 p-0.5">
               {props.map((p) => (
                 <TabsTrigger key={p.id} id={p.id}>
                   <Dot color={p.dot} />
@@ -117,7 +118,7 @@ function Controls({ app, wide }: { app: App; wide: boolean }) {
             aria-label="Colour the wellbore by"
             selectedKey={e.mode}
             onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)}
-            className="w-36 shrink-0 self-center"
+            className="w-36 shrink-0"
           >
             <SelectTrigger size="sm">
               <SelectValue />
@@ -133,7 +134,7 @@ function Controls({ app, wide }: { app: App; wide: boolean }) {
           </Select>
         )}
         <Divider />
-        <Toolbar aria-label="Commands" className="min-w-0 flex-1 justify-end self-center">
+        <Toolbar aria-label="Commands" className="min-w-0 flex-1 justify-end">
           <OverflowItem id="interpretation" priority={6} label="Interpretation" icon={<FlaskConicalIcon />} onAction={() => app.showSidebar('interpretation', true)}>
             <Button variant={tab('interpretation') ? 'secondary' : 'ghost'} size="sm">
               <FlaskConicalIcon data-icon="inline-start" />
@@ -231,7 +232,7 @@ function Tool({ t }: { t: ToolEntry }) {
       label={t.label}
       icon={t.icon}
       labelBehavior="keep"
-      tooltip
+      tooltip={false}
       overflow={
         <DropdownMenuSub>
           <DropdownMenuSubTrigger id={t.id}>
@@ -243,9 +244,7 @@ function Tool({ t }: { t: ToolEntry }) {
       }
     >
       <DropdownMenuTrigger>
-        <Button variant="ghost" size="icon-sm" aria-label={t.label}>
-          {t.icon}
-        </Button>
+        <IconButton label={t.label}>{t.icon}</IconButton>
         <DropdownMenu placement="bottom end" className="min-w-56">
           {contents}
         </DropdownMenu>

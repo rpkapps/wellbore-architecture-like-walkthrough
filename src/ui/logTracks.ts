@@ -10,7 +10,9 @@ import { cssVar, font, ink } from './tokens';
 
 const LAYOUT_KEY = 'vwt.logtracks.v1';
 
-const HEADER_H = 86;
+/** header: a title row, then one scale row per curve of the fullest track */
+const TITLE_H = 21;
+const ROW_H = 25;
 const DEPTH_W = 46;
 const ZONE_W = 9;
 const HOLE_W = 9;
@@ -49,6 +51,7 @@ export class LogTracks {
   hoverMd: number | null = null;
   window = 160;
   private dirty = true;
+  private headH = 86;
   colormap: ColormapName = 'resistivity';
   onPick?: (md: number) => void;
   onHover?: (md: number | null) => void;
@@ -177,9 +180,9 @@ export class LogTracks {
 
   private mdAtY(y: number): number | null {
     const H = this.canvas?.clientHeight ?? 0;
-    if (y < HEADER_H) return null;
+    if (y < this.headH) return null;
     const { top, bot } = this.range();
-    return top + ((y - HEADER_H) / (H - HEADER_H)) * (bot - top);
+    return top + ((y - this.headH) / (H - this.headH)) * (bot - top);
   }
 
   private move(e: PointerEvent) {
@@ -219,7 +222,12 @@ export class LogTracks {
     const interp: ReadoutRow[] = [];
     if (p) {
       const pv = (c: Curve) => sampleCurve(logs.depth, c.values, md);
-      interp.push({ k: 'Vsh', v: fmt.pct(pv(p.vsh)), tone: 'c' }, { k: 'PHIE', v: fmt.pct(pv(p.phie), 1), tone: 'c' }, { k: 'Sw', v: fmt.pct(pv(p.sw)), tone: 'c' }, { k: 'So', v: fmt.pct(pv(p.so)), tone: 'c' });
+      interp.push(
+        { k: 'Vsh', v: fmt.pct(pv(p.vsh)), tone: 'c' },
+        { k: 'PHIE', v: fmt.pct(pv(p.phie), 1), tone: 'c' },
+        { k: 'Sw', v: fmt.pct(pv(p.sw)), tone: 'c' },
+        { k: 'So', v: fmt.pct(pv(p.so)), tone: 'c' },
+      );
     }
     if (w.cpi) {
       const c = w.cpi.curves.get('SW');
@@ -262,13 +270,14 @@ export class LogTracks {
     g.clearRect(0, 0, W, H);
     const w = this.well;
     if (!w) return;
+    const shown = visibleTracks(this.tracks, w, this.hideEmpty);
+    this.headH = TITLE_H + Math.max(1, ...shown.map((t) => t.curves.length)) * ROW_H + 4;
     const { top, bot } = this.range();
-    const bodyH = H - HEADER_H;
-    const yOf = (md: number) => HEADER_H + ((md - top) / (bot - top)) * bodyH;
+    const bodyH = H - this.headH;
+    const yOf = (md: number) => this.headH + ((md - top) / (bot - top)) * bodyH;
 
     // layout
     const fixed = DEPTH_W + ZONE_W + HOLE_W + PAY_W + 6;
-    const shown = visibleTracks(this.tracks, w, this.hideEmpty);
     const flexTotal = shown.reduce((s, t) => s + t.flex, 0) || 1;
     const avail = W - fixed - 4;
     let x = 2;
@@ -286,12 +295,14 @@ export class LogTracks {
     }
     this.layout.push({ x: x + 1, w: PAY_W, kind: 'pay' });
 
+    g.fillStyle = 'rgba(255,255,255,0.028)';
+    g.fillRect(0, 0, W, this.headH);
     g.font = font.mono(9.5);
     g.textBaseline = 'middle';
     // depth track
     const step = niceStep(this.window / 8);
     g.fillStyle = 'rgba(255,255,255,0.02)';
-    g.fillRect(2, HEADER_H, DEPTH_W, bodyH);
+    g.fillRect(2, this.headH, DEPTH_W, bodyH);
     for (let d = Math.ceil(top / step) * step; d <= bot; d += step) {
       const y = yOf(d);
       g.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -299,7 +310,7 @@ export class LogTracks {
       g.moveTo(DEPTH_W + 2, y);
       g.lineTo(W, y);
       g.stroke();
-      if (d < 0 || d > w.tdMD) continue;
+      if (d < 0 || d > w.tdMD || y - 11 < this.headH) continue;
       g.fillStyle = ink.muted;
       g.textAlign = 'right';
       g.fillText(d.toFixed(step < 1 ? 1 : 0), DEPTH_W - 2, y - 5);
@@ -322,9 +333,9 @@ export class LogTracks {
     const zl = this.layout[1];
     for (const z of w.zones) {
       if (z.baseMD < top || z.topMD > bot) continue;
-      const y0 = Math.max(HEADER_H, yOf(z.topMD));
+      const y0 = Math.max(this.headH, yOf(z.topMD));
       const y1 = Math.min(H, yOf(z.baseMD));
-      const col = z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a1f26' : FORMATION_BY_ID.get(z.formationId)?.color ?? '#555';
+      const col = z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a1f26' : (FORMATION_BY_ID.get(z.formationId)?.color ?? '#555');
       g.fillStyle = col;
       g.fillRect(zl.x, y0, zl.w, y1 - y0);
       if (z.topMD >= top) {
@@ -341,7 +352,7 @@ export class LogTracks {
     const hl = this.layout[2];
     for (const s of w.holeSections) {
       if (s.baseMD < top || s.topMD > bot) continue;
-      const y0 = Math.max(HEADER_H, yOf(s.topMD));
+      const y0 = Math.max(this.headH, yOf(s.topMD));
       const y1 = Math.min(H, yOf(s.baseMD));
       const hw = (Math.min(s.hole, 36) / 36) * hl.w;
       g.fillStyle = 'rgba(160,140,110,0.35)';
@@ -352,8 +363,8 @@ export class LogTracks {
       const y1 = Math.min(H, yOf(c.shoeMD));
       const cw = (Math.min(c.od, 36) / 36) * hl.w;
       g.fillStyle = '#aab3bc';
-      g.fillRect(hl.x + (hl.w - cw) / 2 - 1, Math.max(HEADER_H, yOf(c.topMD)), 1, y1 - Math.max(HEADER_H, yOf(c.topMD)));
-      g.fillRect(hl.x + (hl.w + cw) / 2, Math.max(HEADER_H, yOf(c.topMD)), 1, y1 - Math.max(HEADER_H, yOf(c.topMD)));
+      g.fillRect(hl.x + (hl.w - cw) / 2 - 1, Math.max(this.headH, yOf(c.topMD)), 1, y1 - Math.max(this.headH, yOf(c.topMD)));
+      g.fillRect(hl.x + (hl.w + cw) / 2, Math.max(this.headH, yOf(c.topMD)), 1, y1 - Math.max(this.headH, yOf(c.topMD)));
       if (c.shoeMD <= bot && c.shoeMD >= top) {
         g.beginPath();
         g.moveTo(hl.x, y1);
@@ -374,44 +385,38 @@ export class LogTracks {
     if (w.petro && w.logs) {
       const d = w.logs.depth;
       g.fillStyle = '#ffb547';
-      for (let py = HEADER_H; py < H; py++) {
-        const md = top + ((py - HEADER_H) / bodyH) * (bot - top);
+      for (let py = this.headH; py < H; py++) {
+        const md = top + ((py - this.headH) / bodyH) * (bot - top);
         const k = nearest(d, md);
         if (k >= 0 && w.petro.pay[k]) g.fillRect(pl.x, py, pl.w, 1);
       }
     }
+    const mid = this.headH / 2;
+    const vlabel = (text: string, cx: number) => {
+      g.save();
+      g.translate(cx, mid);
+      g.rotate(-Math.PI / 2);
+      g.fillText(text, 0, 0);
+      g.restore();
+    };
+    g.font = font.sans(9, 600);
     g.fillStyle = ink.faint;
-    g.save();
-    g.translate(pl.x + pl.w / 2 + 1, 40);
-    g.rotate(-Math.PI / 2);
     g.textAlign = 'center';
-    g.fillText('PAY', 0, 0);
-    g.restore();
-
-    // headers background + separators
-    g.fillStyle = 'rgba(0,0,0,0.0)';
-    g.strokeStyle = 'rgba(255,255,255,0.08)';
+    g.textBaseline = 'middle';
+    vlabel('PAY', pl.x + pl.w / 2 + 1);
+    vlabel('ZONE', zl.x + ZONE_W / 2);
+    vlabel('HOLE', hl.x + HOLE_W / 2 + 1);
+    g.font = font.mono(9.5, 600);
+    g.fillStyle = ink.muted;
+    g.fillText('MD', 2 + DEPTH_W / 2, this.headH - 20);
+    g.font = font.mono(9.5);
+    g.fillStyle = ink.faint;
+    g.fillText('TVD', 2 + DEPTH_W / 2, this.headH - 8);
+    g.strokeStyle = ink.grid;
     g.beginPath();
-    g.moveTo(0, HEADER_H + 0.5);
-    g.lineTo(W, HEADER_H + 0.5);
+    g.moveTo(0, this.headH + 0.5);
+    g.lineTo(W, this.headH + 0.5);
     g.stroke();
-    g.fillStyle = ink.faint;
-    g.textAlign = 'center';
-    g.fillText('MD', 2 + DEPTH_W / 2, 16);
-    g.fillStyle = ink.faint;
-    g.fillText('TVD', 2 + DEPTH_W / 2, 30);
-    g.save();
-    g.translate(zl.x + ZONE_W / 2, 44);
-    g.rotate(-Math.PI / 2);
-    g.fillStyle = ink.faint;
-    g.fillText('FM', 0, 0);
-    g.restore();
-    g.save();
-    g.translate(hl.x + HOLE_W / 2 + 1, 44);
-    g.rotate(-Math.PI / 2);
-    g.fillStyle = ink.faint;
-    g.fillText('HOLE', 0, 0);
-    g.restore();
 
     // cursor & hover lines
     const yc = yOf(this.cursorMd);
@@ -439,18 +444,9 @@ export class LogTracks {
     }
   }
 
-  private drawTrack(
-    g: CanvasRenderingContext2D,
-    x: number,
-    w: number,
-    t: TrackSpec,
-    top: number,
-    bot: number,
-    _yOf: (md: number) => number,
-    H: number,
-  ) {
-    const bodyTop = HEADER_H;
-    const bodyH = H - HEADER_H;
+  private drawTrack(g: CanvasRenderingContext2D, x: number, w: number, t: TrackSpec, top: number, bot: number, _yOf: (md: number) => number, H: number) {
+    const bodyTop = this.headH;
+    const bodyH = H - this.headH;
     // frame
     g.fillStyle = 'rgba(255,255,255,0.018)';
     g.fillRect(x + 1, bodyTop, w - 2, bodyH);
@@ -624,38 +620,42 @@ export class LogTracks {
       g.restore();
     }
 
-    // header
+    // header: provenance bar and title, then per curve its name, a line in its colour and dash, and the scale ends
     g.save();
-    g.textAlign = 'left';
-    g.font = font.sans(9, 600);
-    const provColor = cssVar(`--tecton-palette-${{ measured: 'azure', calculated: 'saffron', interpreted: 'violet', mixed: 'saffron' }[t.prov]}-560`);
-    g.fillStyle = provColor;
-    g.fillRect(x + 4, 7, 3, 9);
-    g.fillStyle = ink.muted;
-    g.fillText(t.title.toUpperCase(), x + 10, 12, w - 14);
-    let hy = 24;
+    g.fillStyle = 'rgba(255,255,255,0.03)';
+    g.fillRect(x + 1, 3, w - 2, this.headH - 3);
+    g.fillStyle = cssVar(`--tecton-palette-${{ measured: 'azure', calculated: 'saffron', interpreted: 'violet', mixed: 'saffron' }[t.prov]}-560`);
+    g.fillRect(x + 2, 3, w - 4, 2);
+    const hx = x + 5;
+    const hw = w - 10;
+    g.textBaseline = 'middle';
+    g.textAlign = 'center';
+    g.font = font.sans(10, 600);
+    g.fillStyle = ink.text;
+    g.fillText(fitTitle(g, t.title, hw), x + w / 2, 13);
+    let hy = TITLE_H;
     t.curves.forEach((spec, i) => {
-      const exists = !!data[i];
-      g.globalAlpha = exists ? 1 : 0.28;
-      g.font = font.sans(9, 600);
+      g.globalAlpha = data[i] ? 1 : 0.35;
+      g.font = font.sans(9.5, 600);
       g.fillStyle = spec.color;
-      g.textAlign = 'left';
-      g.fillText(spec.label, x + 5, hy, w - 10);
+      g.textAlign = 'center';
+      g.fillText(fit(g, spec.label, hw), x + w / 2, hy + 5);
       g.strokeStyle = spec.color;
+      g.lineWidth = 1.6;
       g.setLineDash(spec.dash ?? []);
-      g.lineWidth = 1.3;
       g.beginPath();
-      g.moveTo(x + 5, hy + 7);
-      g.lineTo(x + w - 5, hy + 7);
+      g.moveTo(hx, hy + 12.5);
+      g.lineTo(hx + hw, hy + 12.5);
       g.stroke();
       g.setLineDash([]);
       g.font = font.mono(8.5);
-      g.fillStyle = ink.faint;
-      g.fillText(fmtNum(spec.scale.min), x + 5, hy + 14);
+      g.fillStyle = ink.muted;
+      g.textAlign = 'left';
+      g.fillText(fmtNum(spec.scale.min), hx, hy + 19);
       g.textAlign = 'right';
-      g.fillText(fmtNum(spec.scale.max), x + w - 5, hy + 14);
+      g.fillText(fmtNum(spec.scale.max), hx + hw, hy + 19);
       g.globalAlpha = 1;
-      hy += 21;
+      hy += ROW_H;
     });
     g.restore();
   }
@@ -663,6 +663,32 @@ export class LogTracks {
 
 const curveId = (c: CurveSpec) => `${c.source ?? 'logs'}:${c.petroKey ?? c.cpiKey ?? c.key}`;
 const STANDARD_CURVES = new Set(DEFAULT_TRACKS.flatMap((t) => t.curves.map(curveId)));
+
+/** Text cut to `max` px with an ellipsis (fillText's own maxWidth squashes the glyphs instead). */
+function fit(g: CanvasRenderingContext2D, text: string, max: number) {
+  if (g.measureText(text).width <= max) return text;
+  let t = text;
+  while (t.length > 1 && g.measureText(`${t}…`).width > max) t = t.slice(0, -1);
+  return `${t.trimEnd()}…`;
+}
+
+const ABBR: [RegExp, string][] = [
+  [/Gamma/i, 'GR'],
+  [/Caliper/i, 'Cal'],
+  [/Resistivity/i, 'Res'],
+  [/Density/i, 'Den'],
+  [/Neutron/i, 'Neu'],
+  [/Porosity/i, 'Por'],
+  [/Saturation/i, 'Sat'],
+  [/Sonic/i, 'DT'],
+];
+
+/** The track title, or its abbreviation, or its first part, before cutting it. */
+function fitTitle(g: CanvasRenderingContext2D, title: string, max: number) {
+  const abbr = ABBR.reduce((t, [re, a]) => t.replace(re, a), title);
+  for (const t of [title, abbr, abbr.split(' · ')[0]]) if (g.measureText(t).width <= max) return t;
+  return fit(g, abbr, max);
+}
 
 function fmtVal(v: number) {
   if (!Number.isFinite(v)) return '—';

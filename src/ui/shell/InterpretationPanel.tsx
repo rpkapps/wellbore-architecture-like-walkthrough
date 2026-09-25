@@ -1,13 +1,15 @@
 import { Alert, AlertDescription } from '@tecton/react/components/alert';
 import { Button } from '@tecton/react/components/button';
-import { Field, FieldDescription, FieldLabel } from '@tecton/react/components/field';
+import { Field, FieldLabel } from '@tecton/react/components/field';
 import { Input } from '@tecton/react/components/input';
+import { Popover, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@tecton/react/components/accordion';
 import { Slider } from '@tecton/react/components/slider';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@tecton/react/components/table';
 import { Stat, StatDelta, StatGroup, StatHelp, StatLabel, StatValue } from '@tecton/react/tecton/stat';
-import { DownloadIcon, RotateCcwIcon } from 'lucide-react';
+import { DownloadIcon, InfoIcon, RotateCcwIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
+import type { Key } from 'react-aria-components';
 import { sampleCurve } from '../../data/las';
 import { DEFAULT_PARAMS, PARAM_NOTES, autoGrLimits, payIntervals, type PetroParams } from '../../data/petro';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
@@ -15,7 +17,10 @@ import type { App } from '../app';
 import { CompactSelect, Note } from '../controls';
 import { download, fmt } from '../dom';
 import { ProvBadge } from '../prov';
+import { IconButton } from '../icon-button';
 import { useRev } from '../signal';
+import { FluidDonut } from '../viz/FluidDonut';
+import { HistogramSlider } from '../viz/HistogramSlider';
 
 interface ParamDef {
   key: keyof PetroParams;
@@ -26,15 +31,26 @@ interface ParamDef {
   range?: [number, number];
   /** logarithmic slider */
   log?: boolean;
+  /** drawn over the distribution of this curve, highlighting the side it keeps */
+  hist?: { curve: 'gr' | 'vsh' | 'phie' | 'sw'; keep: 'below' | 'above'; tone?: 'pay' | 'shale' };
 }
 
 const GROUPS: { title: string; params: ParamDef[] }[] = [
   {
     title: 'Shale volume',
     params: [
-      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1, range: [0, 80] },
-      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1, range: [50, 200] },
-      { key: 'vshMethod', label: 'Vsh transform', step: 0, options: [['linear', 'Linear IGR'], ['larionov-older', 'Larionov (older rocks)'], ['larionov-tertiary', 'Larionov (Tertiary)']] },
+      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1, range: [0, 80], hist: { curve: 'gr', keep: 'below' } },
+      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1, range: [50, 200], hist: { curve: 'gr', keep: 'above', tone: 'shale' } },
+      {
+        key: 'vshMethod',
+        label: 'Vsh transform',
+        step: 0,
+        options: [
+          ['linear', 'Linear IGR'],
+          ['larionov-older', 'Larionov (older rocks)'],
+          ['larionov-tertiary', 'Larionov (Tertiary)'],
+        ],
+      },
     ],
   },
   {
@@ -42,13 +58,29 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
     params: [
       { key: 'rhoMa', label: 'Matrix density ρma', unit: 'g/cm³', step: 0.01, range: [2.6, 2.75] },
       { key: 'rhoFl', label: 'Fluid density ρfl', unit: 'g/cm³', step: 0.01, range: [0.8, 1.2] },
-      { key: 'porosityMethod', label: 'Method', step: 0, options: [['density', 'Density'], ['neutron-density', 'Neutron–density (RMS)']] },
+      {
+        key: 'porosityMethod',
+        label: 'Method',
+        step: 0,
+        options: [
+          ['density', 'Density'],
+          ['neutron-density', 'Neutron–density (RMS)'],
+        ],
+      },
     ],
   },
   {
     title: 'Saturation',
     params: [
-      { key: 'satModel', label: 'Model', step: 0, options: [['archie', 'Archie'], ['simandoux', 'Modified Simandoux']] },
+      {
+        key: 'satModel',
+        label: 'Model',
+        step: 0,
+        options: [
+          ['archie', 'Archie'],
+          ['simandoux', 'Modified Simandoux'],
+        ],
+      },
       { key: 'rw', label: 'Rw', unit: 'Ω·m', step: 0.001, range: [0.005, 0.5], log: true },
       { key: 'rwTemp', label: 'Rw reference temp.', unit: '°C', step: 1, range: [20, 150] },
       { key: 'a', label: 'Tortuosity a', step: 0.05, range: [0.5, 1.5] },
@@ -60,9 +92,9 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
   {
     title: 'Net pay cut-offs',
     params: [
-      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01, range: [0, 1] },
-      { key: 'cutPhi', label: 'φ ≥', step: 0.01, range: [0, 0.3] },
-      { key: 'cutSw', label: 'Sw ≤', step: 0.01, range: [0, 1] },
+      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01, range: [0, 1], hist: { curve: 'vsh', keep: 'below' } },
+      { key: 'cutPhi', label: 'φ ≥', step: 0.01, range: [0, 0.3], hist: { curve: 'phie', keep: 'above' } },
+      { key: 'cutSw', label: 'Sw ≤', step: 0.01, range: [0, 1], hist: { curve: 'sw', keep: 'below' } },
     ],
   },
 ];
@@ -103,6 +135,7 @@ export function InterpretationPanel({ app }: { app: App }) {
   const [baseline, setBaseline] = useState(() => summarise(app));
   useEffect(() => setBaseline(summarise(app)), [app, w]);
   const [resets, setResets] = useState(0);
+  const [open, setOpen] = useState<Set<Key>>(() => new Set(['Saturation', 'Net pay cut-offs', 'zones']));
   const timer = useRef<number | null>(null);
   const apply = () => {
     if (timer.current) clearTimeout(timer.current);
@@ -139,13 +172,14 @@ export function InterpretationPanel({ app }: { app: App }) {
           </Button>
         </div>
       </div>
-      <Accordion allowsMultipleExpanded defaultExpandedKeys={['Saturation', 'Net pay cut-offs', 'zones']} className="rounded-none border-t border-border-subtle">
+      <Accordion allowsMultipleExpanded expandedKeys={open} onExpandedChange={setOpen} className="rounded-none border-t border-border-subtle">
         <AccordionItem id="method">
           <AccordionTrigger>How it works</AccordionTrigger>
           <AccordionContent>
             <div className="flex flex-col gap-2">
               <Note>
-                The measured logs (gamma ray, density, deep resistivity) are converted into shale volume, porosity and water saturation. The results drive the Hydrocarbons 3D view, the Vsh · Porosity and Saturation log tracks, the pay flags and the zone table; the measured Resistivity view never changes. Try Rw 0.025 → 0.08 (fresher brine) and watch pay shrink.
+                The measured logs (gamma ray, density, deep resistivity) are converted into shale volume, porosity and water saturation. The results drive the Hydrocarbons 3D view, the Vsh · Porosity
+                and Saturation log tracks, the pay flags and the zone table; the measured Resistivity view never changes. Try Rw 0.025 → 0.08 (fresher brine) and watch pay shrink.
               </Note>
               <div className="flex flex-col gap-1 font-mono text-xs text-foreground">
                 <span>Vsh = (GR − GRclean)/(GRshale − GRclean)</span>
@@ -167,11 +201,14 @@ export function InterpretationPanel({ app }: { app: App }) {
           <AccordionItem key={g.title} id={g.title}>
             <AccordionTrigger>{g.title}</AccordionTrigger>
             <AccordionContent>
-              <div className="flex flex-col gap-3">
-                {g.params.map((d) => (
-                  <Param key={`${w.id}:${d.key}:${resets}`} def={d} value={w.params[d.key] as number | string} onChange={(v) => set(d.key, v)} />
-                ))}
-              </div>
+              {/* built only while open: hidden controls would mount unfocusable */}
+              {open.has(g.title) && (
+                <div className="flex flex-col gap-2.5">
+                  {g.params.map((d) => (
+                    <Param key={`${w.id}:${d.key}:${resets}`} def={d} value={w.params[d.key] as number | string} onChange={(v) => set(d.key, v)} data={d.hist ? histData(app, d.hist.curve) : null} />
+                  ))}
+                </div>
+              )}
             </AccordionContent>
           </AccordionItem>
         ))}
@@ -210,67 +247,104 @@ function SummaryStats({ app, baseline }: { app: App; baseline: Summary }) {
   };
   return (
     <div className="flex flex-col gap-2">
-      <StatGroup className="grid-cols-2 gap-x-3 gap-y-2">
-        <Stat size="sm">
-          <StatLabel>Net pay (MD)</StatLabel>
-          <StatValue unit="m">{fmt.n(cur.pay, 1)}</StatValue>
-          {delta(cur.pay, baseline.pay, (v) => `${fmt.n(v, 1)} m`)}
-        </Stat>
-        <Stat size="sm">
-          <StatLabel>Avg φ in pay</StatLabel>
-          <StatValue>{fmt.pct(cur.phi, 1)}</StatValue>
-          {delta(cur.phi, baseline.phi, (v) => fmt.pct(v, 1))}
-        </Stat>
-        <Stat size="sm">
-          <StatLabel>Avg Sw in pay</StatLabel>
-          <StatValue>{fmt.pct(cur.sw, 0)}</StatValue>
-          {delta(cur.sw, baseline.sw, (v) => fmt.pct(v, 0), false)}
-        </Stat>
-        <Stat size="sm">
-          <StatLabel>HC column</StatLabel>
-          <StatValue unit="m">{fmt.n(cur.hc, 2)}</StatValue>
-          {delta(cur.hc, baseline.hc, (v) => `${fmt.n(v, 2)} m`)}
-        </Stat>
-      </StatGroup>
+      <div className="flex items-center gap-3">
+        <FluidDonut sw={cur.sw} phi={cur.phi} />
+        <StatGroup className="flex-1 grid-cols-2 gap-x-3 gap-y-2">
+          <Stat size="sm">
+            <StatLabel>Net pay (MD)</StatLabel>
+            <StatValue unit="m">{fmt.n(cur.pay, 1)}</StatValue>
+            {delta(cur.pay, baseline.pay, (v) => `${fmt.n(v, 1)} m`)}
+          </Stat>
+          <Stat size="sm">
+            <StatLabel>Avg φ in pay</StatLabel>
+            <StatValue>{fmt.pct(cur.phi, 1)}</StatValue>
+            {delta(cur.phi, baseline.phi, (v) => fmt.pct(v, 1))}
+          </Stat>
+          <Stat size="sm">
+            <StatLabel>Avg Sw in pay</StatLabel>
+            <StatValue>{fmt.pct(cur.sw, 0)}</StatValue>
+            {delta(cur.sw, baseline.sw, (v) => fmt.pct(v, 0), false)}
+          </Stat>
+          <Stat size="sm">
+            <StatLabel>HC column</StatLabel>
+            <StatValue unit="m">{fmt.n(cur.hc, 2)}</StatValue>
+            {delta(cur.hc, baseline.hc, (v) => `${fmt.n(v, 2)} m`)}
+          </Stat>
+        </StatGroup>
+      </div>
       <StatHelp>{cur.ints} pay intervals ≥ 1 m · changes since this panel opened</StatHelp>
     </div>
   );
 }
 
-/** One parameter: a select, or a number field with a slider under it. */
-function Param({ def: d, value, onChange }: { def: ParamDef; value: number | string; onChange: (v: number | string) => void }) {
+/** The samples a parameter acts on, for the histogram under its slider. */
+function histData(app: App, curve: 'gr' | 'vsh' | 'phie' | 'sw'): ArrayLike<number> | null {
+  const w = app.engine.activeWell;
+  if (curve === 'gr') {
+    const name = w.petro?.inputs.gr;
+    return (name && w.logs?.curves.get(name)?.values) || null;
+  }
+  return w.petro?.[curve].values ?? null;
+}
+
+/** What a parameter means and where its default comes from, opened from the (i) next to it. */
+function NoteButton({ title, note }: { title: string; note: string }) {
+  return (
+    <PopoverTrigger>
+      <IconButton label={`About ${title}`} size="icon-xs">
+        <InfoIcon />
+      </IconButton>
+      <Popover placement="left top" className="w-64">
+        <PopoverHeader>
+          <PopoverTitle>{title}</PopoverTitle>
+          <PopoverDescription>{note}</PopoverDescription>
+        </PopoverHeader>
+      </Popover>
+    </PopoverTrigger>
+  );
+}
+
+/** One parameter on a single row (a select, or a number box), with its slider under it. */
+function Param({ def: d, value, onChange, data }: { def: ParamDef; value: number | string; onChange: (v: number | string) => void; data: ArrayLike<number> | null }) {
   const id = useId();
   const note = PARAM_NOTES[d.key];
   const [text, setText] = useState(String(value));
   const label = (
-    <>
+    <FieldLabel htmlFor={id} className="min-w-0 flex-1 gap-1 truncate">
       {d.label}
-      {d.unit && <span className="text-muted-foreground">{d.unit}</span>}
-    </>
+      {d.unit && <span className="font-normal text-muted-foreground">{d.unit}</span>}
+    </FieldLabel>
   );
+  const info = note && <NoteButton title={d.label} note={note} />;
   if (d.options)
     return (
-      <Field className="gap-1.5">
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        <CompactSelect id={id} value={String(value)} onChange={onChange} options={d.options.map(([v, l]) => ({ id: v, label: l }))} className="w-full" />
-        {note && <FieldDescription>{note}</FieldDescription>}
+      <Field orientation="horizontal" className="items-center gap-1">
+        {label}
+        {info}
+        <CompactSelect id={id} label={d.label} value={String(value)} onChange={onChange} options={d.options.map(([v, l]) => ({ id: v, label: l }))} className="w-40 shrink-0" />
       </Field>
     );
   const [lo, hi] = d.range ?? [0, 1];
   const toR = (v: number) => (d.log ? (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) : (v - lo) / (hi - lo)) * 1000;
   const fromR = (r: number) => (d.log ? Math.pow(10, Math.log10(lo) + (r / 1000) * (Math.log10(hi) - Math.log10(lo))) : lo + (r / 1000) * (hi - lo));
   const num = typeof value === 'number' ? value : parseFloat(value);
+  const dec = Math.max(0, -Math.floor(Math.log10(d.step)));
+  const commit = (v: number) => {
+    setText(String(v));
+    onChange(v);
+  };
   return (
-    <Field className="gap-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <Field className="gap-1">
+      <div className="flex items-center gap-1">
+        {label}
+        {info}
         <Input
           id={id}
           type="number"
           step={d.step}
           value={text}
           variant="filled"
-          className="w-24"
+          className="h-7 w-20 shrink-0"
           onChange={(e) => {
             setText(e.target.value);
             const v = parseFloat(e.target.value);
@@ -278,22 +352,33 @@ function Param({ def: d, value, onChange }: { def: ParamDef; value: number | str
           }}
         />
       </div>
-      {d.range && (
-        <Slider
-          aria-label={d.label}
-          value={Math.max(0, Math.min(1000, toR(num)))}
-          minValue={0}
-          maxValue={1000}
-          step={1}
-          onChange={(r) => {
-            const dec = Math.max(0, -Math.floor(Math.log10(d.step)));
-            const v = Number(fromR(Array.isArray(r) ? r[0] : r).toFixed(d.log ? 4 : dec));
-            setText(String(v));
-            onChange(v);
-          }}
+      {d.hist && d.range ? (
+        <HistogramSlider
+          label={d.label}
+          values={data}
+          min={lo}
+          max={hi}
+          value={num}
+          step={d.step}
+          keep={d.hist.keep}
+          tone={d.hist.tone}
+          onChange={commit}
+          format={(v) => `${v}${d.unit ? ` ${d.unit}` : ''}`}
         />
+      ) : (
+        d.range && (
+          <div className="px-2.5">
+            <Slider
+              aria-label={d.label}
+              value={Math.max(0, Math.min(1000, toR(num)))}
+              minValue={0}
+              maxValue={1000}
+              step={1}
+              onChange={(r) => commit(Number(fromR(Array.isArray(r) ? r[0] : r).toFixed(d.log ? 4 : dec)))}
+            />
+          </div>
+        )
       )}
-      {note && <FieldDescription>{note}</FieldDescription>}
     </Field>
   );
 }

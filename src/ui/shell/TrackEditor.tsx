@@ -7,13 +7,14 @@ import { ScrollArea } from '@tecton/react/components/scroll-area';
 import { Separator } from '@tecton/react/components/separator';
 import { Switch } from '@tecton/react/components/switch';
 import { ColorSwatch } from '@tecton/react/tecton/color-swatch';
-import { ArrowLeftRightIcon, ChevronDownIcon, ChevronUpIcon, PlusIcon, SlidersHorizontalIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { ArrowLeftRightIcon, PlusIcon, SlidersHorizontalIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { useId, useState } from 'react';
-import { DEFAULT_TRACKS, MAX_CURVES_PER_TRACK, availableCurves, moveTrack, newTrack, specForOption, trackHasData, type CurveOption, type CurveSpec, type TrackSpec } from '../../data/trackLayout';
+import { DEFAULT_TRACKS, MAX_CURVES_PER_TRACK, availableCurves, newTrack, specForOption, trackHasData, type CurveOption, type CurveSpec, type TrackSpec } from '../../data/trackLayout';
 import type { App } from '../app';
 import { CompactSelect, Note, SwitchField, type OptionGroup } from '../controls';
 import { IconButton } from '../icon-button';
 import { useRev } from '../signal';
+import { SortableList } from '../sortable';
 
 const WIDTHS: [number, string][] = [
   [0.6, 'Narrow'],
@@ -41,11 +42,12 @@ function builtInCount(t: TrackSpec): number {
 /** Show, hide, reorder, rescale and add log tracks. The layout is saved per browser. */
 export function TrackEditor({ app }: { app: App }) {
   const logs = app.logs;
-  useRev(logs.rev);
+  const rev = useRev(logs.rev);
   const [editing, setEditing] = useState<string | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   const w = logs.well;
   const opts = w ? availableCurves(w) : [];
+  const editTrack = logs.tracks.find((t) => t.id === editing);
   const change = (layout?: TrackSpec[]) => {
     if (layout) logs.tracks = layout;
     logs.commitLayout();
@@ -66,38 +68,37 @@ export function TrackEditor({ app }: { app: App }) {
             Reset to standard
           </Button>
         </div>
-        <ul className="flex flex-col gap-1" aria-label="Tracks">
-          {logs.tracks.map((t, i) => {
-            const noData = w && !trackHasData(w, t);
-            return (
-              <li key={t.id} className="flex flex-col gap-2">
-                <div className="flex items-center gap-1">
-                  <Switch size="sm" aria-label={`Show ${t.title}`} isSelected={!t.hidden} onChange={(on) => ((t.hidden = !on), change())} />
-                  <span className="ml-1.5 min-w-0 flex-1 truncate text-sm" title={t.curves.map((c) => c.label).join(', ')}>
-                    {t.title}
-                  </span>
-                  {t.custom && <Badge variant="info">added</Badge>}
-                  {noData && <Badge variant="outline">no data</Badge>}
-                  <IconButton label="Move up" size="icon-xs" isDisabled={i === 0} onPress={() => change(moveTrack(logs.tracks, t.id, -1))}>
-                    <ChevronUpIcon />
-                  </IconButton>
-                  <IconButton label="Move down" size="icon-xs" isDisabled={i === logs.tracks.length - 1} onPress={() => change(moveTrack(logs.tracks, t.id, 1))}>
-                    <ChevronDownIcon />
-                  </IconButton>
-                  <IconButton label="Scales and colours" size="icon-xs" variant={editing === t.id ? 'secondary' : 'ghost'} onPress={() => setEditing(editing === t.id ? null : t.id)}>
-                    <SlidersHorizontalIcon />
-                  </IconButton>
-                  {t.custom && (
-                    <IconButton label="Remove track" size="icon-xs" onPress={() => change(logs.tracks.filter((q) => q !== t))}>
-                      <Trash2Icon />
-                    </IconButton>
-                  )}
-                </div>
-                {editing === t.id && <TrackFields app={app} t={t} onChange={() => change()} />}
-              </li>
-            );
-          })}
-        </ul>
+        <SortableList label="Tracks" items={logs.tracks} itemLabel={(t) => t.title} deps={[rev, editing, w]} onReorder={(ids) => change(ids.map((id) => logs.tracks.find((t) => t.id === id)!))}>
+          {(t) => (
+            <>
+              <Switch size="sm" aria-label={`Show ${t.title}`} isSelected={!t.hidden} onChange={(on) => ((t.hidden = !on), change())} />
+              <span className="ml-1.5 min-w-0 flex-1 truncate text-sm" title={t.curves.map((c) => c.label).join(', ')}>
+                {t.title}
+              </span>
+              {t.custom && <Badge variant="info">added</Badge>}
+              {w && !trackHasData(w, t) && <Badge variant="outline">no data</Badge>}
+              <IconButton label={`Scales and colours of ${t.title}`} size="icon-xs" variant={editing === t.id ? 'secondary' : 'ghost'} onPress={() => setEditing(editing === t.id ? null : t.id)}>
+                <SlidersHorizontalIcon />
+              </IconButton>
+              {t.custom && (
+                <IconButton label={`Remove ${t.title}`} size="icon-xs" onPress={() => change(logs.tracks.filter((q) => q !== t))}>
+                  <Trash2Icon />
+                </IconButton>
+              )}
+            </>
+          )}
+        </SortableList>
+        {editTrack && (
+          <section aria-label={`Scales and colours of ${editTrack.title}`} className="flex flex-col gap-2 rounded-md border border-border-subtle p-2">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs font-medium">{editTrack.title}</span>
+              <IconButton label="Close" size="icon-xs" onPress={() => setEditing(null)}>
+                <XIcon />
+              </IconButton>
+            </div>
+            <TrackFields app={app} t={editTrack} onChange={() => change()} />
+          </section>
+        )}
         <Separator emphasis="subtle" />
         <div className="flex items-center gap-2">
           <CompactSelect label="Curve for a new track" value={pick} onChange={setPick} options={curveGroups(opts)} placeholder="Choose a curve …" className="min-w-0 flex-1" />
@@ -140,6 +141,7 @@ function TrackFields({ app, t, onChange }: { app: App; t: TrackSpec; onChange: (
           <Input
             id={titleId}
             variant="filled"
+            className="h-7"
             maxLength={40}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -153,13 +155,19 @@ function TrackFields({ app, t, onChange }: { app: App; t: TrackSpec; onChange: (
       )}
       <Field orientation="horizontal" className="gap-2">
         <FieldLabel htmlFor={widthId}>Width</FieldLabel>
-        <CompactSelect id={widthId} value={String(width)} onChange={(v) => ((t.flex = +v), onChange())} options={WIDTHS.map(([v, l]) => ({ id: String(v), label: l }))} />
+        <CompactSelect id={widthId} label="Track width" value={String(width)} onChange={(v) => ((t.flex = +v), onChange())} options={WIDTHS.map(([v, l]) => ({ id: String(v), label: l }))} />
       </Field>
       {t.curves.map((c, k) => (
-        <CurveFields key={`${c.key}:${k}`} c={c} canRemove={t.curves.length > 1 && (!!t.custom || k >= builtInCount(t))} onRemove={() => ((t.curves = t.curves.filter((q) => q !== c)), onChange())} onChange={(first) => {
+        <CurveFields
+          key={`${c.key}:${k}`}
+          c={c}
+          canRemove={t.curves.length > 1 && (!!t.custom || k >= builtInCount(t))}
+          onRemove={() => ((t.curves = t.curves.filter((q) => q !== c)), onChange())}
+          onChange={(first) => {
             if (k === 0 && first !== undefined) t.grid = first ? 'log' : 'linear';
             onChange();
-          }} />
+          }}
+        />
       ))}
       {t.custom && (
         <Field orientation="horizontal" className="gap-2">
@@ -176,7 +184,13 @@ function TrackFields({ app, t, onChange }: { app: App; t: TrackSpec; onChange: (
           onChange={(id) => {
             const o = opts.find((q) => q.id === id);
             if (!o) return;
-            t.curves.push(specForOption(w, o, t.curves.map((q) => q.color)));
+            t.curves.push(
+              specForOption(
+                w,
+                o,
+                t.curves.map((q) => q.color),
+              ),
+            );
             onChange();
           }}
           className="w-full"
@@ -218,9 +232,9 @@ function CurveFields({ c, canRemove, onRemove, onChange }: { c: CurveSpec; canRe
         )}
       </div>
       <div className="flex items-center gap-1.5">
-        <Input aria-label="Left edge" variant="filled" type="number" step="any" className="w-20" value={min} onChange={(e) => setMin(e.target.value)} onBlur={() => commit('min', min)} />
+        <Input aria-label="Left edge" variant="filled" type="number" step="any" className="h-7 w-20" value={min} onChange={(e) => setMin(e.target.value)} onBlur={() => commit('min', min)} />
         <span className="text-muted-foreground">→</span>
-        <Input aria-label="Right edge" variant="filled" type="number" step="any" className="w-20" value={max} onChange={(e) => setMax(e.target.value)} onBlur={() => commit('max', max)} />
+        <Input aria-label="Right edge" variant="filled" type="number" step="any" className="h-7 w-20" value={max} onChange={(e) => setMax(e.target.value)} onBlur={() => commit('max', max)} />
         <IconButton
           label="Reverse the scale"
           size="icon-xs"
