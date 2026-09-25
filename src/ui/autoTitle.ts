@@ -9,6 +9,8 @@ export function installAutoTitle(root: Document = document) {
   root.addEventListener(
     'pointerover',
     (e) => {
+      // measuring forces a style and layout pass: not while something is being dragged
+      if (e.buttons) return;
       let el = e.target as HTMLElement | null;
       for (let depth = 0; el && depth < 4; depth++, el = el.parentElement) {
         if (el.hasAttribute('title')) return;

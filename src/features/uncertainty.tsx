@@ -4,13 +4,13 @@ import { DEFAULT_ERROR_MODEL, ellipseAt, uncertaintyAlong, type Ellipse } from '
 import type { App } from '../ui/app';
 import { Note, SelectField } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import type { FeatureModule } from './registry';
 
 /** Position-uncertainty ellipses swept along the active trajectory. */
 export class UncertaintyFeature implements FeatureModule {
   readonly id = 'uncertainty' as const;
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   sigma = 2;
   ellipses: Ellipse[] = [];
   private group = new THREE.Group();
@@ -78,6 +78,8 @@ export class UncertaintyFeature implements FeatureModule {
   rebuild() {
     this.clear();
     this.rev.bump();
+    // the geosteering strip and the section draw the band
+    this.app.paintRev.bump();
     const e = this.app.engine;
     const w = e.activeWell;
     if (!w) return;

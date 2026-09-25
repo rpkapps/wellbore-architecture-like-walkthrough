@@ -14,7 +14,7 @@ import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import { SortableList } from '../ui/sortable';
 import type { FeatureModule } from './registry';
 
@@ -40,7 +40,7 @@ export class ViewsFeature implements FeatureModule {
   readonly id = 'views' as const;
   views: SavedView[] = [];
   /** bump when the list of views changes (Features panel settings) */
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private presenting = false;
   private idx = 0;
@@ -356,15 +356,14 @@ export class ViewsFeature implements FeatureModule {
 function PresentCaption({ step, caption, dwell }: { step: string; caption: string; dwell: number }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
+    // ten steps a second read as smooth on a bar this size, and render React a sixth as often as every frame
     const t0 = performance.now();
-    let raf = 0;
-    const tick = () => {
+    const id = window.setInterval(() => {
       const s = (performance.now() - t0) / 1000;
       setElapsed(Math.min(dwell, s));
-      if (s < dwell) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+      if (s >= dwell) clearInterval(id);
+    }, 100);
+    return () => clearInterval(id);
   }, [dwell]);
   return (
     <Panel variant="elevated" size="lg" className="w-full">

@@ -4,6 +4,8 @@ import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
 import { FEATURES, type FeatureId } from '../features/registry';
 import type { App } from '../ui/app';
+import type { ConnectionState } from '../connect/hub';
+import { REPLAY_OFFSETS } from '../connect/offsets';
 import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, type Theme } from '../ui/prefs';
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
@@ -20,7 +22,7 @@ import { defineAction, type Action, type AnyAction } from './registry';
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -420,6 +422,161 @@ export function appActions(): AnyAction<App>[] {
       description: 'Opens the monthly production sheet of the field.',
       category: 'Data',
       run: (app) => app.productionOpen.set(true),
+    }),
+
+    // ------------------------------------------------------------------ live data
+    A({
+      id: 'data.sources',
+      title: 'Live data',
+      description: 'Shows the live and streamed data connections: their state, rate and messages.',
+      category: 'Data',
+      keywords: ['stream', 'realtime', 'real-time', 'connections', 'sources', 'kafka', 'witsml'],
+      run: (app) => app.openSources(),
+    }),
+    A({
+      id: 'data.add_source',
+      title: 'Connect a data source',
+      description: 'Opens the connect dialog: files, URLs, REST polling, server-sent events, WebSocket, MQTT, or the relay (Kafka, WITSML, ETP, OSDU, TCP).',
+      category: 'Data',
+      keywords: ['connect', 'stream', 'kafka', 'mqtt', 'websocket', 'witsml', 'etp', 'osdu', 'api', 'realtime'],
+      run: (app) => app.connectRequest.set({}),
+    }),
+    A({
+      id: 'data.live_charts',
+      title: 'Live charts',
+      description: 'Shows the strip charts of readings arriving by time (drilling parameters, sensors).',
+      category: 'Data',
+      keywords: ['strip chart', 'realtime', 'drilling parameters', 'trend'],
+      run: (app) => app.openLive(),
+    }),
+    A({
+      id: 'data.replay',
+      title: 'Replay a well live',
+      description: 'Drills a Volve well again as a live feed (rig readings, MWD sensors behind the bit, surveys every stand), faster than real time. Creates a new well that grows as it is drilled.',
+      category: 'Data',
+      keywords: ['simulate', 'demo', 'drilling', 'realtime', 'stream'],
+      input: z.object({
+        well: z.string().optional().describe('Well id or name (default: the main well)'),
+        speed: z.number().min(1).max(3600).default(60).describe('Simulated seconds per real second'),
+        fromMd: z.number().min(0).optional().describe('Start drilling at this MD, metres (default: 600 m above TD)'),
+      }),
+      choices: (app) =>
+        app.field.wells.filter((w) => w.lasFile && !w.extra).flatMap((w) => [60, 600].map((speed) => ({ label: `${w.name} · ${speed}× real time`, input: { well: w.id, speed }, keywords: [w.name] }))),
+      run: (app, { well, speed, fromMd }) => {
+        const w = well ? app.field.wells.find((x) => x.id === well || x.name === well) : app.field.primary;
+        if (!w?.lasFile) throw new Error(`${w?.name ?? well} has no logs to replay.`);
+        const start = fromMd ?? Math.max(300, Math.round(w.tdMD - 600));
+        const id = app.hub.connect(
+          {
+            name: `Replay ${w.name}`,
+            transport: { id: 'replay', options: { well: w.id, speed, fromMd: start } },
+            steps: [
+              { id: 'map', options: {} },
+              { id: 'units', options: {} },
+              { id: 'time-to-depth', options: { step: 0.1524, offsets: REPLAY_OFFSETS } },
+            ],
+          },
+          undefined,
+          { focus: true },
+        );
+        app.openSources(id);
+        return { connection: id, well: `${w.name} · live`, fromMd: start, speed };
+      },
+    }),
+    A({
+      id: 'data.connect',
+      title: 'Connect a source (with settings)',
+      description:
+        'Starts a connection from a full description: transport (id + options), format (codec id or "auto" + options), steps (transform ids + options), and where rows without a well go. Call data.plugins first for the ids and option schemas.',
+      category: 'Data',
+      hidden: true,
+      input: z.object({
+        name: z.string().min(1),
+        transport: z.object({ id: z.string(), options: z.record(z.string(), z.unknown()).default({}) }),
+        format: z.object({ id: z.string().default('auto'), options: z.record(z.string(), z.unknown()).default({}) }).optional(),
+        steps: z.array(z.object({ id: z.string(), options: z.record(z.string(), z.unknown()).default({}) })).default([]),
+        target: z.object({ mode: z.enum(['auto', 'active', 'well', 'new']), well: z.string().default('') }).optional(),
+      }),
+      run: (app, input) => {
+        if (input.transport.id === 'file') throw new Error('Files are chosen by the person: open the connect dialog instead.');
+        return { connection: app.hub.connect(input) };
+      },
+    }),
+    A({
+      id: 'data.plugins',
+      title: 'Connector plugins',
+      description: 'Every transport, format (codec) and step (transform) available, with the JSON Schema of its options.',
+      category: 'Data',
+      hidden: true,
+      run: async (app) => (await app.hub.describe()).plugins,
+    }),
+    A({
+      id: 'data.list',
+      title: 'Live connections',
+      description: 'Each connection: name, state, format, values received, rate, and the wells it writes to.',
+      category: 'Data',
+      hidden: true,
+      run: (app) =>
+        app.hub.connections.value.map((c) => ({
+          id: c.id,
+          name: c.config.name,
+          transport: c.config.transport.id,
+          status: c.paused ? 'paused' : c.status,
+          detail: c.detail,
+          format: c.codec,
+          values: c.stats?.samples ?? 0,
+          valuesPerSecond: c.rate[c.rate.length - 1] ?? 0,
+          wells: c.wells.map((id) => app.field.wells.find((w) => w.id === id)?.name ?? id),
+          lastMessages: c.log.slice(-5).map((l) => `${l.level}: ${l.text}`),
+        })),
+    }),
+    ...(
+      [
+        [
+          'pause',
+          'Pause a connection',
+          'Holds a connection’s data (what arrives meanwhile is kept and delivered on resume).',
+          (c: ConnectionState) => c.status !== 'stopped' && !c.paused,
+          (app: App, id: string) => app.hub.pause(id, true),
+        ],
+        [
+          'resume',
+          'Resume a connection',
+          'Resumes a paused connection, or starts a stopped one.',
+          (c: ConnectionState) => c.paused || c.status === 'stopped' || c.status === 'error',
+          (app: App, id: string) => (app.hub.get(id)?.paused ? app.hub.pause(id, false) : app.hub.resume(id)),
+        ],
+        ['stop', 'Stop a connection', 'Disconnects; the data already received stays.', (c: ConnectionState) => c.status !== 'stopped', (app: App, id: string) => app.hub.stop(id)],
+        ['remove', 'Remove a connection', 'Disconnects and forgets the connection (the data already received stays in its wells).', () => true, (app: App, id: string) => app.hub.remove(id)],
+      ] as const
+    ).map(([verb, title, description, when, act]) =>
+      A({
+        id: `data.${verb}`,
+        title,
+        description,
+        category: 'Data',
+        needsApproval: verb === 'remove',
+        input: z.object({ id: z.string().describe('Connection id (see data.list)') }),
+        enabled: (app) => app.hub.connections.value.some(when),
+        choices: (app) => app.hub.connections.value.filter(when).map((c) => ({ label: c.config.name, input: { id: c.id } })),
+        run: (app, { id }) => {
+          if (!app.hub.get(id)) throw new Error(`No connection "${id}".`);
+          act(app, id);
+          return { id, status: app.hub.get(id)?.status ?? 'removed' };
+        },
+      }),
+    ),
+    A({
+      id: 'data.follow_bit',
+      title: 'Follow the bit',
+      description: 'While a well is being drilled, keep the view and the log tracks at the bottom of the hole.',
+      category: 'Data',
+      input: z.object({ on: z.boolean() }),
+      choices: (app) => [
+        { label: 'On', input: { on: true }, current: app.hub.followBit.value },
+        { label: 'Off', input: { on: false }, current: !app.hub.followBit.value },
+      ],
+      run: (app, { on }) => app.hub.followBit.set(on),
     }),
 
     // ------------------------------------------------------------------ preferences

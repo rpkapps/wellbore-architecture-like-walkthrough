@@ -47,7 +47,7 @@ export function ScrubField({
 }) {
   const bar = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
-  const drag = useRef<{ x: number; t: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; t: number; w: number; moved: boolean } | null>(null);
   const dec = Math.max(0, -Math.floor(Math.log10(step)));
   const toT = (v: number) => {
     const c = Math.max(min, Math.min(max, v));
@@ -69,16 +69,16 @@ export function ScrubField({
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (isDisabled || editing || e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, t, moved: false };
+    // the width once per gesture: reading layout on every move can force it while the page restyles
+    drag.current = { x: e.clientX, t, w: e.currentTarget.clientWidth || 1, moved: false };
   };
   const move = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = drag.current;
-    if (!d || !bar.current) return;
+    if (!d) return;
     const dx = e.clientX - d.x;
     if (!d.moved && Math.abs(dx) < 3) return;
     d.moved = true;
-    const w = bar.current.clientWidth || 1;
-    emit.push(fromT(d.t + (dx / w) * (e.shiftKey ? 0.1 : 1)));
+    emit.push(fromT(d.t + (dx / d.w) * (e.shiftKey ? 0.1 : 1)));
   };
   const up = () => {
     const d = drag.current;

@@ -11,16 +11,18 @@ import type { GuidedView, NavMode } from '../scene/cameraRig';
 import type { PropertyMode } from '../scene/wellbore';
 import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
-import { onAnyChange, Rev, Signal } from './signal';
+import { onAnyChange, Rev, SCENE, Signal } from './signal';
 import { Workspace } from './workspace/layout';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
-import { withTransition } from './transition';
+import { noteSyncUpdate, transitionBusyFor, withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
 import { inspect, type InspectorView } from './inspect';
 import { DataImporter } from './dataImport';
+import { DataHub } from '../connect/hub';
+import type { ConnectRequest } from './shell/ConnectDialog';
 
 export type SidebarTab = 'scene' | 'interpretation' | 'features';
 
@@ -84,6 +86,27 @@ export interface SceneDisplay {
 export type LayerPreset = 'default' | 'solid' | 'reservoir' | 'pay';
 
 /**
+ * A number that changes every frame (the camera heading). Unlike a Signal it
+ * renders nothing and asks for no redraw: subscribers write it straight to
+ * the DOM (the compass needle turns with the camera without a React render).
+ */
+export class FrameValue {
+  private listeners: ((v: number) => void)[] = [];
+  value = 0;
+
+  set(v: number) {
+    if (v === this.value) return;
+    this.value = v;
+    for (let i = 0; i < this.listeners.length; i++) this.listeners[i](v);
+  }
+
+  subscribe(l: (v: number) => void): () => void {
+    this.listeners = [...this.listeners, l];
+    return () => (this.listeners = this.listeners.filter((x) => x !== l));
+  }
+}
+
+/**
  * The application controller. It owns the engine, the feature modules and the
  * state the React chrome renders; the chrome subscribes to its signals and
  * calls its methods. Nothing here builds DOM.
@@ -102,18 +125,23 @@ export class App {
   /** the engine exists and the first well is loaded */
   readonly ready = new Signal(false);
   /** active well, its data or its interpretation changed */
-  readonly wellRev = new Rev();
+  readonly wellRev = new Rev(SCENE);
   /** bumped while an interpretation parameter is being dragged (the live results only) */
-  readonly interpRev = new Rev();
+  readonly interpRev = new Rev(SCENE);
   /** geology layers, section box or scene display options changed */
-  readonly sceneRev = new Rev();
+  readonly sceneRev = new Rev(SCENE);
   /** navigation mode, camera view, property mode or colour map changed */
-  readonly viewRev = new Rev();
+  readonly viewRev = new Rev(SCENE);
+  /** a colour the tool-window canvases draw with changed (colour map, formation colour, uncertainty band): they redraw */
+  readonly paintRev = new Rev();
   /** the same position, updated at most ~15 times a second: for text read-outs that need not follow every frame */
   readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
   private poseTextAt = 0;
   readonly pose = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
+  /** camera read-out text, updated at most ~15 times a second (and at once when the place or the mode changes) */
   readonly hud = new Signal<Hud>({ heading: 0, where: '', nav: '', camY: 0 });
+  /** the camera heading in degrees, every frame it turns: for the compass needle */
+  readonly heading = new FrameValue();
   readonly playing = new Signal(false);
   readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
   readonly inspector = new Signal<InspectorView | null>(null);
@@ -144,15 +172,19 @@ export class App {
   private zoneCache: ZoneSummary[] | null = null;
   private tourTimer: number | null = null;
   private chapterIdx = -1;
-  private lastHover = 0;
   private resolveReady!: () => void;
   /** resolves once the first well is on screen */
   readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
 
   readonly importer: DataImporter;
+  /** live and streamed data: the connectors (src/connect) */
+  readonly hub: DataHub;
+  /** the connect dialog: open with a draft, or to edit a connection */
+  readonly connectRequest = new Signal<ConnectRequest | null>(null);
 
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
+    this.hub = new DataHub(this);
     // formation colours the user picked, before the geology is built from them
     try {
       const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
@@ -171,11 +203,14 @@ export class App {
     const e = engine;
     this.flags = new FeatureFlags(e.quality === 'low');
     this.display.postFx = e.quality !== 'low';
-    // the 3D view draws on demand: any state change the chrome shows is a reason to redraw
-    onAnyChange.hook = () => e.requestRender(300);
+    // the 3D view draws on demand: only signals marked SCENE redraw it (chrome state such as
+    // drags, layout and read-outs never does); the engine's setters request their own frames
+    onAnyChange.hook = () => e.requestRender(100);
     // personal settings that reach into the scene
     const personal = () => {
       e.rig.instantMoves = prefs.value.reduceMotion;
+      // the labels are placed again (panel opacity or blur scrubs leave the view alone)
+      if (e.labelDensity !== prefs.value.labelDensity) e.requestRender();
       e.labelDensity = prefs.value.labelDensity;
     };
     personal();
@@ -189,20 +224,26 @@ export class App {
       this.wellRev.bump();
     });
     this.logs.onPick = (md) => this.travelTo(md);
+    // the engine redraws when the hover depth changes (a pointer crossing the tracks costs nothing)
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
-      e.requestRender(200);
     };
     this.logs.onScroll = (md) => {
+      this.followingBit = false;
       e.rig.playing = false;
       e.rig.targetMd = null;
       e.rig.setMd(md);
     };
-    e.rig.onUserInput = () => this.stopTour();
+    e.rig.onUserInput = () => {
+      this.stopTour();
+      // orbiting the view in Explore keeps following (the camera moves with the bit); travelling along the well stops it
+      if (e.rig.mode !== 'explore') this.followingBit = false;
+    };
     e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
     for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
+    this.frameModules = [...this.modules.values()].filter((m) => m.frame);
     void this.loadWell(this.field.primary.id, false).then(() => {
       const w = this.engine.activeWell;
       const hug = w.zones.find((z) => z.formationId === 'hugin');
@@ -215,6 +256,7 @@ export class App {
           try {
             if (on) m.enable();
             else m.disable();
+            e.requestRender();
           } catch (err) {
             console.error(`feature ${m.id}`, err);
             this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
@@ -226,7 +268,11 @@ export class App {
     });
   }
 
-  toast(msg: string, kind: 'info' | 'error' = 'info') {
+  toast(msg: string, kind: 'info' | 'error' = 'info', since = performance.now()) {
+    // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
+    const wait = transitionBusyFor();
+    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, since), wait);
+    noteSyncUpdate();
     if (kind === 'error') toast.error(msg);
     else toast(msg);
   }
@@ -330,6 +376,86 @@ export class App {
     this.interpRev.bump();
   }
 
+  /**
+   * Streamed data changed the active well. The cheap path re-runs the
+   * interpretation and re-uploads the wellbore's data textures; `rebuild`
+   * rebuilds its geometry too (the well got deeper or its path changed).
+   * The hub decides which, and how often, from what each costs.
+   */
+  liveRefresh(o: { rebuild: boolean; curves: boolean; features: boolean; fromMd?: number; panels?: boolean }) {
+    const w = this.engine.activeWell;
+    w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
+    this.zoneCache = null;
+    if (o.rebuild) {
+      this.engine.refreshWellData();
+      this.applyWellboreDisplay();
+      this.chapters = buildChapters(w, this.field);
+    } else this.engine.refreshFrom(o.fromMd ?? 0);
+    this.engine.wellbore?.setClip(w.tdMD);
+    this.engine.rig.mdMax = w.tdMD;
+    if (o.curves) this.logs.setWell(w);
+    else this.logs.invalidate();
+    if (o.features) this.notifyFeatures();
+    // the panels' numbers follow at their own, slower pace
+    if (o.panels !== false) this.interpRev.bump();
+    this.engine.requestRender(300);
+  }
+
+  /** the well the Live charts panel shows (null: the active well, or the first with readings) */
+  readonly liveWell = new Signal<string | null>(null);
+
+  /** Show the live charts (of a well). */
+  openLive(wellId?: string) {
+    if (wellId) this.liveWell.set(wellId);
+    withTransition(() => this.workspace.open('live'));
+  }
+
+  /** Show the live data panel (and, with an id, that connection in it). */
+  openSources(id?: string) {
+    withTransition(() => this.workspace.open('sources'));
+    if (id) this.hub.focus.set(id);
+  }
+
+  /** following the bit of a well being drilled (until the user moves the view) */
+  private followingBit = false;
+
+  /** Start keeping the view at the bit (the hub calls this when it opens a well being drilled). */
+  startFollowing() {
+    this.followingBit = true;
+    this.followPos = null;
+  }
+
+  /**
+   * Keep the view at the bit of a well being drilled. It starts following
+   * once the view is near the bottom, and lets go when the user moves.
+   */
+  followDepth(md: number) {
+    const rig = this.engine.rig;
+    if (rig.playing || this.chapter.value?.touring) return;
+    if (!this.followingBit) {
+      if (Math.abs(rig.md - md) > 60) return;
+      this.followingBit = true;
+    }
+    if (rig.mode === 'explore') {
+      // the free camera keeps its angle and distance, and moves with the bit
+      const p = this.engine.wellbore?.frameAt(Math.min(md, rig.mdMax)).pos;
+      if (!p) return;
+      if (this.followPos) {
+        const d = p.clone().sub(this.followPos);
+        rig.camera.position.add(d);
+        rig.orbit.target.add(d);
+      }
+      this.followPos = p.clone();
+      rig.md = Math.min(md, rig.mdMax);
+      this.engine.requestRender(300);
+      return;
+    }
+    this.followPos = null;
+    if (Math.abs(rig.md - md) < 0.05) return;
+    rig.targetMd = Math.min(md, rig.mdMax);
+  }
+  private followPos: THREE.Vector3 | null = null;
+
   reinterpret() {
     const w = this.engine.activeWell;
     w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
@@ -397,6 +523,7 @@ export class App {
     this.engine.setColormap(n);
     this.logs.colormap = n;
     this.logs.invalidate();
+    this.paintRev.bump();
     this.viewRev.bump();
   }
 
@@ -493,6 +620,7 @@ export class App {
     } catch {
       /* storage blocked */
     }
+    this.paintRev.bump();
     this.sceneRev.bump();
     this.wellRev.bump();
   }
@@ -718,16 +846,51 @@ export class App {
       const dist = Math.min(this.engine.camera.position.distanceTo(p.point) * 0.45, 900);
       rig.flyTo(p.point.clone().addScaledVector(dir, Math.max(25, dist)), p.point, 1.6);
     });
-    cv.addEventListener('pointermove', (e) => {
+    // hover: the latest pointer position is picked once per frame at most (and no more than
+    // ~20 times a second), never while a button is held (orbiting, or a drag from the chrome)
+    let hx = 0;
+    let hy = 0;
+    let hoverRaf = 0;
+    let hoverAt = 0;
+    const setHover = (md: number | null, over: boolean) => {
+      if (md !== this.logs.hoverMd) {
+        const wb = this.engine.wellbore;
+        if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
+        this.logs.hoverMd = md;
+        this.engine.requestRender(200);
+      }
+      const c = over ? 'pointer' : '';
+      if (cv.style.cursor !== c) cv.style.cursor = c;
+    };
+    const cancel = () => {
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
+      hoverRaf = 0;
+    };
+    const hover = () => {
+      hoverRaf = 0;
       const now = performance.now();
-      if (now - this.lastHover < 120 || e.buttons) return;
-      this.lastHover = now;
-      const p = this.engine.pick(e.clientX, e.clientY, true);
-      const wb = this.engine.wellbore;
-      if (wb) wb.uniforms.uHoverMd.value = p?.md ?? -1e6;
-      this.logs.hoverMd = p?.md ?? null;
-      this.logs.invalidate();
-      cv.style.cursor = p ? 'pointer' : '';
+      if (now - hoverAt < 50) {
+        hoverRaf = requestAnimationFrame(hover);
+        return;
+      }
+      hoverAt = now;
+      const p = this.engine.pick(hx, hy, true);
+      setHover(p?.md ?? null, !!p);
+    };
+    cv.addEventListener(
+      'pointermove',
+      (e) => {
+        if (e.buttons) return cancel();
+        hx = e.clientX;
+        hy = e.clientY;
+        if (!hoverRaf) hoverRaf = requestAnimationFrame(hover);
+      },
+      { passive: true },
+    );
+    // the pointer went onto the chrome (or out of the window): nothing is hovered in the view
+    cv.addEventListener('pointerleave', () => {
+      cancel();
+      setHover(null, false);
     });
   }
 
@@ -759,15 +922,33 @@ export class App {
   }
 
   // ------------------------------------------------------------------ per-frame sync
+  /** the feature modules with a per-frame hook */
+  private frameModules: FeatureModule[] = [];
   private lastMdShown = -1;
+  // camera read-out state: recomputed only when the camera or the navigation mode changes
+  private readonly camDir = new THREE.Vector3();
+  private readonly camPos = new THREE.Vector3(NaN, NaN, NaN);
+  private readonly camQuat = new THREE.Quaternion(NaN, NaN, NaN, NaN);
+  private camY = 0;
+  private camAbove = false;
+  private navOf: [NavMode | null, GuidedView | null, string | null] = [null, null, null];
+  private nav = '';
+  private whereOf: [string | null | undefined, boolean] = [undefined, false];
+  private where = '';
+  private hudAt = 0;
+
+  /** Runs every animation frame, so its idle path allocates nothing and sets no signal that has not changed. */
   private frame(dt = 0.016) {
-    for (const m of this.modules.values())
-      if (m.frame && this.flags.on(m.id))
+    const mods = this.frameModules;
+    for (let i = 0; i < mods.length; i++) {
+      const m = mods[i];
+      if (this.flags.on(m.id))
         try {
-          m.frame(dt);
+          m.frame!(dt);
         } catch (err) {
           console.error(`feature ${m.id}`, err);
         }
+    }
     const e = this.engine;
     const rig = e.rig;
     const w = e.activeWell;
@@ -794,22 +975,32 @@ export class App {
       this.poseTextAt = now;
       this.poseText.set(this.pose.value);
     }
-    const dir = new THREE.Vector3();
-    e.camera.getWorldDirection(dir);
-    const heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI;
-    const cam = e.camera.position;
-    const where =
-      e.cameraFormation === 'sea'
-        ? 'In the water column'
-        : e.cameraFormation
-          ? `Inside ${FORMATION_BY_ID.get(e.cameraFormation)?.name ?? e.cameraFormation}`
-          : cam.y > 0
-            ? 'Above sea level'
-            : 'Outside model';
-    const nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
+    // the compass needle follows every frame (straight to the DOM); the text at a readable pace
+    const cam = e.camera;
+    if (!cam.position.equals(this.camPos) || !cam.quaternion.equals(this.camQuat)) {
+      this.camPos.copy(cam.position);
+      this.camQuat.copy(cam.quaternion);
+      cam.getWorldDirection(this.camDir);
+      this.heading.set(Math.round((Math.atan2(this.camDir.x, -this.camDir.z) * 1800) / Math.PI) / 10);
+      this.camY = Math.round(cam.position.y);
+      this.camAbove = cam.position.y > 0;
+    }
+    const nv = this.navOf;
+    if (nv[0] !== rig.mode || nv[1] !== rig.guidedView || nv[2] !== rig.exploreView) {
+      this.navOf = [rig.mode, rig.guidedView, rig.exploreView];
+      this.nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
+    }
+    const f = e.cameraFormation;
+    const above = this.camAbove;
+    if (this.whereOf[0] !== f || this.whereOf[1] !== above) {
+      this.whereOf = [f, above];
+      this.where = f === 'sea' ? 'In the water column' : f ? `Inside ${FORMATION_BY_ID.get(f)?.name ?? f}` : above ? 'Above sea level' : 'Outside model';
+    }
     const h = this.hud.value;
-    const hd = Math.round(heading);
-    const cy = Math.round(cam.y);
-    if (h.heading !== hd || h.camY !== cy || h.where !== where || h.nav !== nav) this.hud.set({ heading: hd, where, nav, camY: cy });
+    const hd = Math.round(this.heading.value);
+    if (h.where !== this.where || h.nav !== this.nav || ((h.heading !== hd || h.camY !== this.camY) && now - this.hudAt > 66)) {
+      this.hudAt = now;
+      this.hud.set({ heading: hd, where: this.where, nav: this.nav, camY: this.camY });
+    }
   }
 }

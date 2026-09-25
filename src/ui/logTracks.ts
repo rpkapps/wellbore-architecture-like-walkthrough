@@ -6,6 +6,7 @@ import { DEFAULT_TRACKS, defaultLayout, parseLayout, resolveCurve, visibleTracks
 import type { Curve } from '../data/types';
 import { fmt } from './dom';
 import { Rev, Signal } from './signal';
+import { fitStore } from './toolWindow';
 import { cssVar, font, ink, wash } from './tokens';
 
 const LAYOUT_KEY = 'vwt.logtracks.v1';
@@ -48,9 +49,8 @@ export class LogTracks {
   private ctx: CanvasRenderingContext2D | null = null;
   well?: Well;
   cursorMd = 0;
-  hoverMd: number | null = null;
+  private hover: number | null = null;
   window = 160;
-  private dirty = true;
   private headH = 86;
   colormap: ColormapName = 'resistivity';
   onPick?: (md: number) => void;
@@ -69,17 +69,44 @@ export class LogTracks {
   /** dragging a track header (reorder) or a boundary between tracks (resize) */
   private gesture: { kind: 'move'; spec: TrackSpec; x0: number; x: number; started: boolean } | { kind: 'resize'; i: number; x0: number; f0: [number, number] } | null = null;
   private suppressClick = false;
+  /** the panel's size in CSS px, from the ResizeObserver (never read from layout) */
+  private W = 0;
+  private H = 0;
+  /**
+   * The tracks are drawn once into a strip at least as tall as the depth window (and
+   * the header into its own layer); a cursor move only copies the visible part
+   * of the strip and draws the cursor over it. The strip is redrawn when the
+   * data, the layout, the size or the zoom change, or the cursor leaves it.
+   */
+  private strip: { cv: HTMLCanvasElement; s0: number; rows: number; scale: number; window: number; dpr: number } | null = null;
+  private head: HTMLCanvasElement | null = null;
+  /** per shown track: prefix counts of strip rows where its first curve has data (null: the curve is missing) */
+  private present: (Int32Array | null)[] = [];
+  private stale = true;
+  private pending = false;
+  private raf = 0;
+  private micro = false;
+  /** the cursor's last move, for which way the strip reaches ahead */
+  private step = 0;
 
   constructor() {
     this.loadLayout();
-    const loop = () => {
-      requestAnimationFrame(loop);
-      if (this.dirty && this.canvas) {
-        this.dirty = false;
-        this.draw();
-      }
-    };
-    requestAnimationFrame(loop);
+  }
+
+  /** The 3D view's hover depth (a dashed line). Only the overlay redraws. */
+  get hoverMd() {
+    return this.hover;
+  }
+
+  set hoverMd(md: number | null) {
+    this.hover = md;
+    this.schedule();
+  }
+
+  /** Draw at the next frame; nothing runs while nothing changes. */
+  private schedule() {
+    this.pending = true;
+    if (!this.raf && this.canvas) this.raf = requestAnimationFrame(() => ((this.raf = 0), this.paint()));
   }
 
   /** Draw into this canvas (from the logs panel's ref callback; null when it unmounts). */
@@ -87,14 +114,18 @@ export class LogTracks {
     this.detach?.();
     this.detach = null;
     this.canvas = cv;
+    this.strip = null;
+    this.head = null;
+    this.W = 0;
+    this.H = 0;
     this.ctx = cv?.getContext('2d') ?? null;
     if (!cv) return;
     const move = (e: PointerEvent) => this.move(e);
     const leave = () => {
-      this.hoverMd = null;
+      this.hover = null;
       this.readout.set(null);
       this.onHover?.(null);
-      this.dirty = true;
+      this.schedule();
     };
     const click = (e: MouseEvent) => {
       if (this.suppressClick) {
@@ -111,8 +142,20 @@ export class LogTracks {
       if (e.ctrlKey || e.metaKey || e.altKey) this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15);
       else this.onScroll?.(this.cursorMd + (e.deltaY / 100) * this.window * 0.08);
     };
-    const ro = new ResizeObserver(() => (this.dirty = true));
-    ro.observe(cv);
+    // the host's size, reported once per frame after layout: redraw now, before paint, so the tracks never show stretched
+    const host = cv.parentElement ?? cv;
+    const ro = new ResizeObserver((es) => {
+      const r = es[es.length - 1].contentRect;
+      const W = Math.round(r.width);
+      const H = Math.round(r.height);
+      if (W === this.W && H === this.H) return;
+      this.W = W;
+      this.H = H;
+      this.stale = true;
+      this.pending = true;
+      this.paint();
+    });
+    ro.observe(host);
     cv.addEventListener('pointermove', move);
     cv.addEventListener('pointerdown', down);
     cv.addEventListener('pointerup', up);
@@ -120,9 +163,12 @@ export class LogTracks {
     cv.addEventListener('pointerleave', leave);
     cv.addEventListener('click', click);
     cv.addEventListener('wheel', wheel, { passive: false });
-    this.dirty = true;
+    this.stale = true;
+    this.schedule();
     this.detach = () => {
       ro.disconnect();
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
       cv.removeEventListener('pointermove', move);
       cv.removeEventListener('pointerdown', down);
       cv.removeEventListener('pointerup', up);
@@ -136,19 +182,19 @@ export class LogTracks {
   zoom(f: number) {
     this.window = Math.max(20, Math.min(4000, this.window * f));
     this.windowSize.set(Math.round(this.window));
-    this.dirty = true;
+    this.invalidate();
   }
 
   setWell(w: Well) {
     this.well = w;
-    this.dirty = true;
+    this.invalidate();
     this.rev.bump();
   }
 
   /** The track layout or its options changed: store and redraw. */
   commitLayout() {
     this.saveLayout();
-    this.dirty = true;
+    this.invalidate();
     this.rev.bump();
   }
 
@@ -178,15 +224,26 @@ export class LogTracks {
     }
   }
 
+  /** The data, colours or layout changed: redraw the tracks. */
   invalidate() {
-    this.dirty = true;
+    this.stale = true;
+    this.schedule();
   }
 
+  /**
+   * The 3D position moved (every frame in playback): the tracks scroll under
+   * a fixed cursor, which is a copy out of the strip, so it is drawn in the
+   * same frame (a microtask after the app's per-frame update) and costs little.
+   */
   setCursor(md: number) {
-    if (Math.abs(md - this.cursorMd) > 1e-3) {
-      this.cursorMd = md;
-      this.dirty = true;
-    }
+    if (Math.abs(md - this.cursorMd) <= 1e-3) return;
+    this.step = md - this.cursorMd;
+    this.cursorMd = md;
+    if (!this.canvas) return;
+    this.pending = true;
+    if (this.micro) return;
+    this.micro = true;
+    queueMicrotask(() => ((this.micro = false), this.paint()));
   }
 
   private range() {
@@ -194,7 +251,7 @@ export class LogTracks {
   }
 
   private mdAtY(y: number): number | null {
-    const H = this.canvas?.clientHeight ?? 0;
+    const H = this.H;
     if (y < this.headH) return null;
     const { top, bot } = this.range();
     return top + ((y - this.headH) / (H - this.headH)) * (bot - top);
@@ -256,24 +313,30 @@ export class LogTracks {
         const a = Math.max(0.3, Math.min(sum - 0.3, g.f0[0] + ((e.offsetX - g.x0) / avail) * flexTotal));
         t[g.i].spec.flex = a;
         t[g.i + 1].spec.flex = sum - a;
+        this.stale = true;
       } else {
         g.x = e.offsetX;
         if (Math.abs(g.x - g.x0) > 4) g.started = true;
-        this.canvas.style.cursor = g.started ? 'grabbing' : 'grab';
+        this.setCursorStyle(g.started ? 'grabbing' : 'grab');
       }
-      this.dirty = true;
+      this.schedule();
       return;
     }
-    if (this.canvas) this.canvas.style.cursor = this.edgeAt(e.offsetX) >= 0 ? 'col-resize' : e.offsetY < this.headH ? 'grab' : 'crosshair';
+    this.setCursorStyle(this.edgeAt(e.offsetX) >= 0 ? 'col-resize' : e.offsetY < this.headH ? 'grab' : 'crosshair');
     const md = this.mdAtY(e.offsetY);
     if (md === null || !this.well) {
       this.readout.set(null);
       return;
     }
-    this.hoverMd = md;
+    this.hover = md;
     this.onHover?.(md);
-    this.dirty = true;
+    this.schedule();
     this.readout.set(this.readoutAt(md, e.offsetX, e.offsetY));
+  }
+
+  /** only written when it changes: a style write per pointer move would restyle the canvas every time */
+  private setCursorStyle(c: string) {
+    if (this.canvas && this.canvas.style.cursor !== c) this.canvas.style.cursor = c;
   }
 
   private readoutAt(md: number, x: number, y: number): Readout {
@@ -281,7 +344,7 @@ export class LogTracks {
     const logs = w.logs;
     const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
     const z = w.zoneAt(md);
-    const out: Readout = { md, x, y, w: this.canvas?.clientWidth ?? 0, h: this.canvas?.clientHeight ?? 0, title: `${fmt.n(md, 1)} m MD · ${fmt.n(t.tvd, 1)} TVD`, zone: z?.name ?? '', groups: [] };
+    const out: Readout = { md, x, y, w: this.W, h: this.H, title: `${fmt.n(md, 1)} m MD · ${fmt.n(t.tvd, 1)} TVD`, zone: z?.name ?? '', groups: [] };
     if (!logs) return out;
     const v = (k: string) => {
       const c = findCurve(logs, k);
@@ -333,27 +396,38 @@ export class LogTracks {
     return this.well ? resolveCurve(this.well, spec) : null;
   }
 
-  private draw() {
+  private paint() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    if (!this.pending) return;
+    this.pending = false;
     const cv = this.canvas;
     const g = this.ctx;
-    if (!cv || !g) return;
+    if (!cv || !g || !this.W || !this.H) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const W = cv.clientWidth;
-    const H = cv.clientHeight;
-    if (W === 0 || H === 0) return;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
-      cv.width = Math.round(W * dpr);
-      cv.height = Math.round(H * dpr);
-    }
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
+    const st = this.strip;
+    const top = this.cursorMd - this.window / 2;
+    const off = st ? (top - st.s0) * st.scale : -1;
+    if (this.stale || !st || st.window !== this.window || st.dpr !== dpr) this.build(dpr, false);
+    else if (off < 0 || off + (this.H - this.headH) > st.rows) this.build(dpr, off > -(this.H - this.headH) && off < st.rows);
+    this.compose(dpr);
+  }
+
+  /** Redraw the header layer and the strip around the cursor (`scrolling`: the cursor moved on past its end). */
+  private build(dpr: number, scrolling: boolean) {
+    this.stale = false;
+    const cv = this.canvas!;
+    const { W, H } = this;
+    // grown in steps; the host clips the spare, so the canvas keeps the backing store's size in CSS px
+    fitStore(cv, W, H, dpr);
     const w = this.well;
-    if (!w) return;
+    if (!w) {
+      this.strip = null;
+      return;
+    }
     const shown = visibleTracks(this.tracks, w, this.hideEmpty);
     this.headH = TITLE_H + Math.max(1, ...shown.map((t) => t.curves.length)) * ROW_H + 4;
-    const { top, bot } = this.range();
-    const bodyH = H - this.headH;
-    const yOf = (md: number) => this.headH + ((md - top) / (bot - top)) * bodyH;
+    const bodyH = Math.max(1, H - this.headH);
 
     // layout
     const fixed = DEPTH_W + ZONE_W + HOLE_W + PAY_W + 6;
@@ -374,14 +448,44 @@ export class LogTracks {
     }
     this.layout.push({ x: x + 1, w: PAY_W, kind: 'pay' });
 
-    g.fillStyle = wash(0.028);
-    g.fillRect(0, 0, W, this.headH);
+    // the strip: the depth window, plus half a window ahead when the cursor scrolled out of it slowly (playback), so
+    // it is redrawn every half window at 1.5 times the cost of one view; a resize, new data or fast scrubbing redraw it
+    // every frame anyway, so then it is just the window
+    const top = this.cursorMd - this.window / 2;
+    const ahead = scrolling && Math.abs(this.step) < this.window / 4 ? this.window / 2 : 0;
+    const scale = bodyH / this.window;
+    const rows = Math.ceil(bodyH * (1 + ahead / this.window));
+    const s0 = this.step < 0 ? top - ahead : top;
+    const scv = this.strip?.cv ?? document.createElement('canvas');
+    fitStore(scv, W, rows, dpr);
+    const sg = scv.getContext('2d')!;
+    sg.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sg.clearRect(0, 0, scv.width, scv.height);
+    this.strip = { cv: scv, s0, rows, scale, window: this.window, dpr };
+    this.drawBody(sg, w, W, rows, s0, scale);
+
+    // the header does not move with the cursor
+    if (scrolling && this.head) return;
+    const hcv = this.head ?? document.createElement('canvas');
+    this.head = hcv;
+    fitStore(hcv, W, this.headH + 1, dpr);
+    const hg = hcv.getContext('2d')!;
+    hg.setTransform(dpr, 0, 0, dpr, 0, 0);
+    hg.clearRect(0, 0, hcv.width, hcv.height);
+    this.drawHead(hg, W);
+  }
+
+  /** Everything below the header, in strip coordinates: y = 0 at depth `s0`, `scale` px per metre. */
+  private drawBody(g: CanvasRenderingContext2D, w: Well, W: number, H: number, s0: number, scale: number) {
+    const top = s0;
+    const bot = s0 + H / scale;
+    const yOf = (md: number) => (md - s0) * scale;
     g.font = font.mono(9.5);
     g.textBaseline = 'middle';
     // depth track
     const step = niceStep(this.window / 8);
     g.fillStyle = wash(0.02);
-    g.fillRect(2, this.headH, DEPTH_W, bodyH);
+    g.fillRect(2, 0, DEPTH_W, H);
     for (let d = Math.ceil(top / step) * step; d <= bot; d += step) {
       const y = yOf(d);
       g.strokeStyle = wash(0.06);
@@ -389,7 +493,7 @@ export class LogTracks {
       g.moveTo(DEPTH_W + 2, y);
       g.lineTo(W, y);
       g.stroke();
-      if (d < 0 || d > w.tdMD || y - 11 < this.headH) continue;
+      if (d < 0 || d > w.tdMD) continue;
       g.fillStyle = ink.muted;
       g.textAlign = 'right';
       g.fillText(d.toFixed(step < 1 ? 1 : 0), DEPTH_W - 2, y - 5);
@@ -412,7 +516,7 @@ export class LogTracks {
     const zl = this.layout[1];
     for (const z of w.zones) {
       if (z.baseMD < top || z.topMD > bot) continue;
-      const y0 = Math.max(this.headH, yOf(z.topMD));
+      const y0 = Math.max(0, yOf(z.topMD));
       const y1 = Math.min(H, yOf(z.baseMD));
       const col = z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a1f26' : (FORMATION_BY_ID.get(z.formationId)?.color ?? '#555');
       g.fillStyle = col;
@@ -431,7 +535,7 @@ export class LogTracks {
     const hl = this.layout[2];
     for (const s of w.holeSections) {
       if (s.baseMD < top || s.topMD > bot) continue;
-      const y0 = Math.max(this.headH, yOf(s.topMD));
+      const y0 = Math.max(0, yOf(s.topMD));
       const y1 = Math.min(H, yOf(s.baseMD));
       const hw = (Math.min(s.hole, 36) / 36) * hl.w;
       g.fillStyle = 'rgba(160,140,110,0.35)';
@@ -439,11 +543,12 @@ export class LogTracks {
     }
     for (const c of w.casing) {
       if (c.shoeMD < top || c.topMD > bot) continue;
+      const y0 = Math.max(0, yOf(c.topMD));
       const y1 = Math.min(H, yOf(c.shoeMD));
       const cw = (Math.min(c.od, 36) / 36) * hl.w;
       g.fillStyle = '#aab3bc';
-      g.fillRect(hl.x + (hl.w - cw) / 2 - 1, Math.max(this.headH, yOf(c.topMD)), 1, y1 - Math.max(this.headH, yOf(c.topMD)));
-      g.fillRect(hl.x + (hl.w + cw) / 2, Math.max(this.headH, yOf(c.topMD)), 1, y1 - Math.max(this.headH, yOf(c.topMD)));
+      g.fillRect(hl.x + (hl.w - cw) / 2 - 1, y0, 1, y1 - y0);
+      g.fillRect(hl.x + (hl.w + cw) / 2, y0, 1, y1 - y0);
       if (c.shoeMD <= bot && c.shoeMD >= top) {
         g.beginPath();
         g.moveTo(hl.x, y1);
@@ -454,9 +559,10 @@ export class LogTracks {
     }
 
     // tracks
+    this.present = [];
     for (const L of this.layout) {
       if (L.kind !== 'track' || !L.spec) continue;
-      this.drawTrack(g, L.x, L.w, L.spec, top, bot, yOf, H);
+      this.present.push(this.trackBody(g, L.x, L.w, L.spec, s0, scale, H));
     }
 
     // pay flags
@@ -464,12 +570,21 @@ export class LogTracks {
     if (w.petro && w.logs) {
       const d = w.logs.depth;
       g.fillStyle = '#ffb547';
-      for (let py = this.headH; py < H; py++) {
-        const md = top + ((py - this.headH) / bodyH) * (bot - top);
-        const k = nearest(d, md);
+      for (let py = 0; py < H; py++) {
+        const k = nearest(d, s0 + py / scale);
         if (k >= 0 && w.petro.pay[k]) g.fillRect(pl.x, py, pl.w, 1);
       }
     }
+  }
+
+  /** The header layer: column titles, track headers and the frame's top. */
+  private drawHead(g: CanvasRenderingContext2D, W: number) {
+    g.fillStyle = wash(0.028);
+    g.fillRect(0, 0, W, this.headH);
+    for (const L of this.layout) if (L.kind === 'track' && L.spec) this.trackHead(g, L.x, L.w, L.spec);
+    const zl = this.layout[1];
+    const hl = this.layout[2];
+    const pl = this.layout[this.layout.length - 1];
     const mid = this.headH / 2;
     const vlabel = (text: string, cx: number) => {
       g.save();
@@ -496,10 +611,54 @@ export class LogTracks {
     g.moveTo(0, this.headH + 0.5);
     g.lineTo(W, this.headH + 0.5);
     g.stroke();
+  }
+
+  /** The visible part of the strip under the header, then what moves with the pointer and the cursor. */
+  private compose(dpr: number) {
+    const cv = this.canvas!;
+    const g = this.ctx!;
+    const { W, H, headH } = this;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cv.width, cv.height);
+    const st = this.strip;
+    if (!st || !this.head) return;
+    const bodyH = H - headH;
+    const top = this.cursorMd - this.window / 2;
+    const off = Math.round((top - st.s0) * st.scale * dpr);
+    const dw = Math.round(W * dpr);
+    const dh = Math.min(Math.round(bodyH * dpr), st.cv.height - off);
+    if (dh > 0) g.drawImage(st.cv, 0, off, dw, dh, 0, headH * dpr, dw, dh);
+    g.drawImage(this.head, 0, 0, dw, (headH + 1) * dpr, 0, 0, dw, (headH + 1) * dpr);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const yOf = (md: number) => headH + (md - top) * st.scale;
+
+    // track frames' bottom edge, and the notice where a track has nothing to show in the window
+    const a = Math.max(0, Math.round(off / dpr));
+    const b = Math.min(st.rows, a + Math.ceil(bodyH));
+    this.shownTracks().forEach((L, i) => {
+      const { x, w, spec: t } = L;
+      g.strokeStyle = wash(0.07);
+      g.beginPath();
+      g.moveTo(x + 1.5, H - 1.5);
+      g.lineTo(x + w - 1.5, H - 1.5);
+      g.stroke();
+      const p = this.present[i];
+      if (p && p[b] - p[a] > 0) return;
+      g.save();
+      g.fillStyle = ink.faint;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.font = font.sans(9.5);
+      const msg = !p ? (t.prov === 'calculated' ? 'Inputs missing' : 'Not acquired') : 'No data in window';
+      g.translate(x + w / 2, headH + bodyH / 2);
+      g.rotate(-Math.PI / 2);
+      g.fillText(msg, 0, 0);
+      g.restore();
+    });
 
     // hover line under the cursor line
-    if (this.hoverMd !== null) {
-      const yh = yOf(this.hoverMd);
+    if (this.hover !== null) {
+      const yh = yOf(this.hover);
       g.strokeStyle = 'rgba(255,217,160,0.55)';
       g.lineWidth = 1;
       g.setLineDash([3, 3]);
@@ -511,7 +670,7 @@ export class LogTracks {
     }
     // the 3D position: a glowing accent line with its depth on a tag over the depth column
     const yc = yOf(this.cursorMd);
-    if (yc >= this.headH) {
+    if (yc >= headH) {
       const accent = cssVar('--ui-accent', '#b954fd');
       g.save();
       g.shadowColor = accent;
@@ -549,21 +708,25 @@ export class LogTracks {
     }
   }
 
-  private drawTrack(g: CanvasRenderingContext2D, x: number, w: number, t: TrackSpec, top: number, bot: number, _yOf: (md: number) => number, H: number) {
-    const bodyTop = this.headH;
-    const bodyH = H - this.headH;
+  /** A track's body in strip coordinates; returns prefix counts of the rows its first curve has data in (null: missing). */
+  private trackBody(g: CanvasRenderingContext2D, x: number, w: number, t: TrackSpec, s0: number, scale: number, H: number): Int32Array | null {
     // frame
     g.fillStyle = wash(0.018);
-    g.fillRect(x + 1, bodyTop, w - 2, bodyH);
+    g.fillRect(x + 1, 0, w - 2, H);
     g.strokeStyle = wash(0.07);
-    g.strokeRect(x + 1.5, 2.5, w - 3, H - 4);
+    g.beginPath();
+    g.moveTo(x + 1.5, 0);
+    g.lineTo(x + 1.5, H);
+    g.moveTo(x + w - 1.5, 0);
+    g.lineTo(x + w - 1.5, H);
+    g.stroke();
     // vertical grid
     g.strokeStyle = wash(0.045);
-    const s0 = t.curves[0].scale;
-    if (t.grid === 'log' && s0.log) {
-      const a = Math.log10(Math.min(s0.min, s0.max));
-      const b = Math.log10(Math.max(s0.min, s0.max));
-      const rev = s0.min > s0.max;
+    const s0c = t.curves[0].scale;
+    if (t.grid === 'log' && s0c.log) {
+      const a = Math.log10(Math.min(s0c.min, s0c.max));
+      const b = Math.log10(Math.max(s0c.min, s0c.max));
+      const rev = s0c.min > s0c.max;
       for (let e = Math.ceil(a); e <= b; e++) {
         for (let k = 1; k < 10; k++) {
           const v = Math.log10(k * Math.pow(10, e));
@@ -572,7 +735,7 @@ export class LogTracks {
           const gx = x + 1 + (rev ? 1 - f : f) * (w - 2);
           g.strokeStyle = k === 1 ? wash(0.09) : wash(0.03);
           g.beginPath();
-          g.moveTo(gx, bodyTop);
+          g.moveTo(gx, 0);
           g.lineTo(gx, H);
           g.stroke();
         }
@@ -581,7 +744,7 @@ export class LogTracks {
       for (let k = 1; k < 5; k++) {
         const gx = Math.round(x + 1 + (k / 5) * (w - 2)) + 0.5;
         g.beginPath();
-        g.moveTo(gx, bodyTop);
+        g.moveTo(gx, 0);
         g.lineTo(gx, H);
         g.stroke();
       }
@@ -595,11 +758,10 @@ export class LogTracks {
     const samples = (spec: CurveSpec) => {
       const c = this.curveFor(spec);
       if (!c) return null;
-      const out = new Float32Array(Math.max(0, Math.ceil(bodyH)));
+      const out = new Float32Array(Math.max(0, Math.ceil(H)));
       let any = false;
       for (let py = 0; py < out.length; py++) {
-        const md = top + (py / bodyH) * (bot - top);
-        const v = sampleCurve(c.depth, c.values, md);
+        const v = sampleCurve(c.depth, c.values, s0 + py / scale);
         out[py] = v;
         if (Number.isFinite(v)) any = true;
       }
@@ -608,7 +770,7 @@ export class LogTracks {
     const data = t.curves.map((c) => samples(c));
     g.save();
     g.beginPath();
-    g.rect(x + 1, bodyTop, w - 2, bodyH);
+    g.rect(x + 1, 0, w - 2, H);
     g.clip();
 
     // fills
@@ -624,7 +786,7 @@ export class LogTracks {
         const shale = [95, 102, 96];
         const c = sand.map((a, i) => Math.round(a + (shale[i] - a) * ig));
         g.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.42)`;
-        g.fillRect(x + 1, bodyTop + py, xv(s, v) - x - 1, 1);
+        g.fillRect(x + 1, py, xv(s, v) - x - 1, 1);
       }
     }
     if (t.fill === 'shade' && data[0]) {
@@ -632,7 +794,7 @@ export class LogTracks {
       g.globalAlpha = 0.22;
       for (let py = 0; py < data[0].vals.length; py++) {
         const v = data[0].vals[py];
-        if (Number.isFinite(v)) g.fillRect(x + 1, bodyTop + py, xv(t.curves[0].scale, v) - x - 1, 1);
+        if (Number.isFinite(v)) g.fillRect(x + 1, py, xv(t.curves[0].scale, v) - x - 1, 1);
       }
       g.globalAlpha = 1;
     }
@@ -642,7 +804,7 @@ export class LogTracks {
         if (!Number.isFinite(v)) continue;
         const c = colormap(this.colormap, resToT(v));
         g.fillStyle = `rgb(${c[0] * 255},${c[1] * 255},${c[2] * 255})`;
-        g.fillRect(x + w - 7, bodyTop + py, 5, 1);
+        g.fillRect(x + w - 7, py, 5, 1);
       }
     }
     if (t.fill === 'nd' && data[0] && data[1]) {
@@ -656,7 +818,7 @@ export class LogTracks {
         const xn = xv(sN, n);
         // density plots left of neutron → crossover (light fluid / clean porous sand)
         g.fillStyle = xr < xn ? 'rgba(255,200,70,0.45)' : 'rgba(120,128,138,0.22)';
-        g.fillRect(Math.min(xr, xn), bodyTop + py, Math.abs(xn - xr), 1);
+        g.fillRect(Math.min(xr, xn), py, Math.abs(xn - xr), 1);
       }
     }
     if (t.fill === 'vsh-phi' && data[0]) {
@@ -664,13 +826,13 @@ export class LogTracks {
         const v = data[0].vals[py];
         if (Number.isFinite(v)) {
           g.fillStyle = 'rgba(140,146,152,0.35)';
-          g.fillRect(x + 1, bodyTop + py, xv(t.curves[0].scale, v) - x - 1, 1);
+          g.fillRect(x + 1, py, xv(t.curves[0].scale, v) - x - 1, 1);
         }
         const ph = data[1]?.vals[py];
         if (ph !== undefined && Number.isFinite(ph)) {
           g.fillStyle = 'rgba(127,227,255,0.35)';
           const xp = xv(t.curves[1].scale, ph);
-          g.fillRect(xp, bodyTop + py, x + w - 1 - xp, 1);
+          g.fillRect(xp, py, x + w - 1 - xp, 1);
         }
       }
     }
@@ -680,9 +842,9 @@ export class LogTracks {
         if (!Number.isFinite(v)) continue;
         const xs = xv(t.curves[0].scale, v);
         g.fillStyle = 'rgba(70,140,215,0.35)';
-        g.fillRect(x + 1, bodyTop + py, xs - x - 1, 1);
+        g.fillRect(x + 1, py, xs - x - 1, 1);
         g.fillStyle = 'rgba(255,170,50,0.55)';
-        g.fillRect(xs, bodyTop + py, x + w - 1 - xs, 1);
+        g.fillRect(xs, py, x + w - 1 - xs, 1);
       }
     }
 
@@ -702,8 +864,8 @@ export class LogTracks {
           continue;
         }
         const px = xv(spec.scale, v);
-        if (!pen) g.moveTo(px, bodyTop + py);
-        else g.lineTo(px, bodyTop + py);
+        if (!pen) g.moveTo(px, py);
+        else g.lineTo(px, py);
         pen = true;
       }
       g.stroke();
@@ -711,21 +873,18 @@ export class LogTracks {
     });
     g.restore();
 
-    // "not acquired" notice
-    const primaryMissing = !data[0] || !data[0].any;
-    if (primaryMissing) {
-      g.save();
-      g.fillStyle = ink.faint;
-      g.textAlign = 'center';
-      g.font = font.sans(9.5);
-      const msg = !data[0] ? (t.prov === 'calculated' ? 'Inputs missing' : 'Not acquired') : 'No data in window';
-      g.translate(x + w / 2, bodyTop + bodyH / 2);
-      g.rotate(-Math.PI / 2);
-      g.fillText(msg, 0, 0);
-      g.restore();
-    }
+    const d0 = data[0];
+    if (!d0) return null;
+    const present = new Int32Array(d0.vals.length + 1);
+    for (let py = 0; py < d0.vals.length; py++) present[py + 1] = present[py] + (Number.isFinite(d0.vals[py]) ? 1 : 0);
+    return present;
+  }
 
-    // header: provenance bar and title, then per curve its name, a line in its colour and dash, and the scale ends
+  /** header: provenance bar and title, then per curve its name, a line in its colour and dash, and the scale ends */
+  private trackHead(g: CanvasRenderingContext2D, x: number, w: number, t: TrackSpec) {
+    // the frame's top; its sides run on in the strip, its bottom edge is drawn over the strip
+    g.strokeStyle = wash(0.07);
+    g.strokeRect(x + 1.5, 2.5, w - 3, this.headH + 4);
     g.save();
     g.fillStyle = wash(0.03);
     g.fillRect(x + 1, 3, w - 2, this.headH - 3);
@@ -739,8 +898,8 @@ export class LogTracks {
     g.fillStyle = ink.text;
     g.fillText(fitTitle(g, t.title, hw), x + w / 2, 13);
     let hy = TITLE_H;
-    t.curves.forEach((spec, i) => {
-      g.globalAlpha = data[i] ? 1 : 0.35;
+    t.curves.forEach((spec) => {
+      g.globalAlpha = this.curveFor(spec) ? 1 : 0.35;
       g.font = font.sans(9.5, 600);
       g.fillStyle = spec.color;
       g.textAlign = 'center';

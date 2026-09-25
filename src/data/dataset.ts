@@ -90,6 +90,14 @@ export class Well {
   userAdded = false;
   /** optional well from the "More Volve wells" feature */
   extra = false;
+  /**
+   * Metres of hole the 3D wellbore is built beyond TD while the well is
+   * being drilled live: the geometry then needs rebuilding only every so
+   * often, and the part not yet drilled is clipped away.
+   */
+  buildAhead = 0;
+  /** name of the live connection that created this well, if one did */
+  liveSource?: string;
 
   constructor(
     public id: string,

@@ -7,7 +7,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, type Option } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
 import { font, ink, wash } from '../ui/tokens';
 import { CURVE_BY_KEY } from './curves';
@@ -29,8 +29,10 @@ const ALL = '_all';
 export class CrossplotFeature implements FeatureModule {
   readonly id = 'crossplot' as const;
   private panel: ToolWindow;
-  private canvas: HTMLCanvasElement | null = null;
-  private layer = document.createElement('canvas');
+  /** the plot (grid, overlays, points) is cached; the cursor ring and the brush are drawn over it */
+  private view = new PanelCanvas({ draw: (g, W, H) => this.drawLayer(g, W, H), cursor: (g) => this.drawCursor(g), visible: () => this.panel.visible });
+  /** the sample the cursor ring is on (-1: none) */
+  private ringAt = -1;
   private readout = new Signal<ReactNode>(null);
   private foot = new Signal<ReactNode>(null);
   private kind: CrossplotKind = 'pickett';
@@ -38,7 +40,6 @@ export class CrossplotFeature implements FeatureModule {
   private colourBy: ColourBy = 'formation';
   private pts: XPoint[] = [];
   private selected = new Set<number>(); // indices into pts
-  private dirty = true;
   private lastMd = -1;
   private brush: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private tx: ((v: number) => number) | null = null;
@@ -49,6 +50,8 @@ export class CrossplotFeature implements FeatureModule {
   private wellId = '';
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.view.invalidate());
     this.panel = new ToolWindow({
       id: 'crossplot',
       title: 'Crossplot',
@@ -83,8 +86,7 @@ export class CrossplotFeature implements FeatureModule {
             value={this.colourBy}
             onChange={(v) => {
               this.colourBy = v as ColourBy;
-              this.dirty = true;
-              this.draw();
+              this.view.invalidate();
               this.panel.rev.bump();
             }}
             options={[
@@ -98,12 +100,10 @@ export class CrossplotFeature implements FeatureModule {
       ),
       body: () => (
         <>
-          <canvas
-            ref={(el) => {
-              this.canvas = el;
-            }}
+          <CanvasBox
+            view={this.view}
             aria-label="Crossplot of the active well: hover a point for its depth, click to travel, drag a box to select samples"
-            className="block min-h-0 w-full flex-1 cursor-crosshair"
+            className="cursor-crosshair"
             onPointerDown={(e) => this.pointerDown(e)}
             onPointerMove={(e) => this.pointerMove(e.nativeEvent)}
             onPointerUp={(e) => this.pointerUp(e.nativeEvent)}
@@ -121,10 +121,6 @@ export class CrossplotFeature implements FeatureModule {
         </>
       ),
     });
-    this.panel.onResize = () => {
-      this.dirty = true;
-      this.draw();
-    };
   }
 
   enable() {
@@ -159,7 +155,8 @@ export class CrossplotFeature implements FeatureModule {
     const md = this.app.engine.rig.md;
     if (Math.abs(md - this.lastMd) < 0.25) return;
     this.lastMd = md;
-    this.draw();
+    // the ring shows only on a sample within a metre of the camera: redraw when that sample changes
+    if (this.ringSample(md) !== this.ringAt) this.view.moveCursor();
   }
 
   settings() {
@@ -184,9 +181,8 @@ export class CrossplotFeature implements FeatureModule {
     const inputs = this.kind === 'nd' ? 'measured' : 'calculated';
     this.panel.opts.badge = inputs;
     this.panel.rev.bump();
-    this.dirty = true;
     this.renderFoot();
-    this.draw();
+    this.view.invalidate();
   }
 
   private fillZones() {
@@ -229,14 +225,8 @@ export class CrossplotFeature implements FeatureModule {
     return `hsl(${200 - 170 * t},75%,${62 - 12 * t}%)`;
   }
 
-  /** the static plot (grid, overlays, points) is drawn once into an offscreen layer */
-  private drawLayer(W: number, H: number, dpr: number) {
-    const L = this.layer;
-    L.width = Math.round(W * dpr);
-    L.height = Math.round(H * dpr);
-    const g = L.getContext('2d')!;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
+  /** the static plot: grid, overlays, points */
+  private drawLayer(g: CanvasRenderingContext2D, W: number, H: number) {
     const def = CROSSPLOTS[this.kind];
     const X = this.scale(def.x, PAD.l, W - PAD.r);
     const Y = this.scale(def.y, H - PAD.b, PAD.t);
@@ -379,31 +369,25 @@ export class CrossplotFeature implements FeatureModule {
     }
   }
 
-  draw() {
-    if (!this.panel.visible) return;
-    const fit = fitCanvas(this.canvas);
-    if (!fit) return;
-    const { g, W, H } = fit;
-    const dpr = Math.min(2, devicePixelRatio || 1);
-    if (this.dirty || this.layer.width !== Math.round(W * dpr) || this.layer.height !== Math.round(H * dpr)) {
-      this.drawLayer(W, H, dpr);
-      this.dirty = false;
-    }
-    g.drawImage(this.layer, 0, 0, W, H);
+  /** the sample the camera is within a metre of, or -1 */
+  private ringSample(md: number) {
+    if (!this.pts.length) return -1;
+    const i = this.nearestMd(md);
+    return Math.abs(this.pts[i].md - md) < 1 ? i : -1;
+  }
+
+  private drawCursor(g: CanvasRenderingContext2D) {
     // the sample at the camera depth
-    const md = this.app.engine.rig.md;
     const X = this.tx;
     const Y = this.ty;
-    if (X && Y && this.pts.length) {
-      const i = this.nearestMd(md);
-      const p = this.pts[i];
-      if (p && Math.abs(p.md - md) < 1) {
-        g.strokeStyle = '#7fe3ff';
-        g.lineWidth = 2;
-        g.beginPath();
-        g.arc(X(p.x), Y(p.y), 6, 0, Math.PI * 2);
-        g.stroke();
-      }
+    this.ringAt = this.ringSample(this.app.engine.rig.md);
+    if (X && Y && this.ringAt >= 0) {
+      const p = this.pts[this.ringAt];
+      g.strokeStyle = '#7fe3ff';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(X(p.x), Y(p.y), 6, 0, Math.PI * 2);
+      g.stroke();
     }
     if (this.brush) {
       const b = this.brush;
@@ -452,7 +436,7 @@ export class CrossplotFeature implements FeatureModule {
     const down = this.down;
     if (down && Math.hypot(e.offsetX - down.x, e.offsetY - down.y) > 4) {
       this.brush = { x0: down.x, y0: down.y, x1: e.offsetX, y1: e.offsetY };
-      this.draw();
+      this.view.invalidateCursor();
       return;
     }
     if (down) return;
@@ -490,13 +474,13 @@ export class CrossplotFeature implements FeatureModule {
       if (i >= 0) this.app.travelTo(this.pts[i].md);
       else if (this.selected.size) this.clearSelection();
     }
-    this.draw();
+    this.view.invalidateCursor();
   }
 
   private pointerCancel() {
     this.down = null;
     this.brush = null;
-    this.draw();
+    this.view.invalidateCursor();
   }
 
   private hoverMd(md: number | null) {
@@ -515,10 +499,9 @@ export class CrossplotFeature implements FeatureModule {
   }
 
   private applySelection() {
-    this.dirty = true;
     this.setMarkers(this.selectedMds());
     this.renderFoot();
-    this.draw();
+    this.view.invalidate();
   }
 
   private renderFoot() {

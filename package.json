@@ -3,22 +3,27 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "BoreWalk — photorealistic web-based 3D wellbore walkthrough, preloaded with real Equinor Volve open data",
+  "description": "BoreWalk \u2014 photorealistic web-based 3D wellbore walkthrough, preloaded with real Equinor Volve open data",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepare-data": "python3 scripts/prepare_volve_data.py"
+    "prepare-data": "python3 scripts/prepare_volve_data.py",
+    "relay:build": "vite build --config relay/vite.config.ts",
+    "relay": "vite build --config relay/vite.config.ts && node relay/dist/relay.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@internationalized/date": "^3.12.4",
     "@tanstack/ai": "0.61.0",
     "@tecton/react": "file:vendor/tecton-react-0.1.0.tgz",
+    "apache-arrow": "^21.2.0",
     "cn": "^0.2.6",
     "fflate": "^0.8.3",
+    "hyparquet": "^1.31.1",
+    "hyparquet-compressors": "^1.1.2",
     "lucide-react": "^1.48.0",
     "react": "^19.3.0",
     "react-aria-components": "~1.21.1",
@@ -35,11 +40,15 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.1.1",
+    "kafkajs": "^2.2.4",
+    "protobufjs": "^8.8.0",
     "tailwindcss": "^4.3.3",
     "typescript": "5.9",
     "vite": "^8.3.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "ws": "^8.21.3"
   },
   "packageManager": "pnpm@10.33.0",
   "intent": {

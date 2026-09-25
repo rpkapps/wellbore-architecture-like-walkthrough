@@ -87,7 +87,7 @@ export const PRESETS: { id: PresetId; label: string; build: () => Layout }[] = [
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
-  return id === 'logs' ? 'right' : id === 'scene' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
+  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
 }
 
 export function locate(L: Layout, id: string): Place | null {
@@ -271,9 +271,13 @@ export class Workspace {
   }
 
   activate(id: string) {
-    const M = clone(this.value);
-    const p = locate(M, id);
-    if (!p) return;
+    const L = this.value;
+    const at = locate(L, id);
+    if (!at) return;
+    // already showing (and in front): nothing to render
+    if (at.kind === 'dock' ? at.stack.active === id && !L[at.zone].collapsed : at.win.active === id && at.index === L.floating.length - 1) return;
+    const M = clone(L);
+    const p = locate(M, id)!;
     if (p.kind === 'dock') {
       p.stack.active = id;
       M[p.zone].collapsed = false;

@@ -3,7 +3,7 @@ import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, D
 import { ColorSwatch } from '@tecton/react/tecton/color-swatch';
 import { TreeView, TreeViewAction, TreeViewItem, TreeViewItemContent, TreeViewVisibilityToggle } from '@tecton/react/tecton/tree-view';
 import { LayersIcon } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
@@ -109,35 +109,7 @@ function Layers({ app }: { app: App }) {
               onHoverStart={() => (geo.setHighlight(id), app.engine.requestRender())}
               onHoverEnd={() => (geo.setHighlight(null), app.engine.requestRender())}
             >
-              <TreeViewItemContent
-                icon={
-                  <span className="flex" title="Change colour" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                    <ColorSwatch color={f.color} size="xs" shape="square" aria-label={`${f.name} colour: click to change`} onChange={(hex) => app.setFormationColor(id, hex)} />
-                  </span>
-                }
-                suffix={
-                  <span className="flex items-center gap-1.5">
-                    {f.reservoir && <span title="Reservoir" aria-label="Reservoir" role="img" className="size-1.5 rounded-full bg-saffron-560 shadow-[0_0_6px_var(--tecton-palette-saffron-560)]" />}
-                    <ScrubChip
-                      label={`${f.name} opacity`}
-                      value={Math.round(st.opacity * 100)}
-                      min={0}
-                      max={100}
-                      step={5}
-                      format={(v) => `${v}%`}
-                      onChange={(v) => app.setLayer(id, { opacity: v / 100 })}
-                    />
-                  </span>
-                }
-                endAdornment={
-                  <>
-                    {toggle(f.name, st.visible, (v) => app.setLayer(id, { visible: v }))}
-                    <LayerMenu app={app} id={id} name={f.name} opacity={st.opacity} />
-                  </>
-                }
-              >
-                {f.name}
-              </TreeViewItemContent>
+              <FormationRow app={app} id={id} visible={st.visible} opacity={st.opacity} color={f.color} isolated={geo.isolatedId === id} />
             </TreeViewItem>
           );
         })}
@@ -169,6 +141,39 @@ function Layers({ app }: { app: App }) {
   );
 }
 
+/**
+ * A formation's row. Memoised on what it shows, so scrubbing one layer's
+ * opacity (a scene change every frame) renders that row, not the whole tree.
+ */
+const FormationRow = memo(function FormationRow({ app, id, visible, opacity, color, isolated }: { app: App; id: string; visible: boolean; opacity: number; color: string; isolated: boolean }) {
+  const f = FORMATION_BY_ID.get(id)!;
+  return (
+    <TreeViewItemContent
+      icon={
+        <span className="flex" title="Change colour" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+          <ColorSwatch color={color} size="xs" shape="square" aria-label={`${f.name} colour: click to change`} onChange={(hex) => app.setFormationColor(id, hex)} />
+        </span>
+      }
+      suffix={
+        <span className="flex items-center gap-1.5">
+          {f.reservoir && <span title="Reservoir" aria-label="Reservoir" role="img" className="size-1.5 rounded-full bg-saffron-560 shadow-[0_0_6px_var(--tecton-palette-saffron-560)]" />}
+          <ScrubChip label={`${f.name} opacity`} value={Math.round(opacity * 100)} min={0} max={100} step={5} format={(v) => `${v}%`} onChange={(v) => app.setLayer(id, { opacity: v / 100 })} />
+        </span>
+      }
+      endAdornment={
+        <>
+          <Tip label={visible ? 'Hide' : 'Show'}>
+            <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${f.name}`} isVisible={visible} onChange={(v) => app.setLayer(id, { visible: v })} />
+          </Tip>
+          <LayerMenu app={app} id={id} name={f.name} opacity={opacity} isolated={isolated} />
+        </>
+      }
+    >
+      {f.name}
+    </TreeViewItemContent>
+  );
+});
+
 function PresetMenu({ app }: { app: App }) {
   return (
     <DropdownMenuTrigger>
@@ -189,8 +194,7 @@ function PresetMenu({ app }: { app: App }) {
   );
 }
 
-function LayerMenu({ app, id, name, opacity }: { app: App; id: string; name: string; opacity: number }) {
-  const isolated = app.engine.geology.isolatedId === id;
+function LayerMenu({ app, id, name, opacity, isolated }: { app: App; id: string; name: string; opacity: number; isolated: boolean }) {
   const nearest = OPACITY.reduce((a, b) => (Math.abs(b - opacity) < Math.abs(a - opacity) ? b : a));
   return (
     <DropdownMenuTrigger>

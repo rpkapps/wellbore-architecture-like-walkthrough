@@ -1,6 +1,20 @@
 import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
-import { BookmarkIcon, BoxesIcon, ChartScatterIcon, ColumnsIcon, FlaskConicalIcon, LayersIcon, MapIcon, PanelTopIcon, RulerIcon, ScissorsIcon, SlidersHorizontalIcon } from 'lucide-react';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import {
+  ActivityIcon,
+  BookmarkIcon,
+  BoxesIcon,
+  ChartScatterIcon,
+  ColumnsIcon,
+  FlaskConicalIcon,
+  LayersIcon,
+  MapIcon,
+  PanelTopIcon,
+  RadioTowerIcon,
+  RulerIcon,
+  ScissorsIcon,
+  SlidersHorizontalIcon,
+} from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
 import type { App } from '../app';
 import { ProvBadge } from '../prov';
 import { useRev, useSignal } from '../signal';
@@ -9,6 +23,8 @@ import { FeaturesPanel } from '../shell/FeaturesPanel';
 import { InterpretationPanel } from '../shell/InterpretationPanel';
 import { LogsActions, LogsBody } from '../shell/LogsPanel';
 import { ScenePanel } from '../shell/ScenePanel';
+import { LiveActions, LiveBody } from '../shell/LivePanel';
+import { SourcesActions, SourcesBody } from '../shell/SourcesPanel';
 
 /** What the workspace needs to show a panel: its tab, its header controls and its content. */
 export interface PanelDef {
@@ -72,6 +88,8 @@ export function builtinPanels(app: App): PanelDef[] {
       ),
     },
     { id: 'logs', title: 'Well logs', icon: <LogCurveIcon />, actions: () => <LogsActions app={app} />, body: () => <LogsBody app={app} /> },
+    { id: 'sources', title: 'Live data', icon: <RadioTowerIcon />, actions: () => <SourcesActions app={app} />, body: () => <SourcesBody app={app} /> },
+    { id: 'live', title: 'Live charts', icon: <ActivityIcon />, actions: () => <LiveActions app={app} />, body: () => <LiveBody app={app} /> },
   ];
 }
 
@@ -94,17 +112,9 @@ export function usePanels(app: App): Map<string, PanelDef> {
 
 const toolDefs = new WeakMap<ToolWindow, PanelDef>();
 
-/** A tool window's content: its provenance and own controls on a row, then its body (canvases redraw on resize). */
+/** A tool window's content: its provenance and own controls on a row, then its body (its canvases observe their own size). */
 function ToolBody({ win }: { win: ToolWindow }) {
   useRev(win.rev);
-  const el = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const ro = new ResizeObserver(() => win.onResize?.());
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, [win]);
   return (
     <>
       {(win.opts.badge || win.opts.header) && (
@@ -113,9 +123,7 @@ function ToolBody({ win }: { win: ToolWindow }) {
           {win.opts.header?.()}
         </div>
       )}
-      <div ref={el} className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
-        {win.opts.body()}
-      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">{win.opts.body()}</div>
     </>
   );
 }

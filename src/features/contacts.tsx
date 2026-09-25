@@ -11,7 +11,7 @@ import type { App } from '../ui/app';
 import { Note, SliderField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { ProvBadge } from '../ui/prov';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import type { FeatureModule } from './registry';
 
 /**
@@ -21,7 +21,7 @@ import type { FeatureModule } from './registry';
  */
 export class ContactsFeature implements FeatureModule {
   readonly id = 'owc' as const;
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   estimate: ContactEstimate | null = null;
   private group = new THREE.Group();
   private plane?: THREE.Mesh;

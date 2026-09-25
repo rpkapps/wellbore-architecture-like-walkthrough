@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
 import { font, ink, wash } from '../ui/tokens';
 import type { FeatureModule } from './registry';
@@ -25,13 +25,21 @@ export class GeosteerFeature implements FeatureModule {
   profile: SteerProfile | null = null;
   private group = new THREE.Group();
   private panel: ToolWindow;
-  private canvas: HTMLCanvasElement | null = null;
+  /** the strip is cached; playback only moves the cursor line over it */
+  private strip = new PanelCanvas({ draw: (g, W, H) => this.draw(g, W, H), cursor: (g) => this.drawCursor(g), visible: () => this.panel.visible });
+  /** the strip's MD → x mapping, for the cursor */
+  private xmap: { a: number; b: number; x0: number; x1: number; y0: number; y1: number } | null = null;
   private readout = new Signal<ReactNode>(null);
   private hud = new Signal<ReactNode>(null);
   private lastMd = -1;
+  private readoutMd = -1;
+  private readoutAt = 0;
+  private readoutTimer = 0;
   private view: 'window' | 'cursor' = 'window';
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.strip.invalidate());
     this.group.name = 'geosteer';
     const targets = app.field.horizons
       .filter((hz, i) => FORMATION_BY_ID.has(hz.id) && app.field.horizons[i + 1])
@@ -71,7 +79,7 @@ export class GeosteerFeature implements FeatureModule {
             value={this.view}
             onChange={(v) => {
               this.view = v as 'window' | 'cursor';
-              this.draw();
+              this.strip.invalidate();
               this.panel.rev.bump();
             }}
             options={[
@@ -86,12 +94,10 @@ export class GeosteerFeature implements FeatureModule {
           <div className="flex flex-col gap-1 text-xs">
             <Live s={this.readout} />
           </div>
-          <canvas
-            ref={(el) => {
-              this.canvas = el;
-            }}
+          <CanvasBox
+            view={this.strip}
             aria-label="Distance to the target boundaries along the well: click to travel"
-            className="block min-h-0 w-full flex-1 cursor-pointer"
+            className="cursor-pointer"
             onClick={(e) => {
               const md = this.mdAtX(e.nativeEvent.offsetX);
               if (md !== null) app.travelTo(md);
@@ -100,8 +106,9 @@ export class GeosteerFeature implements FeatureModule {
         </>
       ),
     });
-    this.panel.onResize = () => this.draw();
     app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} /> });
+    // the strip draws the uncertainty band when that feature is on
+    app.flags.watch('uncertainty', () => this.strip.invalidate());
   }
 
   enable() {
@@ -113,6 +120,8 @@ export class GeosteerFeature implements FeatureModule {
   disable() {
     this.app.engine.scene.remove(this.group);
     this.panel.hide();
+    clearTimeout(this.readoutTimer);
+    this.readoutTimer = 0;
     this.hud.set(null);
   }
 
@@ -124,10 +133,23 @@ export class GeosteerFeature implements FeatureModule {
     const cam = this.app.engine.camera.position;
     for (const o of this.group.children) if (o instanceof CSS2DObject) o.visible = o.position.distanceTo(cam) < 1500;
     const md = this.app.engine.rig.md;
+    // the read-outs are text: 15 updates a second read the same as 60, and each one renders React
+    if (md !== this.readoutMd && !this.readoutTimer) {
+      const wait = this.readoutAt + 66 - performance.now();
+      const run = () => {
+        this.readoutTimer = 0;
+        this.readoutMd = this.app.engine.rig.md;
+        this.readoutAt = performance.now();
+        this.updateReadout();
+      };
+      if (wait <= 0) run();
+      else this.readoutTimer = window.setTimeout(run, wait);
+    }
     if (Math.abs(md - this.lastMd) < 0.05) return;
     this.lastMd = md;
-    this.updateReadout();
-    this.draw();
+    // following the cursor scrolls the strip; the whole lateral only moves the cursor line
+    if (this.view === 'cursor') this.strip.redraw();
+    else this.strip.moveCursor();
   }
 
   settings() {
@@ -147,6 +169,9 @@ export class GeosteerFeature implements FeatureModule {
     this.profile = steerProfile(w.trajectory, f.horizons, f.meta.datumElevation, this.target, w.tops, { zones: w.zones, source: this.source });
     this.build3D();
     this.lastMd = -1;
+    this.readoutMd = -1;
+    this.readoutAt = 0;
+    this.strip.invalidate();
     this.frame();
   }
 
@@ -320,20 +345,18 @@ export class GeosteerFeature implements FeatureModule {
 
   private mdAtX(x: number): number | null {
     const r = this.range();
-    const W = this.canvas?.clientWidth ?? 0;
+    const W = this.strip.W;
     if (!r || !W) return null;
     const f = (x - this.pad.l) / (W - this.pad.l - this.pad.r);
     if (f < 0 || f > 1) return null;
     return r.a + f * (r.b - r.a);
   }
 
-  draw() {
-    if (!this.panel.visible) return;
-    const fit = fitCanvas(this.canvas);
+  private draw(g: CanvasRenderingContext2D, W: number, H: number) {
+    this.xmap = null;
     const p = this.profile;
     const r = this.range();
-    if (!fit || !p || !r) return;
-    const { g, W, H } = fit;
+    if (!p || !r) return;
     const P = this.pad;
     const S = p.samples.filter((s) => s.md >= r.a && s.md <= r.b);
     if (S.length < 2) return;
@@ -348,6 +371,7 @@ export class GeosteerFeature implements FeatureModule {
     y1 += m;
     const X = (md: number) => P.l + ((md - r.a) / (r.b - r.a)) * (W - P.l - P.r);
     const Y = (d: number) => P.t + ((d - y0) / (y1 - y0)) * (H - P.t - P.b);
+    this.xmap = { a: r.a, b: r.b, x0: P.l, x1: W - P.r, y0: P.t, y1: H - P.b };
     const idx = this.app.field.horizons.findIndex((q) => q.id === this.target);
     const upper = FORMATION_BY_ID.get(this.app.field.horizons[idx - 1]?.id ?? '')?.color ?? '#3a3f47';
     const tcol = FORMATION_BY_ID.get(this.target)?.color ?? '#c9a45c';
@@ -419,13 +443,16 @@ export class GeosteerFeature implements FeatureModule {
       g.fillStyle = 'rgba(180,200,255,0.18)';
       g.fill();
     }
-    // well path coloured by status
+    // well path coloured by status: one path per status, not a stroke per segment
     g.lineWidth = 3;
-    for (let i = 1; i < S.length; i++) {
-      g.strokeStyle = STATUS_COLOR[S[i].status];
+    for (const st of Object.keys(STATUS_COLOR) as (keyof typeof STATUS_COLOR)[]) {
+      g.strokeStyle = STATUS_COLOR[st];
       g.beginPath();
-      g.moveTo(X(S[i - 1].md), Y(S[i - 1].tvdss));
-      g.lineTo(X(S[i].md), Y(S[i].tvdss));
+      for (let i = 1; i < S.length; i++) {
+        if (S[i].status !== st) continue;
+        g.moveTo(X(S[i - 1].md), Y(S[i - 1].tvdss));
+        g.lineTo(X(S[i].md), Y(S[i].tvdss));
+      }
       g.stroke();
     }
     g.lineWidth = 1;
@@ -445,21 +472,25 @@ export class GeosteerFeature implements FeatureModule {
       g.strokeStyle = '#0b0e13';
       g.stroke();
     }
-    // cursor
-    const md = this.app.engine.rig.md;
-    if (md >= r.a && md <= r.b) {
-      g.strokeStyle = 'rgba(127,227,255,0.9)';
-      g.beginPath();
-      g.moveTo(X(md), P.t);
-      g.lineTo(X(md), H - P.b);
-      g.stroke();
-    }
     g.fillStyle = ink.muted;
     g.textAlign = 'left';
     g.fillText('TVDSS m', 4, P.t + 8);
     g.textAlign = 'right';
     const ve = (r.b - r.a) / (W - P.l - P.r) / ((y1 - y0) / (H - P.t - P.b));
     g.fillText(`MD m · vertical exaggeration ×${ve < 2 ? ve.toFixed(1) : ve.toFixed(0)}`, W - P.r, P.t + 10);
+  }
+
+  private drawCursor(g: CanvasRenderingContext2D) {
+    const m = this.xmap;
+    const md = this.app.engine.rig.md;
+    if (!m || md < m.a || md > m.b) return;
+    const x = m.x0 + ((md - m.a) / (m.b - m.a)) * (m.x1 - m.x0);
+    g.strokeStyle = 'rgba(127,227,255,0.9)';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x, m.y0);
+    g.lineTo(x, m.y1);
+    g.stroke();
   }
 }
 

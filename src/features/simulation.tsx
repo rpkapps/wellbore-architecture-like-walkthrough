@@ -11,9 +11,9 @@ import { CircleAlertIcon, Grid3x3Icon, PauseIcon, PlayIcon } from 'lucide-react'
 import type { App } from '../ui/app';
 import { Note, SelectField, SliderField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import { font, ink } from '../ui/tokens';
 import type { FeatureModule } from './registry';
 import { FOCUS } from '../scene/rockMaterial';
@@ -65,9 +65,9 @@ export class SimulationFeature implements FeatureModule {
   private mat?: THREE.ShaderMaterial;
   private valAttr?: THREE.InstancedBufferAttribute;
   /** bump when the model or its loading state changes (Features panel settings) */
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
-  private chart: HTMLCanvasElement | null = null;
+  private chart = new PanelCanvas({ draw: (g, W, H) => this.drawChart(g, W, H), visible: () => this.panel.visible });
   private error: string | null = null;
   prop = '';
   stepIdx = 0;
@@ -96,12 +96,11 @@ export class SimulationFeature implements FeatureModule {
           <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
             <div className="flex flex-col gap-3 pb-1">{this.renderControls()}</div>
           </ScrollArea>
-          <canvas
-            ref={(el) => {
-              this.chart = el;
-            }}
+          <CanvasBox
+            view={this.chart}
+            box="h-32 w-full shrink-0"
             aria-label="Field oil rate, measured and simulated: click to show that report date"
-            className="block h-32 w-full shrink-0 cursor-pointer"
+            className="cursor-pointer"
             onClick={(e) => {
               const m = this.model;
               if (!m || !m.header.dates.length) return;
@@ -117,7 +116,6 @@ export class SimulationFeature implements FeatureModule {
         </>
       ),
     });
-    this.panel.onResize = () => this.drawChart();
   }
 
   enable() {
@@ -193,7 +191,7 @@ export class SimulationFeature implements FeatureModule {
   private refresh() {
     this.panel.rev.bump();
     this.rev.bump();
-    this.drawChart();
+    this.chart.invalidate();
   }
 
   private async loadPreloaded() {
@@ -376,7 +374,7 @@ void main(){
   setStep(i: number) {
     this.stepIdx = i;
     this.applyProp();
-    this.drawChart();
+    this.chart.invalidate();
     this.panel.rev.bump();
   }
 
@@ -515,7 +513,7 @@ void main(){
 
   private chartT(x: number): number | null {
     const s = this.model?.header.summary;
-    const W = this.chart?.clientWidth ?? 0;
+    const W = this.chart.W;
     const t = s?.t ?? this.measured.map((m) => m.t);
     if (!t.length || !W) return null;
     const t0 = Math.min(t[0], this.measured[0]?.t ?? Infinity);
@@ -523,10 +521,7 @@ void main(){
     return t0 + ((x - 40) / (W - 50)) * (t1 - t0);
   }
 
-  private drawChart() {
-    const fit = fitCanvas(this.chart);
-    if (!fit) return;
-    const { g, W, H } = fit;
+  private drawChart(g: CanvasRenderingContext2D, W: number, H: number) {
     const m = this.model;
     const s = m?.header.summary;
     const meas = this.measured.length ? this.measured : this.fieldMeasured();

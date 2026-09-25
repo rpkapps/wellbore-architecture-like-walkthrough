@@ -2,7 +2,7 @@ import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, Comma
 import { Input } from '@tecton/react/components/input';
 import { Kbd } from '@tecton/react/components/kbd';
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CornerDownLeftIcon } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionCategory, ActionChoice, ActionInput, AnyAction } from '../../actions/registry';
 import type { App } from '../app';
 import { useSignal } from '../signal';
@@ -80,34 +80,49 @@ export function CommandPalette({ app }: { app: App }) {
     } else void run(e.action);
   };
 
+  // the entries are built once per page (not per keystroke: the list filters itself), so typing
+  // re-renders the input, and the items keep their elements
   const actions = useMemo(() => (open ? app.actions.list().filter((a) => !a.hidden && app.actions.enabled(a)) : []), [app, open]);
-  const choicesOf = (a: AnyAction<App>): Entry[] => {
-    try {
-      return (a.choices?.(app) ?? []).map((c, i) => ({ key: `${a.id}#${JSON.stringify(c.input) ?? i}`, action: a, choice: c }));
-    } catch {
-      return [];
-    }
-  };
-
-  // the entries of this page: the actions, or one action's choices; typing at the top level also finds choices
-  const q = query.trim();
-  let groups: { heading: string; entries: Entry[] }[];
-  if (page) groups = [{ heading: page.title, entries: choicesOf(page) }];
-  else {
+  const typing = query.trim() !== '';
+  const groups = useMemo(() => {
+    const choicesOf = (a: AnyAction<App>): Entry[] => {
+      try {
+        return (a.choices?.(app) ?? []).map((c, i) => ({ key: `${a.id}#${JSON.stringify(c.input) ?? i}`, action: a, choice: c }));
+      } catch {
+        return [];
+      }
+    };
+    // the entries of this page: the actions, or one action's choices; typing at the top level also finds choices
+    if (page) return [{ heading: page.title, entries: choicesOf(page) }];
     const top: Entry[] = actions.map((a) => ({ key: a.id, action: a }));
-    const flat = q ? actions.flatMap(choicesOf) : [];
+    const flat = typing ? actions.flatMap(choicesOf) : [];
     const all = [...top, ...flat];
     const byKey = new Map(all.map((e) => [e.key, e]));
-    const recents = q ? [] : recent.map((k) => byKey.get(k) ?? (k.includes('#') ? findChoice(k) : undefined)).filter((e): e is Entry => !!e);
-    groups = [
+    const findChoice = (k: string): Entry | undefined => {
+      const a = actions.find((x) => x.id === k.split('#')[0]);
+      return a ? choicesOf(a).find((e) => e.key === k) : undefined;
+    };
+    const recents = typing ? [] : recent.map((k) => byKey.get(k) ?? (k.includes('#') ? findChoice(k) : undefined)).filter((e): e is Entry => !!e);
+    return [
       ...(recents.length ? [{ heading: 'Recent', entries: recents.map((e) => ({ ...e, key: `recent:${e.key}` })) }] : []),
       ...ORDER.map((c) => ({ heading: c, entries: all.filter((e) => e.action.category === c) })).filter((g) => g.entries.length),
     ];
-  }
-  function findChoice(k: string): Entry | undefined {
-    const a = actions.find((x) => x.id === k.split('#')[0]);
-    return a ? choicesOf(a).find((e) => e.key === k) : undefined;
-  }
+  }, [app, actions, page, recent, typing]);
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
+  const items = useMemo(
+    () =>
+      groups.map((g) => (
+        <CommandGroup key={g.heading} heading={g.heading}>
+          {g.entries.map((e) => (
+            <CommandItem key={e.key} id={e.key} textValue={textOf(e)} onAction={() => pickRef.current(e)}>
+              <Row entry={e} inPage={!!page} />
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      )),
+    [groups, page],
+  );
 
   return (
     <CommandDialog open={open} onOpenChange={(o) => app.paletteOpen.set(o)} title="Command palette" description="Find and run any command" className="sm:max-w-xl">
@@ -137,15 +152,7 @@ export function CommandPalette({ app }: { app: App }) {
             </div>
           </div>
           <CommandList className="max-h-[min(60vh,28rem)]" renderEmptyState={() => <CommandEmpty>No command matches “{query}”.</CommandEmpty>}>
-            {groups.map((g) => (
-              <CommandGroup key={g.heading} heading={g.heading}>
-                {g.entries.map((e) => (
-                  <CommandItem key={e.key} id={e.key} textValue={textOf(e)} onAction={() => pick(e)}>
-                    <Row entry={e} inPage={!!page} />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ))}
+            {items}
           </CommandList>
           <Footer />
         </Command>

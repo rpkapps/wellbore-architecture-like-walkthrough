@@ -1,9 +1,9 @@
 import { Button } from '@tecton/react/components/button';
-import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
+import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut } from '@tecton/react/components/dropdown-menu';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@tecton/react/components/dialog';
 import { Input } from '@tecton/react/components/input';
-import { AppWindowIcon, CheckIcon, LayoutDashboardIcon, PencilIcon, PlusIcon, RotateCcwIcon, SaveIcon, Trash2Icon } from 'lucide-react';
-import { useId, useState } from 'react';
+import { CheckIcon, PencilIcon, PlusIcon, RotateCcwIcon, SaveIcon, Trash2Icon } from 'lucide-react';
+import { type ReactNode, useId, useState } from 'react';
 import { IconButton } from '../icon-button';
 import { FEATURES, type FeatureId } from '../../features/registry';
 import type { App } from '../app';
@@ -15,8 +15,8 @@ import type { PanelDef } from './panels';
 
 const isFeature = (id: string): id is FeatureId => FEATURES.some((f) => f.id === id);
 
-/** Window menu: every panel, ticked when it is open; choosing one shows or closes it. */
-export function WindowMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
+/** Window menu entries: every panel, ticked when it is open; choosing one shows or closes it. */
+export function useWindowMenu(app: App, panels: Map<string, PanelDef>): ReactNode {
   const ws = app.workspace;
   useSignal(ws.layout);
   useSignal(openWindows);
@@ -35,40 +35,38 @@ export function WindowMenu({ app, panels }: { app: App; panels: Map<string, Pane
     else p.tool.show();
   };
   return (
-    <DropdownMenuTrigger>
-      <Button variant="ghost" size="sm">
-        <AppWindowIcon data-icon="inline-start" />
-        Window
-      </Button>
-      <DropdownMenu placement="bottom end" className="w-max min-w-56">
-        <DropdownMenuGroup
-          selectionMode="multiple"
-          selectedKeys={open}
-          onSelectionChange={(keys) => {
-            if (keys === 'all') return;
-            const next = new Set([...keys].map(String));
-            for (const p of list) if (next.has(p.id) !== open.includes(p.id)) toggle(p.id);
-          }}
-        >
-          <DropdownMenuLabel>Panels</DropdownMenuLabel>
-          {list.map((p) => (
-            <DropdownMenuItem key={p.id} id={p.id} textValue={p.title}>
-              {p.title}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem id="hide" onAction={() => withTransition(() => ws.hidden.set(!ws.hidden.value))}>
-          {ws.hidden.value ? 'Show panels' : 'Hide panels'}
-          <DropdownMenuShortcut>Tab</DropdownMenuShortcut>
-        </DropdownMenuItem>
-      </DropdownMenu>
-    </DropdownMenuTrigger>
+    <>
+      <DropdownMenuGroup
+        selectionMode="multiple"
+        selectedKeys={open}
+        onSelectionChange={(keys) => {
+          if (keys === 'all') return;
+          const next = new Set([...keys].map(String));
+          for (const p of list) if (next.has(p.id) !== open.includes(p.id)) toggle(p.id);
+        }}
+      >
+        <DropdownMenuLabel>Panels</DropdownMenuLabel>
+        {list.map((p) => (
+          <DropdownMenuItem key={p.id} id={p.id} textValue={p.title}>
+            {p.title}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem id="hide" onAction={() => withTransition(() => ws.hidden.set(!ws.hidden.value))}>
+        {ws.hidden.value ? 'Show panels' : 'Hide panels'}
+        <DropdownMenuShortcut>Tab</DropdownMenuShortcut>
+      </DropdownMenuItem>
+    </>
   );
 }
 
-/** Workspace menu: layouts for a task, your own named ones, and saving / managing them. */
-export function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
+/**
+ * Workspace menu entries: layouts for a task, your own named ones, and saving
+ * / managing them. `dialogs` holds the save and manage dialogs; mount it once,
+ * outside any menu, so they outlive the menu that opened them.
+ */
+export function useWorkspaceMenu(app: App, panels: Map<string, PanelDef>): { items: ReactNode; dialogs: ReactNode } {
   const ws = app.workspace;
   const saved = useSignal(ws.saved);
   const current = useSignal(ws.current);
@@ -76,62 +74,59 @@ export function WorkspaceMenu({ app, panels }: { app: App; panels: Map<string, P
   const available = (id: string) => panels.has(id);
   const mine = saved.find((w) => w.id === current);
   const tick = (on: boolean) => <CheckIcon className={on ? undefined : 'invisible'} />;
-  return (
+  const items = (
     <>
-      <DropdownMenuTrigger>
-        <Button variant="ghost" size="sm">
-          <LayoutDashboardIcon data-icon="inline-start" />
-          Workspace
-        </Button>
-        <DropdownMenu placement="bottom end" className="w-max min-w-60">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Layouts</DropdownMenuLabel>
-            {PRESETS.map((p) => (
-              <DropdownMenuItem key={p.id} id={p.id} textValue={p.label} onAction={() => withTransition(() => ws.preset(p.id as PresetId, available))}>
-                {tick(current === p.id)}
-                {p.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-          {saved.length > 0 && (
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Your workspaces</DropdownMenuLabel>
-              {saved.map((w) => (
-                <DropdownMenuItem key={w.id} id={w.id} textValue={w.name} onAction={() => withTransition(() => ws.load(w.id, available))}>
-                  {tick(current === w.id)}
-                  {w.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-          )}
-          <DropdownMenuSeparator />
-          {mine && (
-            <DropdownMenuItem id="update" textValue={`Update ${mine.name}`} onAction={() => (ws.update(mine.id), app.toast(`Saved the layout to “${mine.name}”.`))}>
-              <SaveIcon />
-              Update “{mine.name}”
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem id="save" textValue="Save as a new workspace" onAction={() => setDialog('save')}>
-            <PlusIcon />
-            Save as a new workspace…
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>Layouts</DropdownMenuLabel>
+        {PRESETS.map((p) => (
+          <DropdownMenuItem key={p.id} id={p.id} textValue={p.label} onAction={() => withTransition(() => ws.preset(p.id as PresetId, available))}>
+            {tick(current === p.id)}
+            {p.label}
           </DropdownMenuItem>
-          {saved.length > 0 && (
-            <DropdownMenuItem id="manage" textValue="Rename or delete workspaces" onAction={() => setDialog('manage')}>
-              <PencilIcon />
-              Rename or delete…
+        ))}
+      </DropdownMenuGroup>
+      {saved.length > 0 && (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Your workspaces</DropdownMenuLabel>
+          {saved.map((w) => (
+            <DropdownMenuItem key={w.id} id={w.id} textValue={w.name} onAction={() => withTransition(() => ws.load(w.id, available))}>
+              {tick(current === w.id)}
+              {w.name}
             </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem id="reset" onAction={() => withTransition(() => ws.preset('walkthrough', available))}>
-            <RotateCcwIcon />
-            Reset to default
-          </DropdownMenuItem>
-        </DropdownMenu>
-      </DropdownMenuTrigger>
+          ))}
+        </DropdownMenuGroup>
+      )}
+      <DropdownMenuSeparator />
+      {mine && (
+        <DropdownMenuItem id="update" textValue={`Update ${mine.name}`} onAction={() => (ws.update(mine.id), app.toast(`Saved the layout to “${mine.name}”.`))}>
+          <SaveIcon />
+          Update “{mine.name}”
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem id="save" textValue="Save as a new workspace" onAction={() => setDialog('save')}>
+        <PlusIcon />
+        Save as a new workspace…
+      </DropdownMenuItem>
+      {saved.length > 0 && (
+        <DropdownMenuItem id="manage" textValue="Rename or delete workspaces" onAction={() => setDialog('manage')}>
+          <PencilIcon />
+          Rename or delete…
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem id="reset" onAction={() => withTransition(() => ws.preset('walkthrough', available))}>
+        <RotateCcwIcon />
+        Reset to default
+      </DropdownMenuItem>
+    </>
+  );
+  const dialogs = (
+    <>
       <SaveDialog app={app} isOpen={dialog === 'save'} onOpenChange={(o) => setDialog(o ? 'save' : null)} />
       <ManageDialog app={app} available={available} isOpen={dialog === 'manage'} onOpenChange={(o) => setDialog(o ? 'manage' : null)} />
     </>
   );
+  return { items, dialogs };
 }
 
 /** Name the current layout. A name already in use replaces that workspace. */

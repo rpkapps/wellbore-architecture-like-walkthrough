@@ -1,10 +1,6 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { FieldModel, Well } from '../data/dataset';
 import type { ColormapName } from '../data/colormap';
@@ -14,11 +10,13 @@ import { GeologyModel } from './geology';
 import { WellboreAssembly, type PropertyMode } from './wellbore';
 import { Environment, WellPaths } from './environment';
 import { CameraRig } from './cameraRig';
-import { buildWellTextures, makeLutTexture } from './wellData';
+import { buildWellTextures, makeLutTexture, updateWellTextures } from './wellData';
 import { FOCUS, SEABED } from './rockMaterial';
-import { LensBlurShader, LogDepthAOPass, MudParticles } from './postfx';
+import { FinalPass, GlowPass, LensBlurShader, MudParticles, ScenePass } from './postfx';
 import type { SectionBox } from './geology';
 import { ensureBVHFor } from './bvh';
+import { LabelRenderer } from './labels';
+import { textureEvents } from './textures';
 
 export interface PickResult {
   kind: string;
@@ -27,41 +25,71 @@ export interface PickResult {
   object: THREE.Object3D;
 }
 
-const GradePass = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uTime: { value: 0 },
-    uVignette: { value: 0.85 },
-    uGrain: { value: 0.035 },
-  },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime; uniform float uVignette; uniform float uGrain; varying vec2 vUv;
-float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
-void main(){
-  vec4 c = texture2D(tDiffuse, vUv);
-  vec2 d = vUv - 0.5;
-  float v = smoothstep(0.95, 0.25, length(d * vec2(1.0, 0.85)) * uVignette * 1.2);
-  c.rgb *= mix(0.72, 1.0, v);
-  // gentle cool shadows / warm highlights grade
-  float l = dot(c.rgb, vec3(0.299,0.587,0.114));
-  c.rgb += (vec3(-0.006, 0.0, 0.012) * (1.0 - l) + vec3(0.01, 0.004, -0.008) * l);
-  c.rgb += (h(vUv * 1000.0 + uTime) - 0.5) * uGrain * (1.0 - l * 0.6);
-  gl_FragColor = c;
-}`,
-};
+/** Most device pixels a frame draws: a retina laptop's view stays near 60 fps, sharper than 1× (MSAA keeps edges clean). */
+const PIXEL_BUDGET = 2.5e6;
 
-/** Replaces NaN / Inf pixels and clamps extreme HDR values before bloom can smear them. */
-const SanitizePass = {
-  uniforms: { tDiffuse: { value: null } },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
-bool bad(float v){ return !(v == v) || abs(v) > 60000.0; }
-void main(){
-  vec4 c = texture2D(tDiffuse, vUv);
-  if (bad(c.r) || bad(c.g) || bad(c.b) || bad(c.a)) c = vec4(0.0, 0.0, 0.0, 1.0);
-  gl_FragColor = vec4(clamp(c.rgb, 0.0, 48.0), clamp(c.a, 0.0, 1.0));
-}`,
-};
+/**
+ * GPU time of each frame's draw calls (EXT_disjoint_timer_query_webgl2),
+ * read back a few frames later without stalling the pipeline.
+ */
+class GpuTimer {
+  private pending: WebGLQuery[] = [];
+  private free: WebGLQuery[] = [];
+  private active: WebGLQuery | null = null;
+
+  private constructor(
+    private gl: WebGL2RenderingContext,
+    private ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number },
+  ) {}
+
+  static create(gl: WebGLRenderingContext | WebGL2RenderingContext): GpuTimer | null {
+    if (!('createQuery' in gl)) return null;
+    const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
+    return ext ? new GpuTimer(gl, ext) : null;
+  }
+
+  begin() {
+    // results come back within a few frames; a backlog means the driver is not answering
+    if (this.active || this.pending.length > 6) return;
+    const q = this.free.pop() ?? this.gl.createQuery();
+    if (!q) return;
+    this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q);
+    this.active = q;
+  }
+
+  end() {
+    if (!this.active) return;
+    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
+    this.pending.push(this.active);
+    this.active = null;
+  }
+
+  /** Report finished measurements (ms); those spanning a disjoint event (power state change, …) are dropped. */
+  poll(out: (ms: number) => void) {
+    if (!this.pending.length) return;
+    const gl = this.gl;
+    const disjoint = gl.getParameter(this.ext.GPU_DISJOINT_EXT) as boolean;
+    while (this.pending.length) {
+      const q = this.pending[0];
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+      const ns = gl.getQueryParameter(q, gl.QUERY_RESULT) as number;
+      this.free.push(this.pending.shift()!);
+      if (!disjoint) out(ns / 1e6);
+    }
+  }
+}
+
+/**
+ * Two camera poses that no pixel can tell apart (0.1 µrad, 10 µm). Damped orbits and the guided camera's
+ * smoothing approach their target geometrically: compared exactly, they kept drawing for seconds after
+ * every move to shift the image by a fraction of a pixel.
+ */
+function sameView(a: THREE.Matrix4, b: THREE.Matrix4): boolean {
+  const x = a.elements;
+  const y = b.elements;
+  for (let i = 0; i < 16; i++) if (Math.abs(x[i] - y[i]) > (i >= 12 ? 1e-5 : 1e-7)) return false;
+  return true;
+}
 
 /** Reversed depth needs EXT_clip_control (WebGL2); probed on a throwaway context. */
 function supportsReversedDepth(): boolean {
@@ -77,7 +105,7 @@ function supportsReversedDepth(): boolean {
 
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
-  readonly labelRenderer: CSS2DRenderer;
+  readonly labelRenderer: LabelRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly composer: EffectComposer;
@@ -92,8 +120,9 @@ export class Engine {
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
   private timer = new THREE.Timer();
-  private grade: ShaderPass;
-  private bloom: UnrealBloomPass;
+  private scenePass: ScenePass;
+  private glow: GlowPass;
+  private final: FinalPass;
   private raycaster = new THREE.Raycaster();
   private lutTex: THREE.DataTexture;
   mode: PropertyMode = 'resistivity';
@@ -104,8 +133,10 @@ export class Engine {
   onFrame?: (dt: number) => void;
   radialScale = 25;
   private fog: THREE.FogExp2;
-  private aoPass: LogDepthAOPass;
   private lensPass: ShaderPass;
+  private gpu: GpuTimer | null;
+  /** CSS size of the view; the drawing buffer follows it once a resize settles */
+  private size = { w: 1, h: 1 };
   readonly mud = new MudParticles();
   /** optional-feature switches (see src/features) */
   fx = { shadows: false, tunnel: false, sea: false };
@@ -116,7 +147,7 @@ export class Engine {
   readonly depthMode: 'reversed' | 'log';
 
   constructor(
-    private container: HTMLElement,
+    container: HTMLElement,
     public field: FieldModel,
   ) {
     this.quality = /[?&]q=low/.test(location.search) ? 'low' : 'high';
@@ -125,26 +156,32 @@ export class Engine {
     // early depth test; the logarithmic buffer writes depth per fragment, which disables it, so every hidden
     // pixel of the rock / fracture / pore shaders is shaded anyway. Log depth stays as the fallback.
     this.depthMode = /[?&]depth=log/.test(location.search) || !supportsReversedDepth() ? 'log' : 'reversed';
+    const w = Math.max(1, container.clientWidth);
+    const h = Math.max(1, container.clientHeight);
+    this.size = { w, h };
     this.renderer = new THREE.WebGLRenderer({
       antialias: false,
       reversedDepthBuffer: this.depthMode === 'reversed',
       logarithmicDepthBuffer: this.depthMode === 'log',
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(this.quality === 'low' ? 1 : Math.min(window.devicePixelRatio, 1.75));
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setPixelRatio(this.pixelRatioFor(w, h));
+    this.renderer.setSize(w, h);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.classList.add('gl');
+    this.gpu = GpuTimer.create(this.renderer.getContext());
 
-    this.labelRenderer = new CSS2DRenderer();
-    this.labelRenderer.setSize(container.clientWidth, container.clientHeight);
+    this.labelRenderer = new LabelRenderer();
+    this.labelRenderer.setSize(w, h);
     this.labelRenderer.domElement.className = 'labels-layer';
+    // a label's text or class changed its size: place the labels again
+    this.labelRenderer.onSizeChange = () => this.requestRender();
     container.appendChild(this.labelRenderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.05, 90000);
+    this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 90000);
     this.camera.position.set(-2600, 1400, 2600);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -160,24 +197,20 @@ export class Engine {
     this.scene.add(this.hemi, this.sun, this.camera);
     this.camera.add(this.headlight);
 
-    const rt = new THREE.WebGLRenderTarget(container.clientWidth, container.clientHeight, { type: THREE.HalfFloatType, samples: this.quality === 'low' ? 0 : 4 });
-    // depth is sampled by the ambient-occlusion pass (log-depth aware)
-    rt.depthTexture = new THREE.DepthTexture(container.clientWidth, container.clientHeight, THREE.FloatType);
-    this.composer = new EffectComposer(this.renderer, rt);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.aoPass = new LogDepthAOPass(this.camera);
-    this.aoPass.enabled = false;
-    this.composer.addPass(this.aoPass);
-    this.composer.addPass(new ShaderPass(SanitizePass));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(container.clientWidth, container.clientHeight), 0.32, 0.55, 0.88);
-    this.bloom.enabled = this.quality !== 'low';
-    this.composer.addPass(this.bloom);
+    // Only the scene draw is multisampled (ScenePass); the post chain runs on plain half-float
+    // buffers without depth. Scene → glow (half resolution) → lens (inside the hole) → final
+    // (glow added, tone mapping, grade) straight to the canvas.
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false }));
+    this.scenePass = new ScenePass(this.scene, this.camera, this.quality === 'low' ? 0 : 4);
+    this.composer.addPass(this.scenePass);
+    this.glow = new GlowPass(new THREE.Vector2(w, h), 0.32, 0.55, 0.88);
+    this.glow.enabled = this.quality !== 'low';
+    this.composer.addPass(this.glow);
     this.lensPass = new ShaderPass(LensBlurShader);
     this.lensPass.enabled = false;
     this.composer.addPass(this.lensPass);
-    this.composer.addPass(new OutputPass());
-    this.grade = new ShaderPass(GradePass);
-    this.composer.addPass(this.grade);
+    this.final = new FinalPass(this.glow);
+    this.composer.addPass(this.final);
 
     this.rig = new CameraRig(this.camera, this.renderer.domElement);
     this.lutTex = makeLutTexture('resistivity');
@@ -191,12 +224,16 @@ export class Engine {
       this.fitShadowCamera();
       this.renderer.shadowMap.needsUpdate = true;
       for (const f of this.boxListeners) f(b);
+      this.requestRender();
     };
     this.scene.add(this.mud.points, this.sun.target);
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // the block and platform are static: render the shadow map only when something changes
     this.renderer.shadowMap.autoUpdate = false;
-    this.geology.onStateChange = () => (this.renderer.shadowMap.needsUpdate = true);
+    this.geology.onStateChange = () => {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.requestRender();
+    };
     this.sun.shadow.mapSize.setScalar(this.quality === 'low' ? 1024 : 4096);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 1.5;
@@ -204,41 +241,84 @@ export class Engine {
     this.paths = new WellPaths(field, this.coords);
     this.scene.add(this.paths.group);
 
-    window.addEventListener('resize', () => this.resize());
-    new ResizeObserver(() => this.resize()).observe(container);
+    // a feature adding or removing its objects (markers, contacts, a simulation grid) redraws
+    this.scene.addEventListener('childadded', () => this.requestRender());
+    this.scene.addEventListener('childremoved', () => this.requestRender());
+    // photo textures arrive asynchronously
+    textureEvents.loaded = () => this.requestRender();
+
+    this.resize();
+    // the container follows the window, so its observer covers window resizes as well (layout is clean in the callback)
+    new ResizeObserver(() => {
+      this.rect = null;
+      this.onResize(container.clientWidth, container.clientHeight);
+    }).observe(container);
+    // the canvas moves with the page, not only when it resizes
+    window.addEventListener('scroll', () => (this.rect = null), { capture: true, passive: true });
+    // moving to a display of another density changes no CSS size
+    let dpr = window.devicePixelRatio;
+    window.addEventListener('resize', () => {
+      this.rect = null;
+      if (window.devicePixelRatio === dpr) return;
+      dpr = window.devicePixelRatio;
+      this.scheduleRealloc();
+    });
   }
 
   /** how many scene labels to show: all, hide distant and overlapping ones, or only the essentials */
   labelDensity: 'all' | 'near' | 'few' = 'near';
 
   private insets = { left: 0, right: 0, bottom: 0 };
+  /** the view offset now applied; it glides to the insets' */
+  private offset = { dx: 0, dy: 0 };
+  private offsetMoving = false;
+  /** a pointer went down on the chrome (a panel, an edge, a tab) and is still down */
+  private chromeDrag = false;
   /**
    * The parts of the view covered by panels (px). The projection centre moves
    * to the middle of what is left, so the subject stays centred in the free
-   * area; the canvas itself keeps its size (no reallocation, no flash).
+   * area; the canvas itself keeps its size (no reallocation, no flash). While
+   * a column edge or panel is being dragged the view keeps its framing (a
+   * redraw per pointer move would compete with the drag); it glides to the new
+   * centre on release.
    */
   setInsets(left: number, right: number, bottom = 0) {
     const i = this.insets;
     if (i.left === left && i.right === right && i.bottom === bottom) return;
     this.insets = { left, right, bottom };
+    if (!this.started) {
+      this.offset = { dx: (left - right) / 2, dy: bottom / 2 };
+      this.applyViewOffset();
+    } else if (!this.chromeDrag) this.offsetMoving = true;
+  }
+  private stepViewOffset(dt: number) {
+    if (!this.offsetMoving) return;
+    const tx = (this.insets.left - this.insets.right) / 2;
+    const ty = this.insets.bottom / 2;
+    const o = this.offset;
+    const k = this.rig.instantMoves ? 1 : 1 - Math.exp(-dt * 12);
+    o.dx += (tx - o.dx) * k;
+    o.dy += (ty - o.dy) * k;
+    if (Math.abs(tx - o.dx) < 0.5 && Math.abs(ty - o.dy) < 0.5) {
+      o.dx = tx;
+      o.dy = ty;
+      this.offsetMoving = false;
+    }
     this.applyViewOffset();
-    this.requestRender(300);
   }
   private applyViewOffset() {
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
-    if (!w || !h) return;
-    const dx = (this.insets.left - this.insets.right) / 2;
-    const dy = this.insets.bottom / 2;
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) this.camera.setViewOffset(w, h, -dx, dy, w, h);
+    const { w, h } = this.size;
+    const { dx, dy } = this.offset;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) this.camera.setViewOffset(w, h, -dx, dy, w, h);
     else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
   }
 
   /** Glow + film grade can be switched off from the Display panel. */
   setPostFx(on: boolean) {
-    this.bloom.enabled = on;
-    this.grade.enabled = on;
+    this.glow.enabled = on;
+    this.final.grade = on;
+    this.requestRender();
   }
 
   /** Sun shadows on the platform, sea and geological block. */
@@ -246,7 +326,7 @@ export class Engine {
     this.fx.shadows = on;
     this.renderer.shadowMap.enabled = on;
     this.sun.castShadow = on;
-    this.aoPass.enabled = on;
+    this.scenePass.ao = on;
     this.geology.shadows = on;
     this.geology.applyState();
     this.env.platform.traverse((o) => {
@@ -260,17 +340,20 @@ export class Engine {
       if (Array.isArray(m)) m.forEach((x) => (x.needsUpdate = true));
       else if (m) m.needsUpdate = true;
     });
+    this.requestRender();
   }
 
   setTunnelFx(on: boolean) {
     this.fx.tunnel = on;
     if (!on) this.lensPass.enabled = false;
+    this.requestRender();
   }
 
   setSeaFx(on: boolean) {
     this.fx.sea = on;
     this.env.setDetail(on);
     SEABED.uSeabedOn.value = on ? 1 : 0;
+    this.requestRender();
   }
 
   private fitShadowCamera() {
@@ -292,20 +375,58 @@ export class Engine {
     this.sun.shadow.needsUpdate = true;
   }
 
-  resize() {
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
-    if (w === 0 || h === 0) return;
+  /** Device pixel ratio for a view of w × h CSS px: the display's, capped at 1.75 and at the pixel budget, times the adaptive scale. */
+  private pixelRatioFor(w: number, h: number) {
+    if (this.quality === 'low') return 1;
+    const budget = Math.max(1, Math.sqrt(PIXEL_BUDGET / Math.max(1, w * h)));
+    return Math.min(window.devicePixelRatio, 1.75, budget) * this.prScale;
+  }
+
+  private reallocTimer = 0;
+  /**
+   * The container changed size. The camera and the CSS size follow at once
+   * (the current drawing buffer is stretched meanwhile, and the view is drawn
+   * into it with the new aspect, so nothing distorts); the renderer, the
+   * multisampled target, the glow mips and the post buffers are reallocated
+   * once, 150 ms after the size stopped changing, instead of on every step of
+   * a live window resize.
+   */
+  private onResize(w: number, h: number) {
+    if (!w || !h || (w === this.size.w && h === this.size.h)) return;
+    this.size = { w, h };
     this.camera.aspect = w / h;
-    // shift the projection centre into the free area between the panels
+    this.applyViewOffset();
+    const st = this.renderer.domElement.style;
+    st.width = `${w}px`;
+    st.height = `${h}px`;
+    this.labelRenderer.setSize(w, h);
+    (this.lensPass.uniforms as Record<string, THREE.IUniform>).uAspect.value = w / h;
+    this.requestRender();
+    this.scheduleRealloc();
+  }
+  private scheduleRealloc(ms = 150) {
+    clearTimeout(this.reallocTimer);
+    this.reallocTimer = window.setTimeout(() => this.realloc(), ms);
+  }
+  private realloc() {
+    const pr = this.pixelRatioFor(this.size.w, this.size.h);
+    if (pr !== this.renderer.getPixelRatio()) {
+      this.renderer.setPixelRatio(pr);
+      this.composer.setPixelRatio(pr);
+    }
+    this.resize();
+  }
+
+  /** Size every buffer to the view now, at the renderer's pixel ratio (the snapshot export sets its own). */
+  resize() {
+    const { w, h } = this.size;
+    this.camera.aspect = w / h;
     this.applyViewOffset();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
-    const pr = this.renderer.getPixelRatio();
-    this.aoPass.setSize(w * pr, h * pr);
     (this.lensPass.uniforms as Record<string, THREE.IUniform>).uAspect.value = w / h;
     this.labelRenderer.setSize(w, h);
-    this.requestRender(600);
+    this.requestRender();
   }
 
   setActiveWell(well: Well) {
@@ -322,13 +443,15 @@ export class Engine {
     this.rig.wellbore = this.wellbore;
     this.rig.mdMax = well.tdMD;
     this.paths.build(well.id);
+    this.requestRender();
     // build the picking BVH for the heavy wall geometry off the critical path, not on the first hover
     const wb = this.wellbore;
     const build = () => {
       if (this.wellbore === wb) ensureBVHFor([wb.wall, wb.overviewTube, ...wb.casings]);
     };
     // the render loop can keep the browser from ever going idle: cap the wait
-    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: 1500 });
+    // a well being drilled is rebuilt often: its index waits for a longer quiet spell
+    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: well.buildAhead > 0 ? 8000 : 1500 });
     else setTimeout(build, 500);
   }
 
@@ -336,6 +459,19 @@ export class Engine {
   /** Interpretation changed only: update data textures in place. */
   refreshInterpretation() {
     if (this.wellbore) this.wellbore.updateTextures(buildWellTextures(this.activeWell));
+    this.requestRender();
+  }
+
+  /**
+   * Live data reached the well from `fromMd` down: refill that part of the
+   * wellbore's data textures in place (or rebuild them when TD outgrew them).
+   */
+  refreshFrom(fromMd: number) {
+    const wb = this.wellbore;
+    if (!wb) return;
+    if (updateWellTextures(wb.tex, this.activeWell, fromMd)) wb.texturesChanged();
+    else wb.updateTextures(buildWellTextures(this.activeWell));
+    this.requestRender();
   }
 
   refreshWellData() {
@@ -348,6 +484,7 @@ export class Engine {
   setMode(m: PropertyMode) {
     this.mode = m;
     this.wellbore?.setMode(m);
+    this.requestRender();
   }
 
   setColormap(name: ColormapName) {
@@ -355,45 +492,87 @@ export class Engine {
     this.lutTex.dispose();
     this.lutTex = t;
     this.wellbore?.setLut(t);
+    this.requestRender();
   }
 
   setRadialScale(s: number) {
     this.radialScale = s;
     this.wellbore?.setRadialScale(s);
+    this.requestRender();
   }
 
-  // ---- render on demand: the scene is drawn only when something can have changed
+  // ---- render on demand: the scene is drawn only when something in it changed. Camera motion, the
+  // cursor depth and the hover highlight are seen here; everything else asks: the engine's setters, the
+  // app's scene signals (SCENE in ui/signal.ts), objects added to the scene and input on the view.
+  // There is no periodic redraw: a chrome drag never costs a 3D frame.
   private renderUntil = 0;
-  private lastRenderAt = 0;
+  /** at least one more frame, however late the next tick comes */
+  private framePending = true;
   private lastView = new THREE.Matrix4();
   private lastProj = new THREE.Matrix4();
-  /** Keep drawing for `ms` (state changed, input on the canvas, data arrived). */
-  requestRender(ms = 300) {
+  private lastMd = NaN;
+  private lastHover = NaN;
+  private started = false;
+  /** Draw the next frame, and keep drawing for `ms` (state changed, input on the view, data arrived). */
+  requestRender(ms = 100) {
+    this.framePending = true;
     this.renderUntil = Math.max(this.renderUntil, performance.now() + ms);
   }
   private shouldRender(animating: boolean): boolean {
-    const now = performance.now();
     this.camera.updateMatrixWorld();
-    const moved = !this.lastView.equals(this.camera.matrixWorld) || !this.lastProj.equals(this.camera.projectionMatrix);
-    // a slow heartbeat catches anything that changed without saying so
-    if (!moved && !animating && now > this.renderUntil && now - this.lastRenderAt < 1000) return false;
+    const moved = !sameView(this.lastView, this.camera.matrixWorld) || !this.lastProj.equals(this.camera.projectionMatrix);
+    // the cursor moved along the well (timeline, log scroll) or the hover highlight changed (a panel dragged
+    // across the log tracks moves it too: that waits for the release)
+    const md = this.rig.md;
+    const hover = (this.wellbore?.uniforms.uHoverMd.value as number | undefined) ?? -1e6;
+    const changed = md !== this.lastMd || (hover !== this.lastHover && !this.chromeDrag);
+    if (!moved && !changed && !animating && !this.framePending && performance.now() > this.renderUntil) return false;
+    this.framePending = false;
     this.lastView.copy(this.camera.matrixWorld);
     this.lastProj.copy(this.camera.projectionMatrix);
-    this.lastRenderAt = now;
+    this.lastMd = md;
+    this.lastHover = hover;
     return true;
   }
 
   start() {
+    if (this.started) return;
+    this.started = true;
     const cv = this.renderer.domElement;
-    // a drag that started on the chrome (a panel or window being moved) and
-    // crosses the view does not redraw it
+    // a drag that started on the chrome (a panel or window being moved) and crosses the view
+    // does not redraw it; nor does moving the pointer over the view (the hover highlight is
+    // seen through its uniform)
     let downOnView = false;
-    cv.addEventListener('pointerdown', () => ((downOnView = true), this.requestRender(600)), { passive: true });
-    window.addEventListener('pointerup', () => (downOnView = false), { passive: true });
-    cv.addEventListener('pointermove', (e) => (e.buttons === 0 || downOnView) && this.requestRender(600), { passive: true });
+    const opts = { passive: true, capture: true };
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        downOnView = e.target === cv;
+        if (downOnView) this.requestRender(600);
+        else this.chromeDrag = true;
+      },
+      opts,
+    );
+    const release = () => {
+      downOnView = false;
+      if (!this.chromeDrag) return;
+      this.chromeDrag = false;
+      // the framing the panels asked for while they were dragged
+      this.offsetMoving = true;
+    };
+    window.addEventListener('pointerup', release, opts);
+    window.addEventListener('pointercancel', release, opts);
+    window.addEventListener('blur', release);
+    cv.addEventListener('pointermove', () => downOnView && this.requestRender(600), { passive: true });
     cv.addEventListener('wheel', () => this.requestRender(600), { passive: true });
-    window.addEventListener('keydown', () => this.requestRender(600));
-    window.addEventListener('resize', () => this.requestRender(600));
+    window.addEventListener('keydown', (e) => {
+      // typing in the chrome (search, forms) is not navigation
+      const t = e.target as HTMLElement | null;
+      if (!t?.closest?.('input, textarea, select, [contenteditable="true"]')) this.requestRender(300);
+    });
+    // Safety net for state that changes the scene without saying so: a click anywhere draws a frame or two
+    // (a click is discrete, so this costs nothing during drags).
+    window.addEventListener('click', () => this.requestRender(34), opts);
     const loop = (ts: number) => {
       requestAnimationFrame(loop);
       this.timer.update(ts);
@@ -405,40 +584,81 @@ export class Engine {
     requestAnimationFrame(loop);
   }
 
-  // adaptive resolution: step the pixel ratio down on slow GPUs, back up when there is headroom
-  private frameTimes: number[] = [];
+  // Adaptive quality, measured only on frames that were drawn: GPU time where the browser exposes
+  // it, otherwise the interval between two consecutive drawn frames. Budget: 60 fps. Slow windows
+  // first drop MSAA to 2×, then step the pixel ratio down; with GPU timing, headroom steps back up
+  // (the thresholds are far enough apart that one step cannot flip the verdict).
+  private frameMs: number[] = [];
   private prScale = 1;
-  private adapt(dt: number) {
-    if (this.quality === 'low' || this.prScale <= 0.55) return;
-    this.frameTimes.push(dt);
-    if (this.frameTimes.length < 120) return;
-    const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
-    this.frameTimes = [];
-    // step down only, and only after two consecutive slow windows: never oscillates
-    this.slowWindows = avg > 1 / 28 ? this.slowWindows + 1 : 0;
-    if (this.slowWindows < 2) return;
-    this.slowWindows = 0;
-    this.prScale = Math.max(0.55, this.prScale - 0.15);
-    const pr = Math.min(window.devicePixelRatio, 1.75) * this.prScale;
-    this.renderer.setPixelRatio(pr);
-    this.composer.setPixelRatio(pr);
-    this.resize();
-  }
   private slowWindows = 0;
+  private fastWindows = 0;
+  private drewLastTick = false;
+  private lastDrawAt = 0;
+  private noteFrameMs(ms: number) {
+    if (this.quality === 'low') return;
+    this.frameMs.push(ms);
+    if (this.frameMs.length < 45) return;
+    const avg = this.frameMs.reduce((a, b) => a + b, 0) / this.frameMs.length;
+    this.frameMs = [];
+    const gpu = !!this.gpu;
+    const slow = gpu ? avg > 12 : avg > 20;
+    const fast = gpu && avg < 5.5;
+    this.slowWindows = slow ? this.slowWindows + 1 : 0;
+    this.fastWindows = fast ? this.fastWindows + 1 : 0;
+    if (this.slowWindows >= 2) {
+      this.slowWindows = 0;
+      if (this.scenePass.samples > 2) this.scenePass.samples = 2;
+      else if (this.prScale > 0.55) this.setPrScale(Math.max(0.55, this.prScale - 0.15));
+    } else if (this.fastWindows >= 3) {
+      this.fastWindows = 0;
+      if (this.prScale < 1) this.setPrScale(Math.min(1, this.prScale + 0.15));
+      else if (this.scenePass.samples < 4) this.scenePass.samples = 4;
+    }
+  }
+  private setPrScale(k: number) {
+    this.prScale = k;
+    this.realloc();
+  }
 
   private tick(dt: number) {
     const t = this.timer.getElapsed();
-    this.adapt(dt);
+    this.gpu?.poll((ms) => this.noteFrameMs(ms));
     this.rig.update(dt);
+    this.stepViewOffset(dt);
+    const wb = this.wellbore;
+    const inside = !!wb && this.rig.mode === 'guided' && this.rig.guidedView === 'tunnel';
+    const tfx = this.fx.tunnel && inside;
+    // nothing changed: skip the scene work as well as the draw (the chrome's per-frame hooks still run)
+    const draw = this.shouldRender(this.rig.playing || tfx);
+    if (draw) this.updateScene(t, inside, tfx);
+    this.onFrame?.(dt);
+    if (!draw) {
+      this.drewLastTick = false;
+      return;
+    }
+    wb?.cullTubes(this.camera, this.renderer.domElement.height);
+    this.gpu?.begin();
+    this.composer.render();
+    this.gpu?.end();
+    // the WebGL render just updated the scene graph's matrices
+    this.labelRenderer.render(this.scene, this.camera, false);
+    this.labelRenderer.declutter(this.labelDensity);
+    const now = performance.now();
+    if (!this.gpu && this.drewLastTick && now - this.lastDrawAt < 100) this.noteFrameMs(now - this.lastDrawAt);
+    this.drewLastTick = true;
+    this.lastDrawAt = now;
+  }
+
+  /** Per-frame scene state that depends on the camera, the cursor and the time: only when a frame is drawn. */
+  private updateScene(t: number, inside: boolean, tfx: boolean) {
     const cam = this.camera.position;
     this.geology.sortForCamera(cam.y);
     const wb = this.wellbore;
     if (wb) {
       wb.setCursor(this.rig.md);
-      wb.update(this.camera, t, this.labelsVisible, this.rig.md, this.rig.mode === 'guided' && this.rig.guidedView === 'tunnel');
+      wb.update(this.camera, t, this.labelsVisible, this.rig.md, inside);
       // cutaway only when looking at the well from outside
       const f = wb.frameAt(this.rig.md);
-      const inside = this.rig.mode === 'guided' && this.rig.guidedView === 'tunnel';
       this.tunnel = inside;
       wb.uniforms.uCut.value = inside ? 0 : 1;
       this.headlight.intensity = inside ? 7 : cam.distanceTo(f.pos) < 300 ? 4 : 0;
@@ -486,77 +706,13 @@ export class Engine {
     this.sun.intensity = this.tunnel ? 0.12 : under ? 2.2 : 3.2;
     this.hemi.intensity = this.tunnel ? 0.05 : 0.55;
     this.scene.environmentIntensity = this.tunnel ? 0.12 : 0.55;
-    (this.grade.uniforms as Record<string, THREE.IUniform>).uTime.value = t;
+    this.final.uniforms.uTime.value = t;
     // inside-the-hole atmosphere: lens blur and drifting fluid particles
-    const tfx = this.fx.tunnel && this.tunnel;
     this.lensPass.enabled = tfx && this.quality !== 'low';
     if (wb && tfx) {
       const r = wb.innerRadiusAt(this.rig.md);
       this.mud.update(this.camera, t, true, Math.max(3, r * 3.2), this.renderer.domElement.height);
     } else this.mud.update(this.camera, t, false, 1, 1);
-    this.onFrame?.(dt);
-    if (!this.shouldRender(this.rig.playing || tfx)) return;
-    wb?.cullTubes(this.camera, this.renderer.domElement.height);
-    this.composer.render();
-    this.labelRenderer.render(this.scene, this.camera);
-    this.declutterLabels();
-  }
-
-  /**
-   * Scene labels must not pile up: after each draw the ones on screen are
-   * placed by importance (measurements, the well, the platform and contacts
-   * first, closer before farther) and any that would overlap one already
-   * placed is hidden. "few" keeps only the essential kinds.
-   */
-  private declutterLabels() {
-    const els = this.labelRenderer.domElement.children;
-    const mode = this.labelDensity;
-    if (mode === 'all') {
-      for (const el of els) (el as HTMLElement).style.visibility = '';
-      return;
-    }
-    const rank = (el: HTMLElement) => {
-      const c = el.classList;
-      const k = c.contains('measure')
-        ? 0
-        : c.contains('well')
-          ? 1
-          : c.contains('platform')
-            ? 2
-            : c.contains('owc')
-              ? 3
-              : c.contains('gs')
-                ? 4
-                : c.contains('shoe')
-                  ? 5
-                  : c.contains('ctx')
-                    ? 8
-                    : c.contains('tick')
-                      ? 9
-                      : 6;
-      return k * 1e6 - (parseInt(el.style.zIndex || '0', 10) || 0);
-    };
-    const shown: { el: HTMLElement; r: number; box: DOMRect }[] = [];
-    for (const n of els) {
-      const el = n as HTMLElement;
-      const label = el.classList.contains('label3d') ? el : (el.querySelector('.label3d') as HTMLElement | null);
-      if (el.style.display === 'none' || !label) continue;
-      const r = rank(label);
-      if (mode === 'few' && r >= 4e6) {
-        el.style.visibility = 'hidden';
-        continue;
-      }
-      shown.push({ el, r, box: el.getBoundingClientRect() });
-    }
-    shown.sort((a, b) => a.r - b.r);
-    const placed: DOMRect[] = [];
-    const pad = 3;
-    for (const s of shown) {
-      const b = s.box;
-      const hit = placed.some((p) => b.left < p.right + pad && b.right > p.left - pad && b.top < p.bottom + pad && b.bottom > p.top - pad);
-      s.el.style.visibility = hit ? 'hidden' : '';
-      if (!hit) placed.push(b);
-    }
   }
 
   /** Render one frame immediately (used by the snapshot export). */
@@ -564,9 +720,15 @@ export class Engine {
     this.composer.render();
   }
 
+  private rect: DOMRect | null = null;
+  /** The canvas' client rect, measured once per layout change: hover picks run on pointer moves, and a fresh read would force a layout. */
+  private canvasRect(): DOMRect {
+    return (this.rect ??= this.renderer.domElement.getBoundingClientRect());
+  }
+
   /** Raycast the scene at client coordinates. */
   pick(clientX: number, clientY: number, hoverOnly = false): PickResult | null {
-    const rect = this.renderer.domElement.getBoundingClientRect();
+    const rect = this.canvasRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     this.raycaster.params.Line = { threshold: 2 };

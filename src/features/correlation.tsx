@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, SelectField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Rev, Signal } from '../ui/signal';
 import { font, ink, wash } from '../ui/tokens';
 import { CURVES, CURVE_BY_KEY } from './curves';
@@ -36,8 +36,10 @@ export class CorrelationFeature implements FeatureModule {
   readonly id = 'correlation' as const;
   private panel: ToolWindow;
   readonly rev = new Rev();
-  private canvas: HTMLCanvasElement | null = null;
-  private wheelBound = new WeakSet<HTMLCanvasElement>();
+  /** the tracks are cached; playback only moves the cursor line over them */
+  private view = new PanelCanvas({ draw: (g, W, H) => this.draw(g, W, H), cursor: (g, W, H) => this.drawCursor(g, W, H), visible: () => this.panel.visible, wheel: (e) => this.wheel(e) });
+  /** the active well's track, for the cursor */
+  private activeCol: { col: Column; x0: number } | null = null;
   private readout = new Signal<ReactNode>(null);
   private cols: Column[] = [];
   private datumId = 'hugin';
@@ -52,6 +54,8 @@ export class CorrelationFeature implements FeatureModule {
   private layout: { PL: number; PT: number; PB: number; cw: number; tw: number; Y: (d: number) => number; D: (y: number) => number } | null = null;
 
   constructor(private app: App) {
+    // cached drawings: redraw when a colour they use changes
+    app.paintRev.subscribe(() => this.view.invalidate());
     const curves = CURVES.map((c) => ({ id: c.key, label: c.label }));
     this.panel = new ToolWindow({
       id: 'correlation',
@@ -109,20 +113,14 @@ export class CorrelationFeature implements FeatureModule {
       ),
       body: () => (
         <>
-          <canvas
-            ref={(el) => {
-              this.canvas = el;
-              if (el && !this.wheelBound.has(el)) {
-                this.wheelBound.add(el);
-                el.addEventListener('wheel', (e) => this.wheel(e), { passive: false });
-              }
-            }}
+          <CanvasBox
+            view={this.view}
             aria-label="Log tracks of the logged wells side by side: click a track to travel there"
-            className="block min-h-0 w-full flex-1 cursor-pointer"
+            className="cursor-pointer"
             onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
             onPointerMove={(e) => this.hover(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
             onPointerLeave={() => this.hover(-1, -1)}
-            onDoubleClick={() => ((this.win = null), this.draw())}
+            onDoubleClick={() => ((this.win = null), this.view.invalidate())}
           />
           <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
             <Live s={this.readout} />
@@ -130,7 +128,6 @@ export class CorrelationFeature implements FeatureModule {
         </>
       ),
     });
-    this.panel.onResize = () => this.draw();
     // the well list follows the "More Volve wells" feature (skip the immediate call from watch)
     let first = true;
     app.flags.watch('extraWells', () => {
@@ -156,7 +153,7 @@ export class CorrelationFeature implements FeatureModule {
       const dd = (e.deltaY / 600) * span;
       this.win = { d0: d0 + dd, d1: d1 + dd };
     }
-    this.draw();
+    this.view.invalidate();
   }
 
   enable() {
@@ -177,7 +174,7 @@ export class CorrelationFeature implements FeatureModule {
     const md = this.app.engine.rig.md;
     if (Math.abs(md - this.lastMd) < 0.5) return;
     this.lastMd = md;
-    this.draw();
+    this.view.moveCursor();
   }
 
   settings() {
@@ -223,7 +220,7 @@ export class CorrelationFeature implements FeatureModule {
   private async load() {
     if (this.loading) return;
     this.loading = true;
-    this.draw();
+    this.view.invalidate();
     try {
       for (const w of this.candidates()) if (!w.loaded) await this.app.field.ensureLoaded(w);
     } catch (err) {
@@ -265,7 +262,7 @@ export class CorrelationFeature implements FeatureModule {
     this.cols = cols;
     if (!this.win) this.win = this.defaultWindow();
     this.lastMd = -1;
-    this.draw();
+    this.view.invalidate();
   }
 
   private defaultWindow(): { d0: number; d1: number } {
@@ -328,11 +325,8 @@ export class CorrelationFeature implements FeatureModule {
     this.app.engine.requestRender();
   }
 
-  draw() {
-    if (!this.panel.visible) return;
-    const fit = fitCanvas(this.canvas);
-    if (!fit) return;
-    const { g, W, H } = fit;
+  private draw(g: CanvasRenderingContext2D, W: number, H: number) {
+    this.activeCol = null;
     g.font = font.sans(11, 400);
     if (this.loading && !this.cols.length) {
       g.fillStyle = ink.muted;
@@ -434,16 +428,7 @@ export class CorrelationFeature implements FeatureModule {
         g.lineWidth = 1.1;
         this.polyline(g, ot, (s) => x0 + odef.amp(s.v) * tw, (s) => s.d - c.shift, Y);
       }
-      // cursor on the active well
-      if (c.well === active) {
-        const y = Y(c.axis.at(this.app.engine.rig.md) - c.shift);
-        g.strokeStyle = '#7fe3ff';
-        g.lineWidth = 2;
-        g.beginPath();
-        g.moveTo(x0 - 4, y);
-        g.lineTo(x0 + tw + 4, y);
-        g.stroke();
-      }
+      if (c.well === active) this.activeCol = { col: c, x0 };
       g.strokeStyle = c.well === active ? '#7fe3ff' : wash(0.18);
       g.lineWidth = c.well === active ? 1.5 : 1;
       g.strokeRect(x0 + 0.5, PT, tw - 1, H - PT - PB);
@@ -491,6 +476,26 @@ export class CorrelationFeature implements FeatureModule {
       g.fillStyle = OVERLAY_COLOR;
       g.fillRect(PL, H - 11, 14, 2);
     }
+  }
+
+  /** the cursor on the active well, inside the tracks' frame */
+  private drawCursor(g: CanvasRenderingContext2D, W: number, H: number) {
+    const L = this.layout;
+    const a = this.activeCol;
+    if (!L || !a) return;
+    const y = L.Y(a.col.axis.at(this.app.engine.rig.md) - a.col.shift);
+    if (y < L.PT || y > H - L.PB) return;
+    g.save();
+    g.beginPath();
+    g.rect(L.PL, L.PT, W - L.PL - 8, H - L.PT - L.PB);
+    g.clip();
+    g.strokeStyle = '#7fe3ff';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(a.x0 - 4, y);
+    g.lineTo(a.x0 + L.tw + 4, y);
+    g.stroke();
+    g.restore();
   }
 
   /** stroke a log curve, breaking it where the samples are more than 3 m apart */

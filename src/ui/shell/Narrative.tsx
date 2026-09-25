@@ -1,6 +1,7 @@
 import { Button } from '@tecton/react/components/button';
 import { Panel, PanelContent, PanelDescription, PanelFooter, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
 import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon } from 'lucide-react';
+import { useSyncExternalStore } from 'react';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { PROV_DESCRIPTION, PROV_DOT } from '../prov';
@@ -9,10 +10,12 @@ import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 /** The guided tour's chapter card: what the camera is looking at, with the key numbers. */
 export function Narrative({ app }: { app: App }) {
-  useRev(app.viewRev, app.wellRev);
+  // of the view, only the navigation mode matters here (a slider on the view bumps viewRev per step)
+  const guided = useSyncExternalStore(app.viewRev.subscribe, () => app.engine.rig.mode === 'guided');
+  useRev(app.wellRev);
   const ch = useSignal(app.chapter);
   const [collapsed, setCollapsed] = useCollapsed('narrative');
-  if (app.engine.rig.mode !== 'guided' || !ch) return null;
+  if (!guided || !ch) return null;
   const c = app.chapters[ch.index];
   if (!c) return null;
   const n = app.chapters.length;

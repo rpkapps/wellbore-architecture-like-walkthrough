@@ -11,6 +11,38 @@ import type { Signal } from './signal';
  * transition itself; nothing here calls `document.startViewTransition`.
  */
 let animating = 0;
+/** when something last asked for a synchronous render (a toast): a view transition waits it out */
+let lastSync = 0;
+
+/** until when a view transition may still be preparing or running */
+let busyUntil = 0;
+
+/** Call before an update that will flush synchronously (sonner adds toasts with flushSync). */
+export function noteSyncUpdate() {
+  lastSync = performance.now();
+}
+
+/**
+ * View transitions in flight. React starts them itself; watching the
+ * document's method tells us when one is preparing or running, however long
+ * a slow frame makes it.
+ */
+let running = 0;
+if (typeof document !== 'undefined' && typeof document.startViewTransition === 'function') {
+  const start = document.startViewTransition.bind(document);
+  document.startViewTransition = ((arg?: Parameters<typeof start>[0]) => {
+    const t = start(arg);
+    running++;
+    void t.finished.finally(() => running--);
+    return t;
+  }) as typeof document.startViewTransition;
+}
+
+/** Milliseconds to wait before a synchronous render is safe (0: now). A toast waits this long. */
+export function transitionBusyFor(): number {
+  if (running > 0) return 60;
+  return Math.max(0, busyUntil - performance.now());
+}
 
 export function reducedMotion(): boolean {
   return typeof document !== 'undefined' && document.documentElement.hasAttribute('data-reduce-motion');
@@ -26,11 +58,14 @@ export function withTransition(change: () => void) {
   // view transition while it prepares
   const t0 = performance.now();
   const go = () => {
-    if (document.querySelector('[data-exiting]') && performance.now() - t0 < 600) {
+    // a toast renders on a later tick, which a long task can delay: keep clear of it for a while
+    const busy = document.querySelector('[data-exiting]') || performance.now() - lastSync < 400;
+    if (busy && performance.now() - t0 < 600) {
       requestAnimationFrame(go);
       return;
     }
     animating++;
+    busyUntil = performance.now() + 500;
     try {
       change();
     } finally {
@@ -58,5 +93,8 @@ export function useAnimatedSignal<T>(s: Signal<T>): T {
 /** A local state change that should animate through the `<ViewTransition>`s it affects. */
 export function animate(fn: () => void) {
   if (reducedMotion()) fn();
-  else startTransition(fn);
+  else {
+    busyUntil = performance.now() + 500;
+    startTransition(fn);
+  }
 }

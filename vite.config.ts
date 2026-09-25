@@ -9,6 +9,8 @@ export default defineConfig({
     target: 'es2022',
     chunkSizeWarningLimit: 2500,
   },
+  // module workers, so the connector worker loads its rarer readers (Parquet, Arrow) on demand
+  worker: { format: 'es' },
   test: {
     environment: 'node',
   },

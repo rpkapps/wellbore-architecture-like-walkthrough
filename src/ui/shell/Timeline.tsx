@@ -1,7 +1,7 @@
 import { Button } from '@tecton/react/components/button';
 import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { GaugeIcon, PauseIcon, PlayIcon } from 'lucide-react';
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { payIntervals } from '../../data/petro';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
 import type { App } from '../app';
@@ -77,15 +77,37 @@ interface Hover {
   chapter?: number;
 }
 
+/**
+ * What is under the pointer. It changes on every pointer move, so it is kept
+ * out of the strip's state: only the hover line and card render when it moves.
+ */
+class HoverStore {
+  private v: Hover | null = null;
+  private ls = new Set<() => void>();
+  get = () => this.v;
+  set(fn: (h: Hover | null) => Hover | null) {
+    const v = fn(this.v);
+    if (v === this.v) return;
+    this.v = v;
+    for (const l of this.ls) l();
+  }
+  subscribe = (l: () => void) => {
+    this.ls.add(l);
+    return () => void this.ls.delete(l);
+  };
+}
+
 function Strip({ app }: { app: App }) {
   const rev = useRev(app.wellRev);
   const box = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(0);
-  const [hover, setHover] = useState<Hover | null>(null);
+  const hover = useMemo(() => new HoverStore(), []);
+  const left = useRef(0);
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    // later sizes come with the observation (no layout read); it changes only when the window does
+    const ro = new ResizeObserver((es) => setW(Math.round(es[es.length - 1].contentRect.width)));
     ro.observe(el);
     setW(el.clientWidth);
     return () => ro.disconnect();
@@ -93,23 +115,28 @@ function Strip({ app }: { app: App }) {
 
   const w = app.engine.activeWell;
   const td = w.tdMD;
-  const x = (md: number) => (Math.max(0, Math.min(td, md)) / td) * W;
+  // stable between renders, so the playhead does not re-subscribe
+  const x = useCallback((md: number) => (Math.max(0, Math.min(td, md)) / td) * W, [td, W]);
   const mdAt = (px: number) => Math.max(0, Math.min(1, px / W)) * td;
 
-  const scrub = (ev: ReactPointerEvent<SVGSVGElement>) => {
-    const r = ev.currentTarget.getBoundingClientRect();
-    app.scrubTo(mdAt(ev.clientX - r.left));
+  const scrub = (ev: ReactPointerEvent<SVGSVGElement>, px: number) => {
+    if (ev.buttons) app.scrubTo(mdAt(px));
   };
-  const key = (e: KeyboardEvent) => {
-    const md = app.pose.value.md;
-    const step = e.shiftKey ? 100 : 10;
-    const to = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? md + step : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? md - step : e.key === 'Home' ? 0 : e.key === 'End' ? td : null;
-    if (to === null) return;
-    e.preventDefault();
-    app.scrubTo(Math.max(0, Math.min(td, to)));
-  };
+  const key = useCallback(
+    (e: KeyboardEvent) => {
+      const md = app.pose.value.md;
+      const step = e.shiftKey ? 100 : 10;
+      const to = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? md + step : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? md - step : e.key === 'Home' ? 0 : e.key === 'End' ? td : null;
+      if (to === null) return;
+      e.preventDefault();
+      app.scrubTo(Math.max(0, Math.min(td, to)));
+    },
+    [app, td],
+  );
+  const onChapter = useCallback((i: number | null) => hover.set((h) => (h ? { ...h, chapter: i ?? undefined } : null)), [hover]);
 
-  const base = useMemo(() => (W > 0 ? <Base app={app} W={W} /> : null), [app, W, rev]);
+  // the strip drawn in MD across 0..1 of the width, so it does not depend on the width
+  const base = useMemo(() => <Base app={app} />, [app, rev]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div ref={box} className="relative min-w-0 flex-1" style={{ height: H }}>
@@ -118,68 +145,84 @@ function Strip({ app }: { app: App }) {
           width={W}
           height={H}
           className="absolute inset-0 cursor-ew-resize touch-none overflow-visible outline-none select-none"
+          // where the strip starts, read when the pointer arrives rather than on every move (a read after a write forces layout)
+          onPointerEnter={(e) => (left.current = e.currentTarget.getBoundingClientRect().left)}
           onPointerDown={(e) => {
+            left.current = e.currentTarget.getBoundingClientRect().left;
             e.currentTarget.setPointerCapture(e.pointerId);
-            scrub(e);
+            app.scrubTo(mdAt(e.clientX - left.current));
           }}
           onPointerMove={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            if (e.buttons) scrub(e);
-            setHover((h) => ({ x: e.clientX - r.left, md: mdAt(e.clientX - r.left), chapter: h?.chapter }));
+            const px = e.clientX - left.current;
+            scrub(e, px);
+            hover.set((h) => ({ x: px, md: mdAt(px), chapter: h?.chapter }));
           }}
-          onPointerLeave={() => setHover(null)}
+          onPointerLeave={() => hover.set(() => null)}
         >
           {base}
-          <Chapters app={app} x={x} W={W} onHover={(i) => setHover((h) => (h ? { ...h, chapter: i ?? undefined } : null))} />
-          {hover && hover.chapter === undefined && <line x1={hover.x} x2={hover.x} y1={S_TOP - 2} y2={S_BOT + 2} className="stroke-foreground/50" strokeDasharray="2 2" />}
+          <Chapters app={app} x={x} W={W} onHover={onChapter} />
+          <HoverLine hover={hover} />
           <Playhead app={app} x={x} W={W} td={td} onKey={key} />
         </svg>
       )}
-      {hover && <HoverCard app={app} hover={hover} W={W} />}
+      <HoverCard app={app} hover={hover} W={W} />
     </div>
   );
 }
 
-/** The static part of the strip: formations, inclination, pay, shoes and the depth scale. */
-function Base({ app, W }: { app: App; W: number }) {
+function HoverLine({ hover }: { hover: HoverStore }) {
+  const h = useSyncExternalStore(hover.subscribe, hover.get);
+  if (!h || h.chapter !== undefined) return null;
+  return <line x1={h.x} x2={h.x} y1={S_TOP - 2} y2={S_BOT + 2} className="pointer-events-none stroke-foreground/50" strokeDasharray="2 2" />;
+}
+
+/**
+ * The static part of the strip: formations, inclination, pay, shoes and the
+ * depth scale. Drawn in MD (a viewBox stretched to the width) and placed by
+ * percentages, so resizing the window does not render it again.
+ */
+function Base({ app }: { app: App }) {
   const w = app.engine.activeWell;
   const td = w.tdMD;
-  const x = (md: number) => (md / td) * W;
+  const pct = (md: number) => `${((md / td) * 100).toFixed(3)}%`;
   const inc: string[] = [];
-  for (let px = 0; px <= W; px += 2) {
-    const t = w.trajectory.at(Math.min((px / W) * td, w.trajectory.mdEnd));
-    inc.push(`${px === 0 ? 'M' : 'L'}${px},${(S_BOT - 2 - (t.inc / 95) * (S_H - 5)).toFixed(1)}`);
+  for (let i = 0; i <= 800; i++) {
+    const md = (i / 800) * td;
+    const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
+    inc.push(`${i === 0 ? 'M' : 'L'}${md.toFixed(1)},${(S_BOT - 2 - (t.inc / 95) * (S_H - 5)).toFixed(1)}`);
   }
   const pay = w.logs && w.petro ? payIntervals(w.logs.depth, w.petro.pay, 0.5) : [];
   return (
     <g>
       <defs>
         <clipPath id="tl-strip">
-          <rect x={0} y={S_TOP} width={W} height={S_H} rx={3} />
+          <rect x={0} y={S_TOP} width="100%" height={S_H} rx={3} />
         </clipPath>
       </defs>
       <g clipPath="url(#tl-strip)">
-        <rect x={0} y={S_TOP} width={W} height={S_H} className="fill-muted" />
-        {w.zones.map((z) => (
-          <rect
-            key={`${z.formationId}:${z.topMD}`}
-            x={x(z.topMD)}
-            y={S_TOP}
-            width={Math.max(1, x(z.baseMD) - x(z.topMD))}
-            height={S_H}
-            fill={z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a2029' : (FORMATION_BY_ID.get(z.formationId)?.color ?? '#555')}
-          />
-        ))}
-        {pay.map((p) => (
-          <rect key={p.top} x={x(p.top)} y={S_BOT - 3} width={Math.max(1.5, x(p.base) - x(p.top))} height={3} className="fill-saffron-560" />
-        ))}
-        <path d={inc.join('')} fill="none" className="stroke-foreground/70" strokeWidth={1.25} strokeLinejoin="round" />
+        <rect x={0} y={S_TOP} width="100%" height={S_H} className="fill-muted" />
+        <svg width="100%" height={H} viewBox={`0 0 ${td} ${H}`} preserveAspectRatio="none" overflow="visible">
+          {w.zones.map((z) => (
+            <rect
+              key={`${z.formationId}:${z.topMD}`}
+              x={z.topMD}
+              y={S_TOP}
+              width={Math.max(td / 1500, z.baseMD - z.topMD)}
+              height={S_H}
+              fill={z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a2029' : (FORMATION_BY_ID.get(z.formationId)?.color ?? '#555')}
+            />
+          ))}
+          {pay.map((p) => (
+            <rect key={p.top} x={p.top} y={S_BOT - 3} width={Math.max(td / 1000, p.base - p.top)} height={3} className="fill-saffron-560" />
+          ))}
+          <path d={inc.join('')} fill="none" className="stroke-foreground/70" strokeWidth={1.25} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
       </g>
       {w.casing.map((c) => (
-        <g key={c.shoeMD} className="fill-foreground/80">
-          <rect x={x(c.shoeMD) - 0.5} y={S_TOP} width={1} height={S_H} className="fill-foreground/35" />
-          <path d={`M${x(c.shoeMD) - 3},${S_BOT} L${x(c.shoeMD) + 3},${S_BOT} L${x(c.shoeMD)},${S_BOT - 4} Z`} />
-        </g>
+        <svg key={c.shoeMD} x={pct(c.shoeMD)} overflow="visible" className="fill-foreground/80">
+          <rect x={-0.5} y={S_TOP} width={1} height={S_H} className="fill-foreground/35" />
+          <path d={`M-3,${S_BOT} L3,${S_BOT} L0,${S_BOT - 4} Z`} />
+        </svg>
       ))}
     </g>
   );
@@ -324,7 +367,9 @@ function Scale({ td, W, x, gap }: { td: number; W: number; x: (md: number) => nu
 }
 
 /** What is under the pointer: a chapter's title, or the depth and formation. */
-function HoverCard({ app, hover, W }: { app: App; hover: Hover; W: number }) {
+function HoverCard({ app, hover: store, W }: { app: App; hover: HoverStore; W: number }) {
+  const hover = useSyncExternalStore(store.subscribe, store.get);
+  if (!hover) return null;
   const w = app.engine.activeWell;
   let title: string;
   let sub: string;

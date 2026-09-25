@@ -90,6 +90,8 @@ export function applyPrefs(p: Prefs = prefs.value) {
   r.style.setProperty('--ui-accent', `var(--tecton-palette-${ACCENTS.find((a) => a.id === p.accent)?.step ?? 'orchid-460'})`);
   r.style.setProperty('--panel-alpha', String(p.panelOpacity));
   r.style.setProperty('--panel-blur', `${p.panelBlur}px`);
+  // a backdrop filter costs a render pass over the 3D view even at blur(0): only set one when there is a blur
+  r.toggleAttribute('data-panel-blur', p.panelBlur > 0);
   r.toggleAttribute('data-reduce-motion', p.reduceMotion);
   clearCssVarCache();
   if (theme !== lastTheme) {
