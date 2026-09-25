@@ -1,14 +1,12 @@
 import { Badge } from '@tecton/react/components/badge';
 import { Button } from '@tecton/react/components/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@tecton/react/components/input-group';
-import { Switch } from '@tecton/react/components/switch';
 import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
 import {
   BookmarkIcon,
   BoxesIcon,
   CameraIcon,
   ChartScatterIcon,
-  ChevronDownIcon,
   ColumnsIcon,
   CrosshairIcon,
   DropletsIcon,
@@ -27,13 +25,12 @@ import {
   XIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Key } from 'react-aria-components';
 import { FEATURES, type FeatureGroup, type FeatureId, type FeatureModule } from '../../features/registry';
 import type { App } from '../app';
-import { IconButton, Tip } from '../icon-button';
+import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
-import { PanelAccordion, PanelSection } from '../section';
 import { Rev, useRev, useSignal } from '../signal';
+import { SwitchGroup, SwitchRow } from '../switchGroup';
 import { toolWindows } from '../toolWindow';
 
 const GROUPS: FeatureGroup[] = [...new Set(FEATURES.map((f) => f.group))];
@@ -62,9 +59,10 @@ const ICONS: Record<FeatureId, ReactNode> = {
 };
 
 /**
- * Every optional feature: a search, a switch per group and per feature, and
- * while a feature is on, its settings (folded until asked for) and a button
- * that brings up its panel.
+ * Every optional feature: a search, then one `SwitchGroup` per group (how
+ * many are on, and an "All on / All off" action) with a row per feature. While a
+ * feature is on, its row offers its settings (folded until asked for) and a
+ * button that brings up its panel.
  */
 export function FeaturesPanel({ app }: { app: App }) {
   const [, setTick] = useState(0);
@@ -72,7 +70,7 @@ export function FeaturesPanel({ app }: { app: App }) {
   const flags = app.flags;
   const low = app.engine.quality === 'low';
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState<Set<Key>>(() => new Set(GROUPS));
+  const [closed, setClosed] = useState<Set<FeatureGroup>>(() => new Set());
   const q = query.trim().toLowerCase();
   const match = (id: FeatureId) => {
     if (!q) return true;
@@ -80,10 +78,15 @@ export function FeaturesPanel({ app }: { app: App }) {
     return `${f.name} ${f.desc} ${f.group}`.toLowerCase().includes(q);
   };
   const on = FEATURES.filter((f) => flags.on(f.id)).length;
-  const groups = GROUPS.map((g) => ({ g, list: FEATURES.filter((f) => f.group === g && match(f.id)) })).filter((x) => x.list.length);
+  const groups = GROUPS.map((g) => ({
+    g,
+    list: FEATURES.filter((f) => f.group === g && match(f.id)),
+  })).filter((x) => x.list.length);
+  const tools = useSignal(toolWindows);
+  const hasPanel = (id: FeatureId) => tools.some((t) => t.opts.id === id);
   return (
     <div className="flex flex-col">
-      <div className="flex flex-col gap-1.5 px-3 pt-2 pb-2">
+      <div className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
         <InputGroup className="h-7">
           <InputGroupAddon>
             <SearchIcon />
@@ -97,8 +100,9 @@ export function FeaturesPanel({ app }: { app: App }) {
             </InputGroupAddon>
           )}
         </InputGroup>
-        <div className="-mr-1 flex items-center gap-1">
-          <span className="type-caption flex-1">
+        {/* the reset button ends on the switch column */}
+        <div className="flex h-6 items-center gap-0.5">
+          <span className="type-caption flex-1 truncate">
             <span className="type-value text-fg-1!">{on}</span> of {FEATURES.length} on
           </span>
           <Button variant="ghost" size="xs" onPress={() => FEATURES.forEach((f) => flags.set(f.id, true))}>
@@ -113,95 +117,75 @@ export function FeaturesPanel({ app }: { app: App }) {
         </div>
       </div>
       {groups.length === 0 && <p className="type-caption px-3 pb-3">No feature matches “{query}”.</p>}
-      {/* while searching, every group with a match is open */}
-      <PanelAccordion expandedKeys={q ? new Set(groups.map((x) => x.g)) : open} onExpandedChange={(k) => !q && setOpen(k)}>
-        {groups.map(({ g, list }) => {
-          const n = list.filter((f) => flags.on(f.id)).length;
-          const all = n === list.length;
-          return (
-            <PanelSection
-              key={g}
-              id={g}
-              title={g}
-              aside={
-                <span className="type-unit ml-auto pr-12 normal-case tracking-normal">
-                  {n}/{list.length}
-                </span>
-              }
-              control={
-                <Switch
-                  aria-label={`${all ? 'Turn off' : 'Turn on'} every ${g} feature`}
-                  isSelected={all}
-                  onChange={() => list.forEach((f) => flags.set(f.id, !all))}
-                  className={n > 0 && !all ? 'opacity-70' : undefined}
-                />
-              }
-            >
-              {open.has(g) || q ? (
-                <div className="-mx-1 flex flex-col">
-                  {list.map((f) => (
-                    <FeatureRow key={f.id} app={app} id={f.id} />
-                  ))}
-                </div>
-              ) : null}
-            </PanelSection>
-          );
-        })}
-      </PanelAccordion>
+      {groups.map(({ g, list }) => {
+        // a slot for "show the panel" and one for the settings chevron, when any feature of the group has them
+        const panelSlot = list.some((f) => hasPanel(f.id));
+        const slots = +panelSlot + +list.some((f) => app.modules.get(f.id)?.settings);
+        return (
+          <SwitchGroup
+            key={g}
+            title={g}
+            noun="features"
+            on={list.filter((f) => flags.on(f.id)).length}
+            total={list.length}
+            onAll={(v) => list.forEach((f) => flags.set(f.id, v))}
+            // while searching, every group with a match is open
+            isExpanded={!!q || !closed.has(g)}
+            onExpandedChange={(v) => !q && setClosed((c) => (v ? new Set([...c].filter((x) => x !== g)) : new Set(c).add(g)))}
+            actionSlots={slots}
+            className="last:border-b"
+          >
+            {list.map((f) => (
+              <FeatureRow key={f.id} app={app} id={f.id} panelSlot={panelSlot} />
+            ))}
+          </SwitchGroup>
+        );
+      })}
     </div>
   );
 }
 
-function FeatureRow({ app, id }: { app: App; id: FeatureId }) {
+function FeatureRow({ app, id, panelSlot }: { app: App; id: FeatureId; panelSlot: boolean }) {
   const f = FEATURES.find((x) => x.id === id)!;
   const on = app.flags.on(id);
   const m = app.modules.get(id);
   const tools = useSignal(toolWindows);
   const tool = useMemo(() => tools.find((t) => t.opts.id === id), [tools, id]);
-  const [showSettings, setShowSettings] = useState(false);
-  const sid = `feature-${id}`;
   return (
-    <div className={`flex flex-col rounded-md px-1 py-1.5 ${on ? '' : 'opacity-80'}`}>
-      <div className="flex items-start gap-2">
-        <span aria-hidden className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-sm [&_svg]:size-3.5 ${on ? 'bg-ui-accent/15 text-ui-accent' : 'bg-muted text-fg-3'}`}>
-          {ICONS[id]}
-        </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <label htmlFor={sid} className="flex min-w-0 flex-wrap items-center gap-1.5 text-[0.857rem] leading-5 font-medium text-fg-1">
-            {f.name}
-            {f.prov && <ProvBadge prov={f.prov} />}
-            {f.gpu && (
-              <Badge variant="outline" title="Uses extra GPU time">
-                GPU
-              </Badge>
-            )}
-          </label>
-          <p className="type-caption line-clamp-2" title={f.desc}>
-            {f.desc}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          {on && tool && (
-            <IconButton label={`Show the ${tool.opts.title} panel`} size="icon-xs" onPress={() => tool.show()}>
-              <PanelTopOpenIcon />
-            </IconButton>
+    <SwitchRow
+      icon={ICONS[id]}
+      name={f.name}
+      description={f.desc}
+      badges={
+        <>
+          {f.prov && <ProvBadge prov={f.prov} short />}
+          {f.gpu && (
+            <Badge variant="outline" title="Uses extra GPU time" className="h-4! rounded-sm! px-1! text-[0.68rem]! leading-none font-semibold! tracking-wide">
+              GPU
+            </Badge>
           )}
-          {on && m?.settings && (
-            <Tip label={showSettings ? 'Hide settings' : 'Settings'}>
-              <Button variant="ghost" size="icon-xs" aria-label={`${f.name} settings`} aria-expanded={showSettings} onPress={() => setShowSettings((v) => !v)}>
-                <ChevronDownIcon className={`transition-transform ${showSettings ? 'rotate-180' : ''}`} />
-              </Button>
-            </Tip>
-          )}
-          <Switch id={sid} isSelected={on} onChange={(v) => app.flags.set(id, v)} className="ml-1" />
-        </div>
-      </div>
-      {on && m?.settings && showSettings && <Settings m={m} />}
-    </div>
+        </>
+      }
+      actions={
+        panelSlot
+          ? [
+              on && tool ? (
+                <IconButton key="panel" label={`Show the ${tool.opts.title} panel`} size="icon-xs" onPress={() => tool.show()}>
+                  <PanelTopOpenIcon />
+                </IconButton>
+              ) : null,
+            ]
+          : []
+      }
+      isSelected={on}
+      onChange={(v) => app.flags.set(id, v)}
+      settings={on && m?.settings ? () => <Settings m={m} /> : undefined}
+    />
   );
 }
 
+/** A feature's own settings; they re-render when the feature bumps its revision. */
 function Settings({ m }: { m: FeatureModule }) {
   useRev(m.rev ?? noRev);
-  return <div className="mt-2 ml-7 flex flex-col gap-1.5 border-l border-border-subtle pl-2.5">{m.settings!()}</div>;
+  return <>{m.settings!()}</>;
 }
