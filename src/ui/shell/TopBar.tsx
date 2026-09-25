@@ -13,18 +13,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@tecton/react/components/separator';
 import { Tabs } from '@tecton/react/components/tabs';
 import { Tab, TabStrip } from '../tabs';
-import { AppShellAction, AppShellActions, AppShellBrand, AppShellHeader, AppShellNav, useMinWidth } from '@tecton/react/tecton/app-shell';
-import { OverflowDivider, OverflowItem, OverflowLabel, Toolbar } from '@tecton/react/tecton/overflow';
+import { AppShellBrand, AppShellHeader, useMinWidth } from '@tecton/react/tecton/app-shell';
+import { Overflow, OverflowDivider, OverflowItem, OverflowLabel, OverflowSpacer } from '@tecton/react/tecton/overflow';
 import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
-import { ChartColumnIcon, CircleHelpIcon, FlaskConicalIcon, MaximizeIcon, PaletteIcon, PanelLeftIcon, RadioTowerIcon, SearchIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
+import {
+  AppWindowIcon,
+  ChartColumnIcon,
+  CircleHelpIcon,
+  CompassIcon,
+  FlaskConicalIcon,
+  LayoutDashboardIcon,
+  MaximizeIcon,
+  PaintBucketIcon,
+  PaletteIcon,
+  PanelLeftIcon,
+  RadioTowerIcon,
+  SearchIcon,
+  SlidersHorizontalIcon,
+  UploadIcon,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
 import type { PropertyMode } from '../../scene/wellbore';
 import type { App, ToolEntry } from '../app';
-import { IconButton } from '../icon-button';
+import { IconButton, Tip } from '../icon-button';
 import { Logo } from '../logo';
-import { WindowMenu, WorkspaceMenu } from '../workspace/menus';
+import { useWindowMenu, useWorkspaceMenu } from '../workspace/menus';
 import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
@@ -56,14 +71,16 @@ function Divider() {
 }
 
 /**
- * Brand, well selector, the navigation and colouring tabs, and a toolbar of
- * commands that folds into a More menu as the window narrows.
+ * Brand, well selector and one row holding everything else: navigation,
+ * colouring, commands, and the window and panel controls. As the window
+ * narrows, labels collapse to icons, then controls move into the More menu
+ * at the end, least used first, down to the well, search and More on a phone.
  */
 export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<string, PanelDef>; brand?: boolean }) {
   const ready = useSignal(app.ready);
   return (
-    <AppShellHeader className="gap-2">
-      <AppShellBrand>
+    <AppShellHeader className="gap-2 px-2 sm:px-3">
+      <AppShellBrand className="shrink-0">
         {/* mounts as the loader leaves, so the loader's logo flies here */}
         {brand ? (
           <span className="brand-logo flex">
@@ -72,7 +89,7 @@ export function TopBar({ app, panels, brand = true }: { app: App; panels: Map<st
         ) : (
           <span className="size-6" />
         )}
-        <span className="hidden sm:inline">BoreWalk</span>
+        <span className="hidden lg:inline">BoreWalk</span>
       </AppShellBrand>
       {ready && <Controls app={app} panels={panels} />}
     </AppShellHeader>
@@ -90,11 +107,15 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
   const help = useSignal(app.helpOpen);
   const personalise = useSignal(app.personaliseOpen);
   const roomy = useMinWidth(1360);
+  const windowMenu = useWindowMenu(app, panels);
+  const workspaceMenu = useWorkspaceMenu(app, panels);
   const e = app.engine;
   const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
   const tab = (t: 'interpretation' | 'features') => ws.isShown(t);
   const leftOpen = L.left.stacks.length > 0 && !L.left.collapsed;
+  const logsOpen = ws.isShown('logs');
   const fullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
+  const palette = isMac ? '⌘K' : 'Ctrl K';
   return (
     <>
       <Divider />
@@ -104,11 +125,13 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
         onSelectionChange={(k: Key | null) => {
           if (k !== null && k !== e.activeWell.id) app.selectWell(String(k));
         }}
-        className="w-40 shrink-0 md:w-48"
+        // shrinks before anything leaves the row, down to a readable name
+        className="w-48 min-w-28 shrink"
       >
-        <SelectTrigger size="sm">
+        <SelectTrigger size="sm" className="w-full min-w-0">
           <WellIcon />
-          <SelectValue />
+          {/* the name alone, so a long one ends in an ellipsis */}
+          <SelectValue className="min-w-0">{({ selectedText }) => <span className="truncate">{selectedText}</span>}</SelectValue>
         </SelectTrigger>
         <SelectContent className="w-max min-w-64">
           {app.selectableWells().map((w) => (
@@ -126,96 +149,138 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
         </SelectContent>
       </Select>
       <Divider />
-      <AppShellNav className="gap-2">
-        <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
-          <TabStrip aria-label="Navigation">
-            <Tab id="guided">Guided</Tab>
-            <Tab id="explore">Explore</Tab>
-          </TabStrip>
-        </Tabs>
-        <Divider />
-        {roomy ? (
-          <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
-            <TabStrip aria-label="Colour the wellbore by">
-              {props.map((p) => (
-                <Tab key={p.id} id={p.id}>
-                  <Dot color={p.dot} />
-                  {p.label}
+      <Overflow role="group" aria-label="View and commands" className="min-w-0 flex-1 flex-nowrap justify-end gap-1">
+        <OverflowItem
+          id="nav"
+          priority={9}
+          labelBehavior="keep"
+          tooltip={false}
+          overflow={<ChoiceMenu id="nav" label="Navigation" icon={<CompassIcon />} value={e.rig.mode} choices={NAV} onChange={(k) => app.setNav(k as NavMode)} />}
+        >
+          <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
+            <TabStrip aria-label="Navigation">
+              {NAV.map((n) => (
+                <Tab key={n.id} id={n.id}>
+                  {n.label}
                 </Tab>
               ))}
             </TabStrip>
           </Tabs>
-        ) : (
-          <Select aria-label="Colour the wellbore by" selectedKey={e.mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
-            <SelectTrigger size="sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="w-max min-w-(--trigger-width)">
-              {props.map((p) => (
-                <SelectItem key={p.id} id={p.id} textValue={p.label}>
-                  {/* the item's own row does not centre its children vertically */}
-                  <span className="flex items-center gap-2">
+        </OverflowItem>
+        <OverflowDivider />
+        <OverflowItem
+          id="colour"
+          priority={8}
+          labelBehavior="keep"
+          tooltip={false}
+          overflow={
+            <ChoiceMenu
+              id="colour"
+              label="Colour by"
+              icon={<PaintBucketIcon />}
+              value={e.mode}
+              choices={props.map((p) => ({ id: p.id, label: p.label, icon: <Dot color={p.dot} /> }))}
+              onChange={(k) => app.setProperty(k as PropertyMode)}
+            />
+          }
+        >
+          {roomy ? (
+            <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
+              <TabStrip aria-label="Colour the wellbore by">
+                {props.map((p) => (
+                  <Tab key={p.id} id={p.id}>
                     <Dot color={p.dot} />
                     {p.label}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        <Divider />
-        <Toolbar aria-label="Commands" className="min-w-0 flex-1 justify-end">
-          <OverflowItem id="interpretation" priority={6} label="Interpretation" icon={<FlaskConicalIcon />} onAction={() => app.showSidebar('interpretation', true)}>
-            <Button variant={tab('interpretation') ? 'secondary' : 'ghost'} size="sm">
-              <FlaskConicalIcon data-icon="inline-start" />
-              <OverflowLabel>Interpretation</OverflowLabel>
-            </Button>
-          </OverflowItem>
-          <OverflowItem id="features" priority={5} label="Features" icon={<SlidersHorizontalIcon />} onAction={() => app.showSidebar('features', true)}>
-            <Button variant={tab('features') ? 'secondary' : 'ghost'} size="sm">
-              <SlidersHorizontalIcon data-icon="inline-start" />
-              <OverflowLabel>Features</OverflowLabel>
-            </Button>
-          </OverflowItem>
-          <OverflowItem id="production" priority={4} label="Production" icon={<ChartColumnIcon />} onAction={() => app.productionOpen.set(true)}>
-            <Button variant="ghost" size="sm">
-              <ChartColumnIcon data-icon="inline-start" />
-              <OverflowLabel>Production</OverflowLabel>
-            </Button>
-          </OverflowItem>
-          <OverflowItem id="data" priority={4} label="Data" icon={<UploadIcon />} onAction={() => app.dataOpen.set(true)}>
-            <Button variant="ghost" size="sm">
-              <UploadIcon data-icon="inline-start" />
-              <OverflowLabel>Data</OverflowLabel>
-            </Button>
-          </OverflowItem>
-          <LiveItem app={app} />
-          {tools.length > 0 && <OverflowDivider />}
-          {tools.map((t) => (
-            <Tool key={t.id} t={t} />
-          ))}
-          <OverflowDivider />
-          <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
-          <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
-          <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
-          <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
-        </Toolbar>
-      </AppShellNav>
-      <Divider />
-      <AppShellActions className="ml-0 gap-0.5">
-        <Button variant="ghost" size="sm" aria-label="Command palette" onPress={() => app.paletteOpen.set(true)} className="gap-1.5 text-fg-2">
-          <SearchIcon data-icon="inline-start" />
-          <Kbd className="h-4 px-1 text-[0.68rem]">{isMac ? '⌘K' : 'Ctrl K'}</Kbd>
-        </Button>
-        <WindowMenu app={app} panels={panels} />
-        <WorkspaceMenu app={app} panels={panels} />
-        <AppShellAction label="Left column: fold to icons / expand" variant={leftOpen ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('left')}>
-          <PanelLeftIcon />
-        </AppShellAction>
-        <AppShellAction label="Well logs" variant={ws.isShown('logs') ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('right')}>
-          <LogCurveIcon />
-        </AppShellAction>
-      </AppShellActions>
+                  </Tab>
+                ))}
+              </TabStrip>
+            </Tabs>
+          ) : (
+            <Select aria-label="Colour the wellbore by" selectedKey={e.mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="w-max min-w-(--trigger-width)">
+                {props.map((p) => (
+                  <SelectItem key={p.id} id={p.id} textValue={p.label}>
+                    {/* the item's own row does not centre its children vertically */}
+                    <span className="flex items-center gap-2">
+                      <Dot color={p.dot} />
+                      {p.label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </OverflowItem>
+        <OverflowDivider />
+        <OverflowSpacer />
+        <OverflowItem id="interpretation" priority={6} label="Interpretation" icon={<FlaskConicalIcon />} onAction={() => app.showSidebar('interpretation', true)}>
+          <Button variant={tab('interpretation') ? 'secondary' : 'ghost'} size="sm">
+            <FlaskConicalIcon data-icon="inline-start" />
+            <OverflowLabel>Interpretation</OverflowLabel>
+          </Button>
+        </OverflowItem>
+        <OverflowItem id="features" priority={5} label="Features" icon={<SlidersHorizontalIcon />} onAction={() => app.showSidebar('features', true)}>
+          <Button variant={tab('features') ? 'secondary' : 'ghost'} size="sm">
+            <SlidersHorizontalIcon data-icon="inline-start" />
+            <OverflowLabel>Features</OverflowLabel>
+          </Button>
+        </OverflowItem>
+        <OverflowItem id="production" priority={4} label="Production" icon={<ChartColumnIcon />} onAction={() => app.productionOpen.set(true)}>
+          <Button variant="ghost" size="sm">
+            <ChartColumnIcon data-icon="inline-start" />
+            <OverflowLabel>Production</OverflowLabel>
+          </Button>
+        </OverflowItem>
+        <OverflowItem id="data" priority={4} label="Data" icon={<UploadIcon />} onAction={() => app.dataOpen.set(true)}>
+          <Button variant="ghost" size="sm">
+            <UploadIcon data-icon="inline-start" />
+            <OverflowLabel>Data</OverflowLabel>
+          </Button>
+        </OverflowItem>
+        <LiveItem app={app} />
+        {tools.length > 0 && <OverflowDivider />}
+        {tools.map((t) => (
+          <Tool key={t.id} t={t} />
+        ))}
+        <OverflowDivider />
+        <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
+        <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
+        <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
+        <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
+        <OverflowDivider />
+        <OverflowItem id="palette" priority={10} label="Command palette" icon={<SearchIcon />} shortcut={palette} onAction={() => app.paletteOpen.set(true)}>
+          <Button variant="ghost" size="sm" aria-label="Command palette" className="gap-1.5 text-fg-2">
+            <SearchIcon data-icon="inline-start" />
+            <OverflowLabel>
+              <Kbd className="h-4 px-1 text-[0.68rem]">{palette}</Kbd>
+            </OverflowLabel>
+          </Button>
+        </OverflowItem>
+        <MenuItem id="window" priority={5} label="Window" icon={<AppWindowIcon />} items={windowMenu} className="min-w-56" />
+        <MenuItem id="workspace" priority={5} label="Workspace" icon={<LayoutDashboardIcon />} items={workspaceMenu.items} className="min-w-60" />
+        <IconItem
+          id="left"
+          priority={7}
+          label="Left column: fold to icons / expand"
+          menuLabel={leftOpen ? 'Fold the left column' : 'Expand the left column'}
+          icon={<PanelLeftIcon />}
+          onAction={() => app.togglePanel('left')}
+          isActive={leftOpen}
+        />
+        <IconItem
+          id="logs"
+          priority={7}
+          label="Well logs"
+          menuLabel={logsOpen ? 'Hide well logs' : 'Show well logs'}
+          icon={<LogCurveIcon />}
+          onAction={() => app.togglePanel('right')}
+          isActive={logsOpen}
+        />
+      </Overflow>
+      {workspaceMenu.dialogs}
       <ProductionSheet app={app} isOpen={production} onOpenChange={(o) => app.productionOpen.set(o)} />
       <DataDialog app={app} isOpen={data} onOpenChange={(o) => app.dataOpen.set(o)} />
       <HelpDialog app={app} isOpen={help} onOpenChange={(o) => app.helpOpen.set(o)} />
@@ -226,11 +291,115 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
   );
 }
 
+const NAV: { id: NavMode; label: string }[] = [
+  { id: 'guided', label: 'Guided' },
+  { id: 'explore', label: 'Explore' },
+];
+
+/** The More-menu form of a set of tabs: a submenu with the current choice ticked. */
+function ChoiceMenu({
+  id,
+  label,
+  icon,
+  value,
+  choices,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  value: string;
+  choices: { id: string; label: string; icon?: ReactNode }[];
+  onChange: (id: string) => void;
+}) {
+  const current = choices.find((c) => c.id === value);
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger id={id} textValue={label}>
+        {icon}
+        {label}
+        {current && <span className="ml-auto pl-3 text-muted-foreground">{current.label}</span>}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuGroup
+          selectionMode="single"
+          selectedKeys={[value]}
+          onSelectionChange={(keys) => {
+            const k = keys === 'all' ? undefined : [...keys][0];
+            if (k !== undefined && String(k) !== value) onChange(String(k));
+          }}
+        >
+          {choices.map((c) => (
+            <DropdownMenuItem key={c.id} id={c.id} textValue={c.label}>
+              <span className="flex items-center gap-2">
+                {c.icon}
+                {c.label}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+/** A labelled menu button (Window, Workspace); in the More menu it becomes a submenu. */
+function MenuItem({ id, priority, label, icon, items, className }: { id: string; priority: number; label: string; icon: ReactNode; items: ReactNode; className?: string }) {
+  return (
+    <OverflowItem
+      id={id}
+      priority={priority}
+      label={label}
+      icon={icon}
+      // the item's own tooltip would wrap the menu trigger, which is not focusable; the button brings its own
+      tooltip={false}
+      overflow={
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger id={id} textValue={label}>
+            {icon}
+            {label}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className={className}>{items}</DropdownMenuSubContent>
+        </DropdownMenuSub>
+      }
+    >
+      <DropdownMenuTrigger>
+        <Tip label={label} placement="bottom">
+          <Button variant="ghost" size="sm" aria-label={label}>
+            {icon}
+            <OverflowLabel>{label}</OverflowLabel>
+          </Button>
+        </Tip>
+        <DropdownMenu placement="bottom end" className={`w-max ${className ?? ''}`}>
+          {items}
+        </DropdownMenu>
+      </DropdownMenuTrigger>
+    </OverflowItem>
+  );
+}
+
 /** An icon-only command; its label is the tooltip and the More-menu entry. */
-function IconItem({ id, priority, label, icon, onAction, isActive }: { id: string; priority: number; label: string; icon: ReactNode; onAction?: () => void; isActive?: boolean }) {
+function IconItem({
+  id,
+  priority,
+  label,
+  menuLabel = label,
+  icon,
+  onAction,
+  isActive,
+}: {
+  id: string;
+  priority: number;
+  label: string;
+  /** the More-menu entry, when it should say more than the tooltip (the state a toggle will change to) */
+  menuLabel?: string;
+  icon: ReactNode;
+  onAction?: () => void;
+  isActive?: boolean;
+}) {
   return (
     // the overflow item's own tooltip only shows for collapsed labels, so the button brings its own
-    <OverflowItem id={id} priority={priority} label={label} icon={icon} onAction={onAction} labelBehavior="keep">
+    <OverflowItem id={id} priority={priority} label={menuLabel} icon={icon} onAction={onAction} labelBehavior="keep">
       <IconButton label={label} variant={isActive ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={isActive}>
         {icon}
       </IconButton>
