@@ -177,7 +177,7 @@ Oil-bearing pore space is drawn as a volume around the borehole: a soft pore net
 
 ## Optional features (Features panel)
 
-Every feature below can be switched on or off in the **Features** tab of the sidebar (also opened from the top bar). The choice is remembered in your browser. `?features=all`, `?features=none` or a list such as `?features=geosteer,curtain` in the URL overrides it. Features marked *GPU* start off in the low-quality mode (`?q=low`).
+Every feature below can be switched on or off in the **Features** tab of the sidebar (also opened from the top bar). Features are listed in folding groups; each group's header says how many are on and has a quiet *All on* / *All off* action, and a feature's settings unfold under its row. The choice is remembered in your browser. `?features=all`, `?features=none` or a list such as `?features=geosteer,curtain` in the URL overrides it. Features marked *GPU* start off in the low-quality mode (`?q=low`).
 
 | Feature | What it does | Provenance | Default |
 | --- | --- | --- | --- |
