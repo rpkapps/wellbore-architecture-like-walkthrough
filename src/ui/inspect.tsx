@@ -64,10 +64,7 @@ class Inspect {
           `15/9-${String(d.name).replace('15/9-', '')}`,
           'Volve wellbore — context',
           '#8795a3',
-          [
-            d.status === 'definitive' ? ['Trajectory', 'definitive directional survey', 'measured'] : ['Trajectory', 'from pick coordinates', 'reconstructed'],
-            ['Logs', 'not in demo package', ''],
-          ],
+          [d.status === 'definitive' ? ['Trajectory', 'definitive directional survey', 'measured'] : ['Trajectory', 'from pick coordinates', 'reconstructed'], ['Logs', 'not in demo package', '']],
           d.status === 'definitive'
             ? 'Equinor definitive directional survey (positions from the survey UTM coordinates). Its formation picks also constrain the regional structural surfaces.'
             : 'Trajectory reconstructed through the official formation-pick coordinates (MD, TVD, easting, northing) of this wellbore. Its picks also constrain the regional structural surfaces.',
@@ -190,9 +187,7 @@ class Inspect {
         ['Shoe TVD', `${fmt.n(t.tvd, 1)} m`, 'reconstructed'],
         ['Shoe inclination', `${fmt.n(t.inc, 1)}°`, 'reconstructed'],
       ],
-      cement
-        ? 'Cement placement is schematic (full column for conductor & surface casing, ~500 m above the shoe otherwise). No cement-bond log is included in the public package.'
-        : c.note,
+      cement ? 'Cement placement is schematic (full column for conductor & surface casing, ~500 m above the shoe otherwise). No cement-bond log is included in the public package.' : c.note,
       [],
       { prov: cement ? 'schematic' : 'reconstructed' },
     );
@@ -204,7 +199,7 @@ class Inspect {
     const field = this.app.field;
     const hz = top ?? field.horizons.find((x) => x.id === id);
     const idx = field.horizons.findIndex((x) => x.id === id);
-    const bz = base === undefined ? field.horizons[idx + 1] ?? null : base;
+    const bz = base === undefined ? (field.horizons[idx + 1] ?? null) : base;
     const rows: Row[] = [
       ['Group', f.group, ''],
       ['Age', f.age, ''],
@@ -297,16 +292,17 @@ class Inspect {
       rows.push(['Avg Sw (pay)', fmt.pct(s.swAvg), 'calculated']);
       rows.push(['RT geo-mean', `${fmt.res(s.rtAvg)} Ω·m`, 'measured']);
     }
-    return view(f?.name ?? z.name, `${w.name} · formation top`, f?.color ?? '#888', rows, f?.description, [
-      { label: 'Travel to top', primary: true, onPress: () => this.app.travelTo(z.topMD + 1) },
-    ]);
+    return view(f?.name ?? z.name, `${w.name} · formation top`, f?.color ?? '#888', rows, f?.description, [{ label: 'Travel to top', primary: true, onPress: () => this.app.travelTo(z.topMD + 1) }]);
   }
 
   private pay(iv: { top: number; base: number }): InspectorView {
     const w = this.app.engine.activeWell;
     const p = w.petro!;
     const d = w.logs!.depth;
-    let phi = 0, sw = 0, n = 0, hc = 0;
+    let phi = 0,
+      sw = 0,
+      n = 0,
+      hc = 0;
     for (let i = 1; i < d.length; i++) {
       if (d[i] < iv.top || d[i] > iv.base) continue;
       const a = p.phie.values[i];

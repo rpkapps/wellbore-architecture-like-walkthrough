@@ -1,8 +1,7 @@
-import { Panel, PanelActions, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
 import { MinusIcon, PlusIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { App } from '../app';
-import { openWindows, ToolWindow } from '../toolWindow';
+import { openWindows, ToolWindow, toolWindows } from '../toolWindow';
 import { IconButton } from '../icon-button';
 import type { LogTracks } from '../logTracks';
 import { ProvBadge } from '../prov';
@@ -11,8 +10,8 @@ import { TrackEditor } from './TrackEditor';
 
 const editors = new WeakMap<App, ToolWindow>();
 
-/** The track editor opens as a tab in the dock under the 3D view, so the tracks redraw beside it as they change. */
-function trackEditor(app: App): ToolWindow {
+/** The track editor opens as a panel beside the logs, so the tracks redraw as they change. Created once, outside render. */
+export function trackEditor(app: App): ToolWindow {
   let p = editors.get(app);
   if (!p) {
     p = new ToolWindow({ id: 'log-tracks', title: 'Log tracks', body: () => <TrackEditor app={app} /> });
@@ -21,42 +20,47 @@ function trackEditor(app: App): ToolWindow {
   return p;
 }
 
-/** Conventional log display synchronised with the 3D cursor. */
-export function LogsPanel({ app }: { app: App }) {
+/** The log panel's header controls: provenance key, track editor and depth window. */
+export function LogsActions({ app }: { app: App }) {
   const logs = app.logs;
   const win = useSignal(logs.windowSize);
+  useSignal(toolWindows);
+  const editor = editors.get(app);
+  const editing = useSignal(openWindows).some((w) => w === editor);
+  return (
+    <>
+      <span className="mr-1 flex items-center gap-0.5">
+        <ProvBadge prov="measured" short />
+        <ProvBadge prov="calculated" short />
+        <ProvBadge prov="interpreted" short />
+      </span>
+      <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'} isDisabled={!editor} onPress={() => editor?.toggle()}>
+        <SlidersHorizontalIcon />
+      </IconButton>
+      <IconButton label="Zoom out" size="icon-xs" onPress={() => logs.zoom(1.6)}>
+        <MinusIcon />
+      </IconButton>
+      <span className="type-value w-11 text-center text-[0.75rem]!">{win} m</span>
+      <IconButton label="Zoom in" size="icon-xs" onPress={() => logs.zoom(1 / 1.6)}>
+        <PlusIcon />
+      </IconButton>
+    </>
+  );
+}
+
+/** Conventional log display synchronised with the 3D cursor. */
+export function LogsBody({ app }: { app: App }) {
+  const logs = app.logs;
   const canvas = useRef<HTMLCanvasElement>(null);
-  const editor = trackEditor(app);
-  const editing = useSignal(openWindows).includes(editor);
   useEffect(() => {
     logs.attach(canvas.current);
     return () => logs.attach(null);
   }, [logs]);
   return (
-    <Panel variant="flat" size="sm" aria-label="Well logs" className="h-full rounded-none">
-      <PanelHeader>
-        <PanelTitle className="flex-initial">Well logs</PanelTitle>
-        <ProvBadge prov="measured" short />
-        <ProvBadge prov="calculated" short />
-        <ProvBadge prov="interpreted" short />
-        <PanelActions>
-          <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'} onPress={() => editor.toggle()}>
-            <SlidersHorizontalIcon />
-          </IconButton>
-          <IconButton label="Zoom out" size="icon-xs" onPress={() => logs.zoom(1.6)}>
-            <MinusIcon />
-          </IconButton>
-          <span className="w-12 text-center font-mono text-xs text-muted-foreground tabular-nums">{win} m</span>
-          <IconButton label="Zoom in" size="icon-xs" onPress={() => logs.zoom(1 / 1.6)}>
-            <PlusIcon />
-          </IconButton>
-        </PanelActions>
-      </PanelHeader>
-      <div className="relative min-h-0 flex-1">
-        <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute inset-0 block size-full cursor-crosshair" />
-        <LogReadout logs={logs} />
-      </div>
-    </Panel>
+    <div className="relative min-h-0 flex-1">
+      <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute inset-0 block size-full cursor-crosshair" />
+      <LogReadout logs={logs} />
+    </div>
   );
 }
 

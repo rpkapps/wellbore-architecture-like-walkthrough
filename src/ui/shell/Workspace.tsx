@@ -1,145 +1,129 @@
-import { Sheet, SheetHeader, SheetTitle } from '@tecton/react/components/sheet';
-import { AppShell, AppShellAside, AppShellBody, AppShellMain, AppShellSidebar, AppShellSplit, AppShellSplitHandle, AppShellSplitPanel, useMinWidth } from '@tecton/react/tecton/app-shell';
-import { Canvas, CanvasOverlay, CanvasSurface } from '@tecton/react/tecton/canvas';
-import { useLayoutEffect, useRef } from 'react';
+import { Canvas, CanvasSurface } from '@tecton/react/tecton/canvas';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Engine } from '../../scene/engine';
 import type { App } from '../app';
 import { useSignal } from '../signal';
-import { openWindows } from '../toolWindow';
-import { Dock } from './Dock';
+import { activeWindow, openWindows, toolWindows } from '../toolWindow';
+import { WorkspaceFrame } from '../workspace/Frame';
+import { openPanels } from '../workspace/layout';
+import { usePanels } from '../workspace/panels';
 import { Hud } from './Hud';
 import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
-import { LogsPanel } from './LogsPanel';
+import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
-import { Sidebar } from './Sidebar';
 import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewControls } from './ViewControls';
 
-/** Below this width the sidebar and the logs open as sheets over the work area. */
-export const WIDE = 1024;
+const BUILTIN = new Set(['scene', 'interpretation', 'features', 'logs']);
+const TIMELINE_H = 64;
 
 /**
- * The application frame: top bar; the Scene / Interpretation / Features
- * sidebar, the 3D work area (with the tool-window dock and the timeline) and
- * the well logs, side by side with draggable dividers on a wide screen.
+ * The application: the top bar, then the workspace, where the 3D view fills
+ * the stage and the panels, the overlays and the timeline float over it.
  */
 export function Workspace({ app }: { app: App }) {
   const ready = useSignal(app.ready);
-  const leftOpen = useSignal(app.leftOpen);
-  const rightOpen = useSignal(app.rightOpen);
   const presenting = useSignal(app.presentation) !== null;
-  const wide = useMinWidth(WIDE);
-  const panels = ready && !presenting;
+  const panels = usePanels(app);
+  useToolSync(app);
+  const chrome = ready && !presenting;
   return (
-    <AppShell className={presenting ? 'grid-rows-[1fr]' : 'grid-rows-[auto_1fr_auto]'}>
-      {!presenting && <TopBar app={app} wide={wide} />}
-      <AppShellBody>
-        <AppShellSplit orientation="horizontal">
-          {panels && wide && leftOpen && (
-            <>
-              <AppShellSplitPanel id="sidebar" defaultSize="300px" minSize="240px" maxSize="40%">
-                <AppShellSidebar className="h-full w-full border-r-0">
-                  <Sidebar app={app} />
-                </AppShellSidebar>
-              </AppShellSplitPanel>
-              <AppShellSplitHandle aria-label="Resize the sidebar" />
-            </>
-          )}
-          <AppShellSplitPanel id="work" minSize="320px">
-            <AppShellMain className="flex h-full flex-col overflow-hidden">
-              <Work app={app} showDock={panels} />
-            </AppShellMain>
-          </AppShellSplitPanel>
-          {panels && wide && rightOpen && (
-            <>
-              <AppShellSplitHandle aria-label="Resize the well logs" />
-              <AppShellSplitPanel id="logs" defaultSize="400px" minSize="260px" maxSize="55%">
-                <AppShellAside className="h-full w-full border-l-0">
-                  <LogsPanel app={app} />
-                </AppShellAside>
-              </AppShellSplitPanel>
-            </>
-          )}
-        </AppShellSplit>
-      </AppShellBody>
-      {panels && <Timeline app={app} />}
-      {panels && !wide && (
-        <>
-          <Sheet side="left" isOpen={leftOpen} onOpenChange={(o) => app.leftOpen.set(o)} showCloseButton={false} className="gap-0 data-[side=left]:sm:max-w-sm">
-            <SheetHeader className="sr-only">
-              <SheetTitle>Scene, interpretation and features</SheetTitle>
-            </SheetHeader>
-            <Sidebar app={app} />
-          </Sheet>
-          <Sheet side="right" isOpen={rightOpen} onOpenChange={(o) => app.rightOpen.set(o)} showCloseButton={false} className="gap-0 data-[side=right]:sm:max-w-md">
-            <SheetHeader className="sr-only">
-              <SheetTitle>Well logs</SheetTitle>
-            </SheetHeader>
-            <LogsPanel app={app} />
-          </Sheet>
-        </>
-      )}
-    </AppShell>
+    <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
+      {!presenting && <TopBar app={app} panels={panels} />}
+      <WorkspaceFrame
+        ws={app.workspace}
+        panels={panels}
+        chromeless={!chrome}
+        viewport={<Viewport app={app} />}
+        overlay={ready && <Overlays app={app} />}
+        timeline={chrome && <Timeline app={app} />}
+        timelineHeight={chrome ? TIMELINE_H : 0}
+        onFree={(f) => app.engine?.setInsets(f.left, f.right, f.bottom)}
+      />
+    </div>
   );
 }
 
-/** The 3D view over the dock of tool windows, with a draggable divider between them. */
-function Work({ app, showDock }: { app: App; showDock: boolean }) {
-  const docked = useSignal(openWindows).length > 0 && showDock;
-  return (
-    <AppShellSplit orientation="vertical">
-      <AppShellSplitPanel id="viewport" minSize="35%">
-        <Viewport app={app} />
-      </AppShellSplitPanel>
-      {docked && (
-        <>
-          <AppShellSplitHandle aria-label="Resize the tool windows" />
-          <AppShellSplitPanel id="dock" defaultSize="32%" minSize="120px" maxSize="65%">
-            <Dock />
-          </AppShellSplitPanel>
-        </>
-      )}
-    </AppShellSplit>
-  );
+/**
+ * Feature tool windows open and close through their features; the workspace
+ * follows: a window that opens takes its last place (or the bottom column),
+ * one that closes leaves the layout, and one brought to the front is
+ * activated in its group.
+ */
+function useToolSync(app: App) {
+  useEffect(() => {
+    const ws = app.workspace;
+    trackEditor(app);
+    const sync = () => {
+      const visible = new Set(openWindows.value.map((w) => w.opts.id));
+      const known = new Set(toolWindows.value.map((w) => w.opts.id));
+      for (const id of known) {
+        if (visible.has(id) && !ws.isOpen(id)) ws.open(id);
+        if (!visible.has(id) && ws.isOpen(id)) ws.close(id);
+      }
+      // a saved layout can name windows of features that no longer exist
+      for (const id of openPanels(ws.value)) if (!BUILTIN.has(id) && !known.has(id)) ws.close(id);
+    };
+    const focus = () => {
+      const a = activeWindow.value;
+      if (a && ws.isOpen(a)) ws.activate(a);
+    };
+    const offs = [openWindows.subscribe(sync), toolWindows.subscribe(sync), activeWindow.subscribe(focus)];
+    // features create their windows as the first well loads
+    const offReady = app.ready.subscribe(sync);
+    if (app.ready.value) sync();
+    return () => {
+      offs.forEach((f) => f());
+      offReady();
+    };
+  }, [app]);
 }
 
-/** The 3D view with its overlays: position, colour key or inspector, and the tour narrative. */
+/** The 3D view: the engine draws into this surface, which always fills the stage. */
 function Viewport({ app }: { app: App }) {
-  const ready = useSignal(app.ready);
-  const presentation = useSignal(app.presentation);
-  const inspecting = useSignal(app.inspector) !== null;
   const surface = useRef<HTMLDivElement>(null);
-
   useLayoutEffect(() => {
     if (!app.engine && surface.current) app.mount(new Engine(surface.current, app.field));
   }, [app]);
-
   return (
-    <Canvas className="@container bg-background">
+    <Canvas className="h-full bg-background">
       <CanvasSurface ref={surface} />
-      {ready && presentation !== null && (
-        <CanvasOverlay position="bottom" className="bottom-8 w-full max-w-3xl px-4">
-          {presentation}
-        </CanvasOverlay>
-      )}
-      {ready && presentation === null && (
-        <>
-          <CanvasOverlay position="top-left" className="max-w-[calc(50%-1rem)]">
-            <Hud app={app} />
-          </CanvasOverlay>
-          <CanvasOverlay position="top-right" className={inspecting ? 'bottom-14 max-w-[calc(50%-1rem)]' : 'bottom-14 hidden max-w-[calc(50%-1rem)] @2xl:flex'}>
-            {inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}
-          </CanvasOverlay>
-          <CanvasOverlay position="bottom-left" className="max-w-[calc(100%-8rem)]">
-            <Narrative app={app} />
-          </CanvasOverlay>
-          <CanvasOverlay position="bottom-right">
-            <ViewControls app={app} />
-          </CanvasOverlay>
-        </>
-      )}
     </Canvas>
+  );
+}
+
+/** The widgets over the 3D view, inside the area the panels leave free. */
+function Overlays({ app }: { app: App }) {
+  const presentation = useSignal(app.presentation);
+  const inspecting = useSignal(app.inspector) !== null;
+  if (presentation !== null)
+    return (
+      <div className="absolute inset-x-0 bottom-8 flex justify-center px-4">
+        <div className="pointer-events-auto w-full max-w-3xl">{presentation}</div>
+      </div>
+    );
+  return (
+    <>
+      <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
+        <div className="pointer-events-auto">
+          <Hud app={app} />
+        </div>
+      </div>
+      <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
+        <div className="pointer-events-auto flex min-h-0 flex-col">{inspecting ? <InspectorCard app={app} /> : <Legend app={app} />}</div>
+      </div>
+      <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
+        <div className="pointer-events-auto">
+          <Narrative app={app} />
+        </div>
+      </div>
+      <div className="absolute right-2 bottom-2">
+        <div className="pointer-events-auto">
+          <ViewControls app={app} />
+        </div>
+      </div>
+    </>
   );
 }

@@ -1,14 +1,10 @@
 import { Alert, AlertDescription } from '@tecton/react/components/alert';
 import { Button } from '@tecton/react/components/button';
-import { Field, FieldLabel } from '@tecton/react/components/field';
-import { Input } from '@tecton/react/components/input';
 import { Popover, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@tecton/react/components/accordion';
-import { Slider } from '@tecton/react/components/slider';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@tecton/react/components/table';
 import { Stat, StatDelta, StatGroup, StatHelp, StatLabel, StatValue } from '@tecton/react/tecton/stat';
 import { DownloadIcon, InfoIcon, RotateCcwIcon } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Key } from 'react-aria-components';
 import { sampleCurve } from '../../data/las';
 import { DEFAULT_PARAMS, PARAM_NOTES, autoGrLimits, payIntervals, type PetroParams } from '../../data/petro';
@@ -20,7 +16,8 @@ import { ProvBadge } from '../prov';
 import { IconButton } from '../icon-button';
 import { useRev } from '../signal';
 import { FluidDonut } from '../viz/FluidDonut';
-import { HistogramSlider } from '../viz/HistogramSlider';
+import { ScrubField } from '../scrub';
+import { PanelAccordion, PanelSection } from '../section';
 
 interface ParamDef {
   key: keyof PetroParams;
@@ -161,72 +158,60 @@ export function InterpretationPanel({ app }: { app: App }) {
     <div className="flex flex-col">
       <div className="flex flex-col gap-2 p-3">
         <SummaryStats app={app} baseline={baseline} />
-        <div className="flex flex-wrap gap-1">
-          <Button variant="outline" size="xs" onPress={reset}>
+        <div className="-ml-2 flex flex-wrap gap-0.5">
+          <Button variant="ghost" size="xs" onPress={reset}>
             <RotateCcwIcon data-icon="inline-start" />
             Reset to calibrated
           </Button>
-          <Button variant="outline" size="xs" onPress={() => exportCsv(app)}>
+          <Button variant="ghost" size="xs" onPress={() => exportCsv(app)}>
             <DownloadIcon data-icon="inline-start" />
             Export curves
           </Button>
         </div>
       </div>
-      <Accordion allowsMultipleExpanded expandedKeys={open} onExpandedChange={setOpen} className="rounded-none border-t border-border-subtle">
-        <AccordionItem id="method">
-          <AccordionTrigger>How it works</AccordionTrigger>
-          <AccordionContent>
-            <div className="flex flex-col gap-2">
-              <Note>
-                The measured logs (gamma ray, density, deep resistivity) are converted into shale volume, porosity and water saturation. The results drive the Hydrocarbons 3D view, the Vsh · Porosity
-                and Saturation log tracks, the pay flags and the zone table; the measured Resistivity view never changes. Try Rw 0.025 → 0.08 (fresher brine) and watch pay shrink.
-              </Note>
-              <div className="flex flex-col gap-1 font-mono text-xs text-foreground">
-                <span>Vsh = (GR − GRclean)/(GRshale − GRclean)</span>
-                <span>φ = (ρma − ρb)/(ρma − ρfl)</span>
-                <span>Sw = (a·Rw / (φᵐ·Rt))^(1/n), So = 1 − Sw</span>
-              </div>
-              <Note>
-                <ProvBadge prov="calculated" /> Inputs from {w.name}: {[inputs?.gr, inputs?.rt, inputs?.rhob, inputs?.nphi].filter(Boolean).join(', ') || '—'} (measured).
-              </Note>
-              {!w.petro?.available && (
-                <Alert variant="destructive">
-                  <AlertDescription>Density or resistivity missing — saturation cannot be computed for this well.</AlertDescription>
-                </Alert>
-              )}
+      <PanelAccordion expandedKeys={open} onExpandedChange={setOpen}>
+        <PanelSection id="method" title="How it works">
+          <div className="flex flex-col gap-2">
+            <Note>
+              The measured logs (gamma ray, density, deep resistivity) are converted into shale volume, porosity and water saturation. The results drive the Hydrocarbons 3D view, the Vsh · Porosity
+              and Saturation log tracks, the pay flags and the zone table; the measured Resistivity view never changes. Try Rw 0.025 → 0.08 (fresher brine) and watch pay shrink.
+            </Note>
+            <div className="flex flex-col gap-1 font-mono text-xs text-foreground">
+              <span>Vsh = (GR − GRclean)/(GRshale − GRclean)</span>
+              <span>φ = (ρma − ρb)/(ρma − ρfl)</span>
+              <span>Sw = (a·Rw / (φᵐ·Rt))^(1/n), So = 1 − Sw</span>
             </div>
-          </AccordionContent>
-        </AccordionItem>
+            <Note>
+              <ProvBadge prov="calculated" /> Inputs from {w.name}: {[inputs?.gr, inputs?.rt, inputs?.rhob, inputs?.nphi].filter(Boolean).join(', ') || '—'} (measured).
+            </Note>
+            {!w.petro?.available && (
+              <Alert variant="destructive">
+                <AlertDescription>Density or resistivity missing — saturation cannot be computed for this well.</AlertDescription>
+              </Alert>
+            )}
+          </div>
+        </PanelSection>
         {GROUPS.map((g) => (
-          <AccordionItem key={g.title} id={g.title}>
-            <AccordionTrigger>{g.title}</AccordionTrigger>
-            <AccordionContent>
-              {/* built only while open: hidden controls would mount unfocusable */}
-              {open.has(g.title) && (
-                <div className="flex flex-col gap-2.5">
-                  {g.params.map((d) => (
-                    <Param key={`${w.id}:${d.key}:${resets}`} def={d} value={w.params[d.key] as number | string} onChange={(v) => set(d.key, v)} data={d.hist ? histData(app, d.hist.curve) : null} />
-                  ))}
-                </div>
-              )}
-            </AccordionContent>
-          </AccordionItem>
+          <PanelSection key={g.title} id={g.title} title={g.title}>
+            {/* built only while open: hidden controls would mount unfocusable */}
+            {open.has(g.title) && (
+              <div className="flex flex-col gap-1">
+                {g.params.map((d) => (
+                  <Param key={`${w.id}:${d.key}:${resets}`} def={d} value={w.params[d.key] as number | string} onChange={(v) => set(d.key, v)} data={d.hist ? histData(app, d.hist.curve) : null} />
+                ))}
+              </div>
+            )}
+          </PanelSection>
         ))}
-        <AccordionItem id="zones">
-          <AccordionTrigger>Zone summary (along hole)</AccordionTrigger>
-          <AccordionContent>
-            <ZoneTable app={app} />
-          </AccordionContent>
-        </AccordionItem>
+        <PanelSection id="zones" title="Zone summary (along hole)">
+          <ZoneTable app={app} />
+        </PanelSection>
         {w.cpi && w.logs && w.petro && (
-          <AccordionItem id="cpi">
-            <AccordionTrigger>Validation vs. Equinor CPI</AccordionTrigger>
-            <AccordionContent>
-              <CpiValidation app={app} />
-            </AccordionContent>
-          </AccordionItem>
+          <PanelSection id="cpi" title="Validation vs. Equinor CPI">
+            <CpiValidation app={app} />
+          </PanelSection>
         )}
-      </Accordion>
+      </PanelAccordion>
     </div>
   );
 }
@@ -287,11 +272,11 @@ function histData(app: App, curve: 'gr' | 'vsh' | 'phie' | 'sw'): ArrayLike<numb
   return w.petro?.[curve].values ?? null;
 }
 
-/** What a parameter means and where its default comes from, opened from the (i) next to it. */
+/** What a parameter means and where its default comes from, opened from the (i) at the end of its row. */
 function NoteButton({ title, note }: { title: string; note: string }) {
   return (
     <PopoverTrigger>
-      <IconButton label={`About ${title}`} size="icon-xs">
+      <IconButton label={`About ${title}`} size="icon-xs" className="text-fg-3 opacity-0 group-hover/param:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100">
         <InfoIcon />
       </IconButton>
       <Popover placement="left top" className="w-64">
@@ -304,82 +289,40 @@ function NoteButton({ title, note }: { title: string; note: string }) {
   );
 }
 
-/** One parameter on a single row (a select, or a number box), with its slider under it. */
+/** One parameter on one 24 px row: a scrub bar for numbers (over the data it cuts, for cut-offs), or a label and a select. */
 function Param({ def: d, value, onChange, data }: { def: ParamDef; value: number | string; onChange: (v: number | string) => void; data: ArrayLike<number> | null }) {
-  const id = useId();
   const note = PARAM_NOTES[d.key];
-  const [text, setText] = useState(String(value));
-  const label = (
-    <FieldLabel htmlFor={id} className="min-w-0 flex-1 gap-1 truncate">
-      {d.label}
-      {d.unit && <span className="font-normal text-muted-foreground">{d.unit}</span>}
-    </FieldLabel>
-  );
-  const info = note && <NoteButton title={d.label} note={note} />;
+  const [num, setNum] = useState(() => (typeof value === 'number' ? value : parseFloat(value)));
+  const info = note ? <NoteButton title={d.label} note={note} /> : <span className="w-6 shrink-0" />;
   if (d.options)
     return (
-      <Field orientation="horizontal" className="items-center gap-1">
-        {label}
+      <div className="group/param flex h-7 min-w-0 items-center gap-1">
+        <div className="flex h-7 min-w-0 flex-1 items-center rounded-md bg-muted/70 pl-2">
+          <span className="type-label min-w-0 flex-1 truncate">{d.label}</span>
+          <CompactSelect label={d.label} value={String(value)} onChange={onChange} options={d.options.map(([v, l]) => ({ id: v, label: l }))} className="max-w-[62%] min-w-0 shrink" />
+        </div>
         {info}
-        <CompactSelect id={id} label={d.label} value={String(value)} onChange={onChange} options={d.options.map(([v, l]) => ({ id: v, label: l }))} className="w-40 shrink-0" />
-      </Field>
+      </div>
     );
   const [lo, hi] = d.range ?? [0, 1];
-  const toR = (v: number) => (d.log ? (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) : (v - lo) / (hi - lo)) * 1000;
-  const fromR = (r: number) => (d.log ? Math.pow(10, Math.log10(lo) + (r / 1000) * (Math.log10(hi) - Math.log10(lo))) : lo + (r / 1000) * (hi - lo));
-  const num = typeof value === 'number' ? value : parseFloat(value);
-  const dec = Math.max(0, -Math.floor(Math.log10(d.step)));
-  const commit = (v: number) => {
-    setText(String(v));
-    onChange(v);
-  };
   return (
-    <Field className="gap-1">
-      <div className="flex items-center gap-1">
-        {label}
-        {info}
-        <Input
-          id={id}
-          type="number"
-          step={d.step}
-          value={text}
-          variant="filled"
-          className="h-7 w-20 shrink-0"
-          onChange={(e) => {
-            setText(e.target.value);
-            const v = parseFloat(e.target.value);
-            if (Number.isFinite(v)) onChange(v);
-          }}
-        />
-      </div>
-      {d.hist && d.range ? (
-        <HistogramSlider
-          label={d.label}
-          values={data}
-          min={lo}
-          max={hi}
-          value={num}
-          step={d.step}
-          keep={d.hist.keep}
-          tone={d.hist.tone}
-          onChange={commit}
-          format={(v) => `${v}${d.unit ? ` ${d.unit}` : ''}`}
-        />
-      ) : (
-        d.range && (
-          <div className="px-2.5">
-            <Slider
-              aria-label={d.label}
-              value={Math.max(0, Math.min(1000, toR(num)))}
-              minValue={0}
-              maxValue={1000}
-              step={1}
-              onChange={(r) => commit(Number(fromR(Array.isArray(r) ? r[0] : r).toFixed(d.log ? 4 : dec)))}
-            />
-          </div>
-        )
-      )}
-    </Field>
+    <div className="group/param">
+      <ScrubField
+        label={d.label}
+        unit={d.unit}
+        value={num}
+        min={lo}
+        max={hi}
+        step={d.step}
+        log={d.log}
+        histogram={d.hist ? { values: data, keep: d.hist.keep, tone: d.hist.tone } : undefined}
+        onChange={(v) => {
+          setNum(v);
+          onChange(v);
+        }}
+        end={info}
+      />
+    </div>
   );
 }
 

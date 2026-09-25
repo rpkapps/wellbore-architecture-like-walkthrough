@@ -7,7 +7,7 @@ import type { App } from '../app';
 import { Note } from '../controls';
 import { ProvBadge, type Provenance } from '../prov';
 import { useRev } from '../signal';
-import { CollapseButton, OverlayChip, useCollapsed } from './overlay';
+import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
@@ -52,13 +52,13 @@ export function Legend({ app }: { app: App }) {
         <Ramp stops={stops} ticks={[1, 3, 10, 30, 100].map((v) => [v, Math.log10(v) / Math.log10(ROP_RANGE.max)])} />
         {zones.length ? (
           <>
-            <ul className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-2 gap-y-1 text-xs">
+            <ul className="type-label grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-2 gap-y-1">
               {[...byF].map(([id, a]) => (
                 <li key={id} className="contents">
                   <Swatch color={FORMATION_BY_ID.get(id)?.color ?? '#666'} />
                   <span className="truncate">{a.name.replace(/ \(.*\)| –.*/, '')}</span>
-                  <span className="text-right font-mono">{(a.f / a.h).toFixed(0)} m/h</span>
-                  <span className="text-right font-mono text-muted-foreground">{a.h.toFixed(0)} h</span>
+                  <span className="type-value text-right">{(a.f / a.h).toFixed(0)} m/h</span>
+                  <span className="type-unit text-right">{a.h.toFixed(0)} h</span>
                 </li>
               ))}
             </ul>
@@ -108,14 +108,14 @@ function Frame({ title, prov, compact, children }: { title: string; prov: Proven
   if (collapsed)
     return (
       <OverlayChip name="colour key" onExpand={() => setCollapsed(false)}>
-        <span className="text-xs font-medium whitespace-nowrap">{title}</span>
+        <span className="type-title whitespace-nowrap">{title}</span>
         {compact}
       </OverlayChip>
     );
   return (
-    <Panel variant="elevated" size="sm" className="w-64 max-w-full shrink-0">
+    <Panel variant="elevated" size="sm" className={`w-60 max-w-full shrink-0 ${SURFACE}`}>
       <PanelHeader>
-        <PanelTitle>{title}</PanelTitle>
+        <PanelTitle className="type-title">{title}</PanelTitle>
         <PanelActions className="mr-0 gap-1">
           <ProvBadge prov={prov} />
           <CollapseButton collapsed={false} name="colour key" onChange={setCollapsed} />
@@ -130,7 +130,7 @@ function Ramp({ stops, ticks }: { stops: string; ticks: [number, number][] }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="h-2.5 rounded-sm" style={{ background: `linear-gradient(90deg,${stops})` }} />
-      <div className="relative h-3 font-mono text-[10px] text-muted-foreground">
+      <div className="type-unit relative h-3">
         {ticks.map(([v, f]) => (
           <span key={v} className="absolute -translate-x-1/2 first:translate-x-0 last:-translate-x-full" style={{ left: `${f * 100}%` }}>
             {v}
@@ -143,7 +143,7 @@ function Ramp({ stops, ticks }: { stops: string; ticks: [number, number][] }) {
 
 function MiniRamp({ stops, lo, hi }: { stops: string; lo: string; hi: string }) {
   return (
-    <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
+    <span className="type-unit flex items-center gap-1">
       {lo}
       <span aria-hidden className="h-1.5 w-20 rounded-full" style={{ background: `linear-gradient(90deg,${stops})` }} />
       {hi}
@@ -168,7 +168,7 @@ function Swatch({ color }: { color: string }) {
 
 function Swatches({ items }: { items: [string, string][] }) {
   return (
-    <ul className="grid grid-cols-1 gap-1 text-xs">
+    <ul className="type-label grid grid-cols-1 gap-1">
       {items.map(([c, l]) => (
         <li key={l} className="flex items-center gap-2">
           <Swatch color={c} />

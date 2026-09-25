@@ -51,8 +51,7 @@ function supplementLogs(base: LogSet, add: LogSet): LogSet {
 
 /**
  * Reads uploaded LAS / CSV / XLSX / simulation files into the active well (or
- * a new one). Files dropped anywhere on the page open the Data manager and
- * come here.
+ * a new one), from the Data manager's file picker and drop zone.
  */
 export class DataImporter {
   readonly target = new Signal<Target>('supplement');
@@ -62,16 +61,11 @@ export class DataImporter {
   private seq = 0;
 
   constructor(private app: App) {
-    window.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      if (this.app.ready.value) this.app.dataOpen.set(true);
-    });
-    window.addEventListener('drop', (e) => {
-      // the Data manager's drop zone handles its own drops
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      if (this.app.ready.value && e.dataTransfer?.files?.length) void this.handleFiles([...e.dataTransfer.files]);
-    });
+    // a file dropped outside the drop zone must not make the browser open it;
+    // other drags (reordering lists) are left alone
+    const isFile = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    window.addEventListener('dragover', (e) => isFile(e) && e.preventDefault());
+    window.addEventListener('drop', (e) => isFile(e) && e.preventDefault());
   }
 
   private get depthScale(): number | undefined {

@@ -35,7 +35,10 @@ export function Root() {
           const o = e.overviewPose();
           e.rig.setMode('explore');
           e.rig.setExploreView('orbit');
-          e.camera.position.copy(o.pos).multiplyScalar(1.8).setY(o.pos.y + 3500);
+          e.camera.position
+            .copy(o.pos)
+            .multiplyScalar(1.8)
+            .setY(o.pos.y + 3500);
           e.camera.lookAt(o.target);
           e.rig.orbit.target.copy(o.target);
           e.start();
@@ -89,7 +92,8 @@ function Loader({ progress, failed, leaving }: { progress: { msg: string; f: num
           </Progress>
         )}
         <p className="text-xs text-muted-foreground">
-          Data: Equinor ASA and the Volve licence partners (ExxonMobil E&amp;P Norway, Bayerngas Norge), released under the Equinor Open Data Licence. Values shown are as published; calculated and reconstructed quantities are labelled throughout.
+          Data: Equinor ASA and the Volve licence partners (ExxonMobil E&amp;P Norway, Bayerngas Norge), released under the Equinor Open Data Licence. Values shown are as published; calculated and
+          reconstructed quantities are labelled throughout.
         </p>
       </div>
     </div>

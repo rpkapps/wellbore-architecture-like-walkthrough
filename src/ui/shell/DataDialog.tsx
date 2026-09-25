@@ -29,7 +29,17 @@ function rich(s: string): ReactNode {
   let m: RegExpExecArray | null;
   while ((m = re.exec(s))) {
     out.push(s.slice(last, m.index));
-    out.push(m[1] === 'code' ? <code key={m.index} className="rounded-sm bg-muted px-1 font-mono text-xs text-foreground">{m[2]}</code> : <b key={m.index} className="font-medium text-foreground">{m[2]}</b>);
+    out.push(
+      m[1] === 'code' ? (
+        <code key={m.index} className="rounded-sm bg-muted px-1 font-mono text-xs text-foreground">
+          {m[2]}
+        </code>
+      ) : (
+        <b key={m.index} className="font-medium text-foreground">
+          {m[2]}
+        </b>
+      ),
+    );
     last = m.index + m[0].length;
   }
   out.push(s.slice(last));
@@ -67,7 +77,11 @@ function ActiveDataset({ app }: { app: App }) {
   const w = app.engine.activeWell;
   const f = app.field;
   const rows: [string, string, Provenance][] = [];
-  rows.push([w.logs?.source ?? '—', w.logs ? `${w.logs.curves.size} curves · ${w.logs.depth[0].toFixed(1)}–${w.logs.depth[w.logs.depth.length - 1].toFixed(1)} m MD` : 'no logs', provOf(w.logs?.provenance, 'measured')]);
+  rows.push([
+    w.logs?.source ?? '—',
+    w.logs ? `${w.logs.curves.size} curves · ${w.logs.depth[0].toFixed(1)}–${w.logs.depth[w.logs.depth.length - 1].toFixed(1)} m MD` : 'no logs',
+    provOf(w.logs?.provenance, 'measured'),
+  ]);
   if (w.cpi) rows.push([w.cpi.source, `${w.cpi.curves.size} curves (SW, PHIF, VSH, KLOGH…)`, 'interpreted']);
   rows.push([w.trajectory.source, w.trajectory.note, w.trajectory.status === 'reconstructed' ? 'reconstructed' : w.trajectory.status === 'user' ? 'user' : 'measured']);
   rows.push([
@@ -167,7 +181,9 @@ function Upload({ app }: { app: App }) {
               <UploadIcon />
             </EmptyMedia>
             <EmptyTitle>Drop LAS / CSV / XLSX files here</EmptyTitle>
-            <EmptyDescription>Several files at once is fine — the type of each is detected automatically. See “What you can import” below for the columns each file needs and where to get real data.</EmptyDescription>
+            <EmptyDescription>
+              Several files at once is fine — the type of each is detected automatically. See “What you can import” below for the columns each file needs and where to get real data.
+            </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <FileTrigger allowsMultiple acceptedFileTypes={ACCEPT} onSelect={(l) => l && take([...l])}>
@@ -180,7 +196,13 @@ function Upload({ app }: { app: App }) {
         <ul role="log" aria-label="Import messages" className="flex max-h-40 flex-col gap-1 overflow-y-auto text-xs">
           {log.map((m) => (
             <li key={m.id} className="flex items-start gap-2">
-              {m.kind === 'ok' ? <CircleCheckIcon className="mt-px size-3.5 shrink-0 text-success" /> : m.kind === 'err' ? <CircleXIcon className="mt-px size-3.5 shrink-0 text-destructive" /> : <InfoIcon className="mt-px size-3.5 shrink-0 text-muted-foreground" />}
+              {m.kind === 'ok' ? (
+                <CircleCheckIcon className="mt-px size-3.5 shrink-0 text-success" />
+              ) : m.kind === 'err' ? (
+                <CircleXIcon className="mt-px size-3.5 shrink-0 text-destructive" />
+              ) : (
+                <InfoIcon className="mt-px size-3.5 shrink-0 text-muted-foreground" />
+              )}
               <span className={m.kind === 'err' ? 'text-destructive' : undefined}>{m.text.replace(/^[✓✕•]\s*/, '')}</span>
             </li>
           ))}
@@ -242,7 +264,10 @@ function ImportGuide() {
           </AccordionItem>
         ))}
       </Accordion>
-      <Note>On GitHub pages, use “Download raw file” to save the actual file. Recommended combination to try: 15-9-19_SR_COMP.las + 15_9_19_SR_TOPS_NPD.csv with target “Create new well”; or Volve production data.xlsx while 15/9-F-12 is active.</Note>
+      <Note>
+        On GitHub pages, use “Download raw file” to save the actual file. Recommended combination to try: 15-9-19_SR_COMP.las + 15_9_19_SR_TOPS_NPD.csv with target “Create new well”; or Volve
+        production data.xlsx while 15/9-F-12 is active.
+      </Note>
     </Section>
   );
 }

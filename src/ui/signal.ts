@@ -2,6 +2,9 @@ import { createElement, Fragment, useSyncExternalStore, type ReactNode } from 'r
 
 type Listener = () => void;
 
+/** Called after any signal changes (the 3D view uses it to redraw on demand). */
+export const onAnyChange: { hook: (() => void) | null } = { hook: null };
+
 /**
  * A value the imperative side (controller, engine, feature modules) owns and
  * the React chrome renders. `set` notifies only when the value changes, so a
@@ -20,6 +23,7 @@ export class Signal<T> {
     if (Object.is(v, this.v)) return;
     this.v = v;
     for (const l of [...this.listeners]) l();
+    onAnyChange.hook?.();
   }
 
   update(fn: (v: T) => T) {

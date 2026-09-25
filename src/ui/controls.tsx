@@ -1,20 +1,21 @@
-import { Field, FieldLabel, FieldLegend, FieldSet, FieldTitle } from '@tecton/react/components/field';
+import { FieldLegend, FieldSet } from '@tecton/react/components/field';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@tecton/react/components/select';
-import { Slider } from '@tecton/react/components/slider';
 import { Switch } from '@tecton/react/components/switch';
 import { useId, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
+import { ScrubField } from './scrub';
 
 /**
- * Form rows shared by the side panels and the feature settings: Tecton
- * controls with their labels, sized for dense tool panels.
+ * Form rows shared by the panels and the feature settings. Every row is one
+ * 24 px line: a scrub bar for numbers, a label with a ghost select, a label
+ * with a switch.
  */
 
 /** A titled group of controls in a tool panel. `aside` sits at the end of the title row. */
 export function Section({ title, aside, children }: { title: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
-    <FieldSet className="min-w-0 gap-3">
-      <FieldLegend variant="label" className="mb-0 flex w-full items-center justify-between gap-2">
+    <FieldSet className="min-w-0 gap-1.5">
+      <FieldLegend className="type-section mb-0! flex w-full items-center justify-between gap-2">
         <span>{title}</span>
         {aside}
       </FieldLegend>
@@ -23,6 +24,7 @@ export function Section({ title, aside, children }: { title: ReactNode; aside?: 
   );
 }
 
+/** A number in a range, as a scrub bar (drag, click to type, arrow keys). */
 export function SliderField({
   label,
   value,
@@ -42,30 +44,19 @@ export function SliderField({
   format?: (v: number) => string;
   isDisabled?: boolean;
 }) {
-  return (
-    <Field className="gap-1" data-disabled={isDisabled || undefined}>
-      <div className="flex items-baseline justify-between gap-2">
-        <FieldTitle>{label}</FieldTitle>
-        <span className="font-mono text-xs text-muted-foreground tabular-nums">{format(value)}</span>
-      </div>
-      {/* the thumb overhangs the track ends by half its width */}
-      <div className="px-2.5">
-        <Slider aria-label={label} value={value} minValue={minValue} maxValue={maxValue} step={step} isDisabled={isDisabled} onChange={(v) => onChange(Array.isArray(v) ? v[0] : v)} />
-      </div>
-    </Field>
-  );
+  return <ScrubField label={label} value={value} onChange={onChange} min={minValue} max={maxValue} step={step} format={format} isDisabled={isDisabled} />;
 }
 
 export function SwitchField({ label, isSelected, onChange, aside, isDisabled }: { label: ReactNode; isSelected: boolean; onChange: (on: boolean) => void; aside?: ReactNode; isDisabled?: boolean }) {
   const id = useId();
   return (
-    <Field orientation="horizontal" className="gap-2" data-disabled={isDisabled || undefined}>
-      <FieldLabel htmlFor={id}>
+    <div className="flex h-7 min-w-0 items-center gap-2" data-disabled={isDisabled || undefined}>
+      <label htmlFor={id} className="type-label flex min-w-0 flex-1 items-center gap-1.5 truncate data-disabled:opacity-50">
         {label}
         {aside}
-      </FieldLabel>
+      </label>
       <Switch id={id} size="sm" isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} />
-    </Field>
+    </div>
   );
 }
 
@@ -80,15 +71,13 @@ export interface OptionGroup {
   options: Option[];
 }
 
-/** A labelled select. `options` may be grouped; `placeholder` allows no selection. */
+/** A labelled select on one row: the label, then the value as a ghost select. */
 export function SelectField({
   label,
   value,
   onChange,
   options,
   placeholder,
-  orientation = 'horizontal',
-  hideLabel,
 }: {
   label: string;
   value: string | null;
@@ -100,14 +89,17 @@ export function SelectField({
 }) {
   const id = useId();
   return (
-    <Field orientation={orientation} className="gap-2">
-      <FieldLabel htmlFor={id} className={hideLabel ? 'sr-only' : undefined}>
+    <div className="flex h-7 min-w-0 items-center gap-2">
+      <label htmlFor={id} className="type-label min-w-0 flex-1 truncate">
         {label}
-      </FieldLabel>
-      <CompactSelect id={id} label={label} value={value} onChange={onChange} options={options} placeholder={placeholder} />
-    </Field>
+      </label>
+      <CompactSelect id={id} label={label} value={value} onChange={onChange} options={options} placeholder={placeholder} className="max-w-[60%] min-w-0 shrink" />
+    </div>
   );
 }
+
+/** Ghost select trigger: text and a chevron that only takes a surface on hover. */
+const GHOST = 'border-transparent! bg-transparent! shadow-none! hover:bg-ghost-hover! data-pressed:bg-ghost-active! aria-expanded:bg-ghost-active! pl-2! pr-1! gap-1! text-fg-1 [&_svg]:text-fg-3';
 
 /** Select without a visible label, for panel headers and toolbars; named by `label`. */
 export function CompactSelect({
@@ -118,6 +110,7 @@ export function CompactSelect({
   options,
   placeholder,
   size = 'sm',
+  appearance = 'ghost',
   className,
 }: {
   id?: string;
@@ -127,6 +120,7 @@ export function CompactSelect({
   options: (Option | OptionGroup)[];
   placeholder?: string;
   size?: 'sm' | 'default';
+  appearance?: 'ghost' | 'field';
   className?: string;
 }) {
   return (
@@ -139,7 +133,7 @@ export function CompactSelect({
       }}
       className={className ?? 'min-w-0 shrink'}
     >
-      <SelectTrigger id={id} size={size} className="min-w-0">
+      <SelectTrigger id={id} size={size} className={`min-w-0 ${appearance === 'ghost' ? GHOST : ''}`}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="min-w-48">
@@ -166,5 +160,5 @@ export function CompactSelect({
 
 /** Short note under a setting, for units, provenance and caveats. */
 export function Note({ children }: { children: ReactNode }) {
-  return <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>;
+  return <p className="type-caption">{children}</p>;
 }

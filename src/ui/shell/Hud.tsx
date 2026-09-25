@@ -1,10 +1,9 @@
 import { Separator } from '@tecton/react/components/separator';
 import { Panel, PanelContent } from '@tecton/react/tecton/panel';
-import { Stat, StatGroup, StatLabel, StatValue } from '@tecton/react/tecton/stat';
 import type { App } from '../app';
 import { fmt } from '../dom';
 import { useSignal } from '../signal';
-import { CollapseButton, OverlayChip, useCollapsed } from './overlay';
+import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 /** Where the camera is and where along the well: compass, attitude, depths and the read-outs features add. */
 export function Hud({ app }: { app: App }) {
@@ -12,7 +11,7 @@ export function Hud({ app }: { app: App }) {
   const [collapsed, setCollapsed] = useCollapsed('hud');
   if (collapsed) return <HudChip app={app} onExpand={() => setCollapsed(false)} />;
   return (
-    <Panel variant="elevated" size="sm" aria-label="Position" className="w-76 max-w-full">
+    <Panel variant="elevated" size="sm" aria-label="Position" className={`w-80 max-w-full ${SURFACE}`}>
       <PanelContent className="flex flex-col gap-2">
         <Camera app={app} end={<CollapseButton collapsed={false} name="position" onChange={setCollapsed} />} />
         <Separator emphasis="subtle" />
@@ -33,10 +32,11 @@ function HudChip({ app, onExpand }: { app: App; onExpand: () => void }) {
   return (
     <OverlayChip name="position" onExpand={onExpand}>
       <Compass heading={hud.heading} azi={p.azi} className="size-6" />
-      <span className="font-mono text-xs whitespace-nowrap tabular-nums">
-        {fmt.n(p.md, 0)} <span className="text-muted-foreground">MD</span> · {fmt.n(p.tvdss, 0)} <span className="text-muted-foreground">TVDSS</span> · {fmt.n(p.inc, 0)}°
+      <span className="type-value whitespace-nowrap">
+        {fmt.n(p.md, 0)} <span className="type-unit">MD</span> <span className="text-fg-3">·</span> {fmt.n(p.tvdss, 0)} <span className="type-unit">TVDSS</span> <span className="text-fg-3">·</span>{' '}
+        {fmt.n(p.inc, 0)}°
       </span>
-      <span className="hidden max-w-32 truncate text-xs text-muted-foreground @3xl:inline">{p.zone}</span>
+      <span className="type-caption hidden max-w-32 truncate @3xl:inline">{p.zone}</span>
     </OverlayChip>
   );
 }
@@ -58,8 +58,8 @@ function Compass({ heading, azi, className }: { heading: number; azi: number; cl
         ))}
         <path d="M21 6 L24 21 L21 19.5 L18 21 Z" className="fill-red-460" />
         <path d="M21 36 L24 21 L21 22.5 L18 21 Z" className="fill-muted-foreground/40" />
-        <line x1="21" y1="21" x2={tip[0]} y2={tip[1]} strokeWidth="2" strokeLinecap="round" className="stroke-primary" />
-        <circle cx={tip[0]} cy={tip[1]} r="2.6" className="fill-primary" />
+        <line x1="21" y1="21" x2={tip[0]} y2={tip[1]} strokeWidth="2" strokeLinecap="round" className="stroke-ui-accent" />
+        <circle cx={tip[0]} cy={tip[1]} r="2.6" className="fill-ui-accent" />
       </g>
       <circle cx="21" cy="21" r="2" className="fill-foreground" />
     </svg>
@@ -74,8 +74,8 @@ function Camera({ app, end }: { app: App; end: React.ReactNode }) {
     <div className="flex items-center gap-2">
       <Compass heading={hud.heading} azi={p.azi} className="size-9" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium">{hud.where}</span>
-        <span className="truncate font-mono text-xs text-muted-foreground">
+        <span className="type-title truncate">{hud.where}</span>
+        <span className="type-caption truncate font-mono">
           {hud.nav} · {hud.camY >= 0 ? '+' : ''}
           {fmt.n(hud.camY, 0)} m · {hdg}°
         </span>
@@ -91,20 +91,27 @@ function Depth({ app }: { app: App }) {
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-3">
         <Attitude inc={p.inc} />
-        <StatGroup className="flex-1 grid-cols-2 gap-x-3">
-          <Stat size="sm">
-            <StatLabel>MD</StatLabel>
-            <StatValue unit="m">{fmt.n(p.md, 1)}</StatValue>
-          </Stat>
-          <Stat size="sm">
-            <StatLabel>TVDSS</StatLabel>
-            <StatValue unit="m">{fmt.n(p.tvdss, 1)}</StatValue>
-          </Stat>
-        </StatGroup>
+        <dl className="grid flex-1 grid-cols-2 gap-x-3">
+          <Read k="MD" v={fmt.n(p.md, 1)} unit="m" />
+          <Read k="TVDSS" v={fmt.n(p.tvdss, 1)} unit="m" />
+        </dl>
       </div>
-      <span className="truncate text-xs text-muted-foreground" title={`${p.zone} · ${p.section}`}>
-        {p.zone} · azimuth {fmt.n(p.azi, 0)}°
+      <span className="type-caption truncate" title={`${p.zone} · ${p.section}`}>
+        <span className="text-fg-2">{p.zone}</span> · azimuth {fmt.n(p.azi, 0)}°
       </span>
+    </div>
+  );
+}
+
+/** A key figure: a small uppercase name over a large number. */
+function Read({ k, v, unit }: { k: string; v: string; unit?: string }) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <dt className="type-section">{k}</dt>
+      <dd className="type-key truncate">
+        {v}
+        {unit && <span className="type-unit ml-0.5">{unit}</span>}
+      </dd>
     </div>
   );
 }
@@ -128,7 +135,7 @@ function Attitude({ inc }: { inc: number }) {
   return (
     <svg viewBox="0 0 92 34" className="h-[34px] w-[92px] shrink-0" role="img" aria-label={`Inclination ${fmt.n(inc, 1)}°`}>
       <path d={arc(0, 90)} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-muted" />
-      <path d={arc(0, Math.min(i, 90))} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-primary/60" />
+      <path d={arc(0, Math.min(i, 90))} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-ui-accent/70" />
       {[30, 60].map((d) => {
         const [a, b] = pt(d, R - 4);
         const [c, e] = pt(d, R + 3);
@@ -136,10 +143,10 @@ function Attitude({ inc }: { inc: number }) {
       })}
       <line x1={cx} y1={cy} x2={nx} y2={ny} strokeWidth="2.5" strokeLinecap="round" className="stroke-foreground" />
       <circle cx={cx} cy={cy} r="2.5" className="fill-foreground" />
-      <text x="35" y="12" fontSize="8" fontWeight="600" letterSpacing=".06em" className="fill-muted-foreground">
+      <text x="35" y="12" fontSize="8" fontWeight="600" letterSpacing=".07em" className="fill-fg-3">
         INC
       </text>
-      <text x="35" y="28" fontSize="14" className="fill-foreground font-mono tabular-nums">
+      <text x="35" y="28" fontSize="15" fontWeight="500" className="fill-fg-1 font-mono tabular-nums">
         {fmt.n(inc, 1)}°
       </text>
     </svg>

@@ -86,7 +86,7 @@ export class ViewsFeature implements FeatureModule {
           {this.views.length} saved view{this.views.length === 1 ? '' : 's'}. Open with the bookmark button in the top bar. During a presentation: → / Space next, ← previous, Esc exits.
         </Note>
         <div>
-          <Button variant="outline" size="sm" onPress={() => this.panel.show()}>
+          <Button variant="ghost" size="sm" onPress={() => this.panel.show()}>
             Open saved views
           </Button>
         </div>
@@ -234,7 +234,7 @@ export class ViewsFeature implements FeatureModule {
             <BookmarkPlusIcon data-icon="inline-start" />
             Save current view
           </Button>
-          <Button variant="outline" size="sm" onPress={() => this.present(0)}>
+          <Button variant="ghost" size="sm" onPress={() => this.present(0)}>
             <PresentationIcon data-icon="inline-start" />
             Present
           </Button>
@@ -314,7 +314,7 @@ export class ViewsFeature implements FeatureModule {
           )}
         </ScrollArea>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Button variant="outline" size="sm" onPress={() => this.starter()}>
+          <Button variant="ghost" size="sm" onPress={() => this.starter()}>
             Add starter tour
           </Button>
           <Button variant="ghost" size="sm" isDisabled={n === 0} onPress={() => this.clearAll()}>

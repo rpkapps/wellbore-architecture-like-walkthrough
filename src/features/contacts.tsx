@@ -119,7 +119,7 @@ export class ContactsFeature implements FeatureModule {
         />
         <div>
           <Button
-            variant="outline"
+            variant="ghost"
             size="xs"
             onPress={() => {
               this.override = null;

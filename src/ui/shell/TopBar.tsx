@@ -1,8 +1,18 @@
 import { Button } from '@tecton/react/components/button';
-import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@tecton/react/components/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@tecton/react/components/select';
 import { Separator } from '@tecton/react/components/separator';
-import { Tabs, TabsList, TabsTrigger } from '@tecton/react/components/tabs';
+import { Tabs } from '@tecton/react/components/tabs';
+import { Tab, TabStrip } from '../tabs';
 import { AppShellAction, AppShellActions, AppShellBrand, AppShellHeader, AppShellNav, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { OverflowDivider, OverflowItem, OverflowLabel, Toolbar } from '@tecton/react/tecton/overflow';
 import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
@@ -14,6 +24,8 @@ import type { PropertyMode } from '../../scene/wellbore';
 import type { App, ToolEntry } from '../app';
 import { IconButton } from '../icon-button';
 import { Logo } from '../logo';
+import { WindowMenu, WorkspaceMenu } from '../workspace/menus';
+import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
 import { HelpDialog } from './HelpDialog';
@@ -41,7 +53,7 @@ function Divider() {
  * Brand, well selector, the navigation and colouring tabs, and a toolbar of
  * commands that folds into a More menu as the window narrows.
  */
-export function TopBar({ app, wide }: { app: App; wide: boolean }) {
+export function TopBar({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
   const ready = useSignal(app.ready);
   return (
     <AppShellHeader className="gap-2">
@@ -49,25 +61,25 @@ export function TopBar({ app, wide }: { app: App; wide: boolean }) {
         <Logo />
         <span className="hidden sm:inline">BoreWalk</span>
       </AppShellBrand>
-      {ready && <Controls app={app} wide={wide} />}
+      {ready && <Controls app={app} panels={panels} />}
     </AppShellHeader>
   );
 }
 
-function Controls({ app, wide }: { app: App; wide: boolean }) {
+function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) {
   useRev(app.viewRev, app.wellRev);
   const optional = useSignal(app.optionalModes);
   const tools = useSignal(app.tools);
-  const sidebar = useSignal(app.sidebar);
-  const leftOpen = useSignal(app.leftOpen);
-  const rightOpen = useSignal(app.rightOpen);
+  const L = useSignal(app.workspace.layout);
+  const ws = app.workspace;
   const production = useSignal(app.productionOpen);
   const data = useSignal(app.dataOpen);
   const help = useSignal(app.helpOpen);
   const roomy = useMinWidth(1360);
   const e = app.engine;
   const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
-  const tab = (t: typeof sidebar) => leftOpen && sidebar === t;
+  const tab = (t: 'interpretation' | 'features') => ws.isShown(t);
+  const leftOpen = L.left.stacks.length > 0 && !L.left.collapsed;
   const fullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
   return (
     <>
@@ -96,30 +108,25 @@ function Controls({ app, wide }: { app: App; wide: boolean }) {
       <Divider />
       <AppShellNav className="gap-2">
         <Tabs selectedKey={e.rig.mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
-          <TabsList aria-label="Navigation" className="h-8 p-0.5">
-            <TabsTrigger id="guided">Guided</TabsTrigger>
-            <TabsTrigger id="explore">Explore</TabsTrigger>
-          </TabsList>
+          <TabStrip aria-label="Navigation">
+            <Tab id="guided">Guided</Tab>
+            <Tab id="explore">Explore</Tab>
+          </TabStrip>
         </Tabs>
         <Divider />
         {roomy ? (
           <Tabs selectedKey={e.mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
-            <TabsList aria-label="Colour the wellbore by" className="h-8 p-0.5">
+            <TabStrip aria-label="Colour the wellbore by">
               {props.map((p) => (
-                <TabsTrigger key={p.id} id={p.id}>
+                <Tab key={p.id} id={p.id}>
                   <Dot color={p.dot} />
                   {p.label}
-                </TabsTrigger>
+                </Tab>
               ))}
-            </TabsList>
+            </TabStrip>
           </Tabs>
         ) : (
-          <Select
-            aria-label="Colour the wellbore by"
-            selectedKey={e.mode}
-            onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)}
-            className="w-36 shrink-0"
-          >
+          <Select aria-label="Colour the wellbore by" selectedKey={e.mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
             <SelectTrigger size="sm">
               <SelectValue />
             </SelectTrigger>
@@ -170,11 +177,13 @@ function Controls({ app, wide }: { app: App; wide: boolean }) {
         </Toolbar>
       </AppShellNav>
       <Divider />
-      <AppShellActions className="ml-0">
-        <AppShellAction label={wide ? 'Sidebar' : 'Scene, interpretation & features'} variant={leftOpen ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('left')}>
+      <AppShellActions className="ml-0 gap-0.5">
+        <WindowMenu app={app} panels={panels} />
+        <WorkspaceMenu app={app} panels={panels} />
+        <AppShellAction label="Left column: fold to icons / expand" variant={leftOpen ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('left')}>
           <PanelLeftIcon />
         </AppShellAction>
-        <AppShellAction label="Well logs" variant={rightOpen ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('right')}>
+        <AppShellAction label="Well logs" variant={ws.isShown('logs') ? 'secondary' : 'ghost'} onPress={() => app.togglePanel('right')}>
           <LogCurveIcon />
         </AppShellAction>
       </AppShellActions>

@@ -63,8 +63,13 @@ export function isProvenance(p: string | undefined): p is Provenance {
 
 /** Provenance label. `short` prints the one-letter code (M, C, I …) for dense rows. */
 export function ProvBadge({ prov, short, children, className }: { prov: Provenance; short?: boolean; children?: ReactNode; className?: string }) {
+  // quiet: a small tinted tag, never louder than the data it qualifies
   return (
-    <Badge variant="secondary" className={cn(TONE[prov], className)} title={PROV_DESCRIPTION[prov]}>
+    <Badge
+      variant="secondary"
+      className={cn(TONE[prov], 'h-4! rounded-sm! px-1! text-[0.68rem]! leading-none font-semibold! tracking-wide', short && 'w-4! justify-center px-0!', className)}
+      title={PROV_DESCRIPTION[prov]}
+    >
       {children ?? (short ? SHORT[prov] : LABEL[prov])}
     </Badge>
   );

@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import type { GuidedView } from '../../scene/cameraRig';
 import type { App } from '../app';
 import { useRev } from '../signal';
+import { SURFACE } from './overlay';
 
 /** The camera for the current navigation mode, floating in the corner of the 3D view. */
 export function ViewControls({ app }: { app: App }) {
@@ -25,7 +26,7 @@ export function ViewControls({ app }: { app: App }) {
       ];
   const view = guided ? rig.guidedView : rig.exploreView;
   return (
-    <Panel variant="elevated" size="sm" aria-label="Camera" className="w-fit">
+    <Panel variant="elevated" size="sm" aria-label="Camera" className={`w-fit ${SURFACE}`}>
       <div className="p-1">
         <ToggleGroup
           aria-label="Camera"

@@ -181,7 +181,7 @@ export class SimulationFeature implements FeatureModule {
       <>
         <Note>{m ? `${m.header.name}: ${fmt.n(m.n, 0)} active cells, ${m.header.dates.length} report dates. ${m.header.note}` : this.loading ? 'Loading simulation package …' : 'No simulation loaded. Import a .bwsim package in Data (convert Eclipse / OPM output with scripts/prepare_sim.py).'}</Note>
         <div>
-          <Button variant="outline" size="sm" onPress={() => this.panel.show()}>
+          <Button variant="ghost" size="sm" onPress={() => this.panel.show()}>
             Open simulation panel
           </Button>
         </div>
@@ -481,7 +481,7 @@ void main(){
           <div className="flex items-end gap-2">
             <IconButton
               label={this.playing ? 'Pause' : 'Play through time'}
-              variant="outline"
+              variant="ghost"
               onPress={() => {
                 this.playing = !this.playing;
                 if (this.playing && this.stepIdx >= hd.dates.length - 1) this.setStep(0);

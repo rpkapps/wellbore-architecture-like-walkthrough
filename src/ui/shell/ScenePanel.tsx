@@ -1,4 +1,3 @@
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@tecton/react/components/accordion';
 import { Badge } from '@tecton/react/components/badge';
 import { Button } from '@tecton/react/components/button';
 import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
@@ -12,6 +11,7 @@ import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
 import { SelectField, SliderField, SwitchField } from '../controls';
 import { ProvBadge } from '../prov';
+import { PanelAccordion, PanelSection } from '../section';
 import { useRev } from '../signal';
 import { SectionBoxEditor } from '../viz/SectionBoxEditor';
 
@@ -28,26 +28,17 @@ export function ScenePanel({ app }: { app: App }) {
   return (
     <div className="flex flex-col">
       <Layers app={app} />
-      <Accordion allowsMultipleExpanded defaultExpandedKeys={['box']} className="rounded-none border-t border-border-subtle">
-        <AccordionItem id="box">
-          <AccordionTrigger>Section box</AccordionTrigger>
-          <AccordionContent>
-            <SectionBoxControls app={app} />
-          </AccordionContent>
-        </AccordionItem>
-        <AccordionItem id="wellbore">
-          <AccordionTrigger>Near-well geometry</AccordionTrigger>
-          <AccordionContent>
-            <WellboreControls app={app} />
-          </AccordionContent>
-        </AccordionItem>
-        <AccordionItem id="display">
-          <AccordionTrigger>Display</AccordionTrigger>
-          <AccordionContent>
-            <DisplayControls app={app} />
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
+      <PanelAccordion defaultExpandedKeys={['box']}>
+        <PanelSection id="box" title="Section box">
+          <SectionBoxControls app={app} />
+        </PanelSection>
+        <PanelSection id="wellbore" title="Near-well geometry">
+          <WellboreControls app={app} />
+        </PanelSection>
+        <PanelSection id="display" title="Display">
+          <DisplayControls app={app} />
+        </PanelSection>
+      </PanelAccordion>
     </div>
   );
 }
@@ -84,7 +75,14 @@ function Layers({ app }: { app: App }) {
           const f = FORMATION_BY_ID.get(id)!;
           const st = geo.state.get(id)!;
           return (
-            <TreeViewItem key={id} id={id} textValue={f.name} isHidden={!st.visible} onHoverStart={() => geo.setHighlight(id)} onHoverEnd={() => geo.setHighlight(null)}>
+            <TreeViewItem
+              key={id}
+              id={id}
+              textValue={f.name}
+              isHidden={!st.visible}
+              onHoverStart={() => (geo.setHighlight(id), app.engine.requestRender())}
+              onHoverEnd={() => (geo.setHighlight(null), app.engine.requestRender())}
+            >
               <TreeViewItemContent
                 icon={<ColorSwatch color={f.color} size="xs" shape="square" aria-label={`${f.name} colour`} />}
                 suffix={f.reservoir ? <Badge variant="warning">Reservoir</Badge> : <span className="font-mono text-xs text-muted-foreground">{Math.round(st.opacity * 100)}%</span>}
@@ -163,14 +161,14 @@ function SectionBoxControls({ app }: { app: App }) {
   const fb = app.engine.geology.fullBox;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-1">
-        <Button variant="outline" size="xs" onPress={() => app.setBox({ ...fb }, true)}>
+      <div className="-ml-2 flex flex-wrap gap-0.5">
+        <Button variant="ghost" size="xs" onPress={() => app.setBox({ ...fb }, true)}>
           Full
         </Button>
-        <Button variant="outline" size="xs" onPress={() => app.sectionAlongWell()}>
+        <Button variant="ghost" size="xs" onPress={() => app.sectionAlongWell()}>
           Cut at well
         </Button>
-        <Button variant="outline" size="xs" onPress={() => app.setBox({ stripTo: 2750 }, true)}>
+        <Button variant="ghost" size="xs" onPress={() => app.setBox({ stripTo: 2750 }, true)}>
           Reservoir window
         </Button>
       </div>
@@ -183,7 +181,7 @@ function WellboreControls({ app }: { app: App }) {
   useRev(app.sceneRev, app.viewRev);
   const d: WellboreDisplay = app.wellbore;
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-1">
       <SliderField label="Radial exaggeration" value={app.engine.radialScale} minValue={1} maxValue={60} step={1} format={(v) => `×${v}`} onChange={(v) => app.setRadialScale(v)} />
       <SliderField
         label="Casing transparency"
@@ -223,7 +221,7 @@ function DisplayControls({ app }: { app: App }) {
   useEffect(() => app.flags.watch('textures', setTextures), [app]);
   const s: SceneDisplay = app.display;
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-1">
       <SelectField
         label="Resistivity colours"
         value={app.colormapName}

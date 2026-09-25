@@ -8,6 +8,7 @@ import type { App } from '../app';
 import { fmt } from '../dom';
 import { IconButton } from '../icon-button';
 import { useRev, useSignal } from '../signal';
+import { SURFACE } from './overlay';
 
 const SPEEDS = [15, 45, 120, 300];
 
@@ -27,8 +28,14 @@ const LABEL_Y = 51; // depth scale baseline
 export function Timeline({ app }: { app: App }) {
   const playing = useSignal(app.playing);
   return (
-    <div className="flex shrink-0 items-center gap-1.5 border-t border-border-subtle bg-card py-1 pr-3 pl-2">
-      <IconButton label={playing ? 'Pause (Space)' : 'Play along the well (Space)'} variant="default" size="icon-sm" placement="top" onPress={() => app.togglePlay()}>
+    <div className={`flex h-full items-center gap-1.5 border py-1 pr-3 pl-2 ${SURFACE}`}>
+      <IconButton
+        label={playing ? 'Pause (Space)' : 'Play along the well (Space)'}
+        size="icon-sm"
+        placement="top"
+        onPress={() => app.togglePlay()}
+        className="size-8! rounded-full! bg-ui-accent! text-background! shadow-[0_0_14px_-2px_var(--ui-accent)] hover:brightness-110 [&_svg]:size-4! [&_svg]:fill-current"
+      >
         {playing ? <PauseIcon /> : <PlayIcon />}
       </IconButton>
       <SpeedMenu app={app} />
@@ -208,9 +215,9 @@ function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number;
             }}
           >
             <line x1={x(c.md)} x2={x(c.md)} y1={CH_Y + 4} y2={S_TOP} className="stroke-border" />
-            <circle cx={cx} cy={CH_Y} r={big ? 6.5 : 3.5} strokeWidth={1.5} className={on ? 'fill-primary stroke-primary' : 'fill-card stroke-muted-foreground/60 hover:stroke-foreground'} />
+            <circle cx={cx} cy={CH_Y} r={big ? 6.5 : 3.5} strokeWidth={1.5} className={on ? 'fill-ui-accent stroke-ui-accent' : 'fill-background stroke-fg-3 hover:stroke-fg-1'} />
             {big && (
-              <text x={cx} y={CH_Y + 3} textAnchor="middle" fontSize={8.5} fontWeight={600} className={`pointer-events-none ${on ? 'fill-primary-foreground' : 'fill-muted-foreground'}`}>
+              <text x={cx} y={CH_Y + 3} textAnchor="middle" fontSize={8.5} fontWeight={600} className={`pointer-events-none ${on ? 'fill-background' : 'fill-fg-2'}`}>
                 {i + 1}
               </text>
             )}
@@ -221,33 +228,70 @@ function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number;
   );
 }
 
-/** Where the camera is: dims what is still ahead, with a grip and a depth tag under it. */
+/**
+ * Where the camera is: a glowing line with a round knob (the original
+ * BoreWalk playhead) in the accent colour, a depth tag under it, and what is
+ * still ahead dimmed. It follows the camera every frame, so it is moved by
+ * setting SVG attributes instead of re-rendering; only the scale re-renders,
+ * when the labels it hides change.
+ */
 function Playhead({ app, x, W, td, onKey }: { app: App; x: (md: number) => number; W: number; td: number; onKey: (e: KeyboardEvent) => void }) {
-  const pose = useSignal(app.pose);
-  const px = x(pose.md);
-  const tag = `${fmt.n(pose.md, 0)} m`;
-  const tw = tag.length * 6 + 10;
-  const tx = Math.max(0, Math.min(W - tw, px - tw / 2));
+  const head = useRef<SVGGElement>(null);
+  const dim = useRef<SVGRectElement>(null);
+  const tagBox = useRef<SVGRectElement>(null);
+  const tagText = useRef<SVGTextElement>(null);
+  const slider = useRef<SVGGElement>(null);
+  const [gap, setGap] = useState<[number, number]>([-1, -1]);
+  const gapKey = useRef('');
+  useLayoutEffect(() => {
+    const place = () => {
+      const md = app.pose.value.md;
+      const px = x(md);
+      const tag = `${fmt.n(md, 0)} m`;
+      const tw = tag.length * 6 + 10;
+      const tx = Math.max(0, Math.min(W - tw, px - tw / 2));
+      head.current?.setAttribute('transform', `translate(${px.toFixed(1)},0)`);
+      dim.current?.setAttribute('x', px.toFixed(1));
+      dim.current?.setAttribute('width', Math.max(0, W - px).toFixed(1));
+      tagBox.current?.setAttribute('x', tx.toFixed(1));
+      tagBox.current?.setAttribute('width', String(tw));
+      if (tagText.current) {
+        tagText.current.setAttribute('x', (tx + tw / 2).toFixed(1));
+        tagText.current.textContent = tag;
+      }
+      slider.current?.setAttribute('aria-valuenow', String(Math.round(md)));
+      slider.current?.setAttribute('aria-valuetext', `${tag} MD`);
+      // re-render the scale only when the span it must keep clear moves by a label
+      const g: [number, number] = [tx - 6, tx + tw + 6];
+      const key = `${Math.round(g[0] / 24)}:${Math.round(g[1] / 24)}`;
+      if (key !== gapKey.current) {
+        gapKey.current = key;
+        setGap(g);
+      }
+    };
+    place();
+    return app.pose.subscribe(place);
+  }, [app, x, W]);
   return (
     <g
+      ref={slider}
       role="slider"
       tabIndex={0}
       aria-label="Position along the well"
       aria-valuemin={0}
       aria-valuemax={Math.round(td)}
-      aria-valuenow={Math.round(pose.md)}
-      aria-valuetext={`${fmt.n(pose.md, 0)} m MD`}
       onKeyDown={onKey}
-      className="outline-none [&:focus-visible_.grip]:stroke-ring"
+      className="outline-none [&:focus-visible_.knob]:stroke-ring"
     >
-      <rect x={px} y={S_TOP} width={Math.max(0, W - px)} height={S_H} className="pointer-events-none fill-card/40" />
-      <rect x={px - 1} y={S_TOP - 3} width={2} height={S_H + 6} rx={1} className="fill-primary" />
-      <rect x={px - 4} y={S_TOP - 5} width={8} height={5} rx={1.5} strokeWidth={2} className="grip fill-primary stroke-card" />
-      <Scale td={td} W={W} x={x} gap={[tx - 6, tx + tw + 6]} />
-      <rect x={tx} y={LABEL_Y - 9.5} width={tw} height={13} rx={3} className="fill-primary" />
-      <text x={tx + tw / 2} y={LABEL_Y} textAnchor="middle" fontSize={9.5} fontWeight={600} className="fill-primary-foreground font-mono">
-        {tag}
-      </text>
+      <rect ref={dim} y={S_TOP} height={S_H} className="pointer-events-none fill-background/45" />
+      <Scale td={td} W={W} x={x} gap={gap} />
+      <g ref={head} className="pointer-events-none">
+        <rect x={-1} y={S_TOP - 3} width={2} height={S_H + 6} rx={1} className="fill-ui-accent" style={{ filter: 'drop-shadow(0 0 4px var(--ui-accent))' }} />
+        <circle cy={S_TOP - 4} r={8} className="fill-ui-accent/20" />
+        <circle cy={S_TOP - 4} r={5} strokeWidth={2} className="knob fill-ui-accent stroke-transparent" />
+      </g>
+      <rect ref={tagBox} y={LABEL_Y - 9.5} height={13} rx={6.5} className="fill-ui-accent" />
+      <text ref={tagText} y={LABEL_Y} textAnchor="middle" fontSize={9.5} fontWeight={600} className="fill-background font-mono" />
     </g>
   );
 }

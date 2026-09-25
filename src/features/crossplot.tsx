@@ -502,6 +502,7 @@ export class CrossplotFeature implements FeatureModule {
   private hoverMd(md: number | null) {
     const wb = this.app.engine.wellbore;
     if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
+    this.app.engine.requestRender();
   }
 
   private selectedMds(): number[] {
@@ -540,7 +541,7 @@ export class CrossplotFeature implements FeatureModule {
         {iv.slice(0, 6).map((q) => {
           const text = q.base - q.top < 1 ? `${fmt.n(q.top, 0)}` : `${fmt.n(q.top, 0)}–${fmt.n(q.base, 0)}`;
           return (
-            <Button key={q.top} variant="outline" size="xs" aria-label={`Travel to ${text} m MD`} onPress={() => this.app.travelTo((q.top + q.base) / 2)}>
+            <Button key={q.top} variant="ghost" size="xs" aria-label={`Travel to ${text} m MD`} onPress={() => this.app.travelTo((q.top + q.base) / 2)}>
               {text}
             </Button>
           );

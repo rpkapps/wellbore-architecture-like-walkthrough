@@ -311,6 +311,7 @@ export class CorrelationFeature implements FeatureModule {
     if (!p) {
       this.readout.set(this.cols.length ? 'Hover a track for values · click to travel' : null);
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = -1e6;
+      this.app.engine.requestRender();
       return;
     }
     const z = p.col.well.zoneAt(p.md);
@@ -324,6 +325,7 @@ export class CorrelationFeature implements FeatureModule {
     const rel = this.datumId && p.col.datum !== null ? ` · ${fmt.n(p.d - p.col.datum, 1)} m ${p.d >= p.col.datum ? 'below' : 'above'} ${FORMATION_BY_ID.get(this.datumId)?.name ?? ''} top` : '';
     this.readout.set(`${p.col.well.name} · MD ${fmt.n(p.md, 1)} m · ${this.mode === 'tvdss' ? 'TVDSS' : 'MD'} ${fmt.n(p.d, 1)} m${rel} · ${z?.name ?? ''}${val(this.curve)}${val(this.overlay)}`);
     if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = p.col.well === e.activeWell ? p.md : -1e6;
+    this.app.engine.requestRender();
   }
 
   draw() {

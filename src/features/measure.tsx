@@ -67,7 +67,7 @@ export class MeasureFeature implements FeatureModule {
       <>
         <Note>Press M or the ruler button, then click two points on anything in the scene. Esc stops measuring; measurements stay until cleared.</Note>
         <div>
-          <Button variant="outline" size="xs" onPress={() => this.clear()}>
+          <Button variant="ghost" size="xs" onPress={() => this.clear()}>
             Clear measurements
           </Button>
         </div>

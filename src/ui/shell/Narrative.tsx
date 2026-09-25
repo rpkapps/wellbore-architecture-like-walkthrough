@@ -1,12 +1,11 @@
 import { Button } from '@tecton/react/components/button';
 import { Panel, PanelContent, PanelDescription, PanelFooter, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
-import { Stat, StatGroup, StatLabel, StatValue } from '@tecton/react/tecton/stat';
 import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon } from 'lucide-react';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { PROV_DESCRIPTION, PROV_DOT } from '../prov';
 import { useRev, useSignal } from '../signal';
-import { CollapseButton, OverlayChip, useCollapsed } from './overlay';
+import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 /** The guided tour's chapter card: what the camera is looking at, with the key numbers. */
 export function Narrative({ app }: { app: App }) {
@@ -38,38 +37,41 @@ export function Narrative({ app }: { app: App }) {
           </>
         }
       >
-        <span className="font-mono text-xs text-muted-foreground">{count}</span>
-        <span className="max-w-56 truncate text-xs font-medium">{c.title}</span>
+        <span className="type-unit">{count}</span>
+        <span className="type-title max-w-56 truncate">{c.title}</span>
       </OverlayChip>
     );
   return (
-    <Panel variant="elevated" size="sm" aria-label="Tour chapter" className="w-80 max-w-full">
+    <Panel variant="elevated" size="sm" aria-label="Tour chapter" className={`w-80 max-w-full ${SURFACE}`}>
       <PanelHeader className="flex-col items-stretch gap-1">
-        <span className="flex items-center justify-between font-mono text-xs text-muted-foreground">
+        <span className="type-section flex items-center justify-between">
           CHAPTER {count}
           <CollapseButton collapsed={false} name="tour chapter" onChange={setCollapsed} />
         </span>
-        <PanelTitle>{c.title}</PanelTitle>
-        <PanelDescription>{c.text}</PanelDescription>
+        <PanelTitle className="text-[1.07rem]! leading-snug font-semibold! text-fg-1!">{c.title}</PanelTitle>
+        <PanelDescription className="type-label leading-relaxed!">{c.text}</PanelDescription>
       </PanelHeader>
       <PanelContent>
-        <StatGroup className="grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-x-3 gap-y-1">
+        <dl className="grid grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-x-3 gap-y-2">
           {c.facts.map((f) => (
-            <Stat key={f.k} size="sm" title={PROV_DESCRIPTION[f.prov]}>
-              <StatLabel className="flex items-center gap-1">
+            <div key={f.k} className="flex min-w-0 flex-col" title={PROV_DESCRIPTION[f.prov]}>
+              <dt className="type-section flex items-center gap-1">
                 <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${PROV_DOT[f.prov]}`} />
                 {f.k}
-              </StatLabel>
-              <StatValue unit={split(f.v)[1]}>{split(f.v)[0]}</StatValue>
-            </Stat>
+              </dt>
+              <dd className="type-value truncate text-[1rem]!">
+                {split(f.v)[0]}
+                {split(f.v)[1] && <span className="type-unit ml-1">{split(f.v)[1]}</span>}
+              </dd>
+            </div>
           ))}
-        </StatGroup>
+        </dl>
       </PanelContent>
       <PanelFooter>
-        <IconButton label="Previous chapter" variant="outline" onPress={() => step(-1)}>
+        <IconButton label="Previous chapter" onPress={() => step(-1)}>
           <ChevronLeftIcon />
         </IconButton>
-        <IconButton label="Next chapter" variant="outline" onPress={() => step(1)}>
+        <IconButton label="Next chapter" onPress={() => step(1)}>
           <ChevronRightIcon />
         </IconButton>
         <Button size="sm" variant={ch.touring ? 'outline' : 'default'} className="ml-auto" onPress={() => (ch.touring ? app.stopTour() : app.startTour())}>

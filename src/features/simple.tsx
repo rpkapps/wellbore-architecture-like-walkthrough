@@ -113,7 +113,7 @@ export class ExtraWellsFeature implements FeatureModule {
           .filter((x) => x.extra)
           .map((w) => (
             <TooltipTrigger key={w.id} delay={400}>
-              <Button variant="outline" size="xs" onPress={() => this.app.selectWell(w.id)}>
+              <Button variant="ghost" size="xs" onPress={() => this.app.selectWell(w.id)}>
                 {w.name}
               </Button>
               <Tooltip>{w.summary}</Tooltip>

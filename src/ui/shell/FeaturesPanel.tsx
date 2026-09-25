@@ -1,4 +1,3 @@
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@tecton/react/components/accordion';
 import { Badge } from '@tecton/react/components/badge';
 import { Button } from '@tecton/react/components/button';
 import { Field, FieldContent, FieldDescription, FieldLabel } from '@tecton/react/components/field';
@@ -7,6 +6,7 @@ import { Switch } from '@tecton/react/components/switch';
 import { RotateCcwIcon } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import { FEATURES, type FeatureGroup, type FeatureId, type FeatureModule } from '../../features/registry';
+import { PanelAccordion, PanelSection } from '../section';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
@@ -38,33 +38,32 @@ export function FeaturesPanel({ app }: { app: App }) {
           <RotateCcwIcon />
         </IconButton>
       </div>
-      <Accordion allowsMultipleExpanded defaultExpandedKeys={GROUPS} className="rounded-none border-t border-border-subtle">
+      <PanelAccordion defaultExpandedKeys={GROUPS}>
         {GROUPS.map((g) => {
           const list = FEATURES.filter((f) => f.group === g);
           return (
-            <AccordionItem key={g} id={g}>
-              <AccordionTrigger>
-                <span className="flex flex-1 items-center justify-between gap-2 pr-2">
-                  {g}
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {list.filter((f) => flags.on(f.id)).length}/{list.length}
-                  </span>
+            <PanelSection
+              key={g}
+              id={g}
+              title={g}
+              aside={
+                <span className="type-unit ml-auto pr-1 normal-case tracking-normal">
+                  {list.filter((f) => flags.on(f.id)).length}/{list.length}
                 </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="flex flex-col gap-2.5">
-                  {list.map((f, i) => (
-                    <Fragment key={f.id}>
-                      {i > 0 && <Separator emphasis="subtle" />}
-                      <FeatureRow app={app} id={f.id} />
-                    </Fragment>
-                  ))}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
+              }
+            >
+              <div className="flex flex-col gap-2">
+                {list.map((f, i) => (
+                  <Fragment key={f.id}>
+                    {i > 0 && <Separator emphasis="subtle" />}
+                    <FeatureRow app={app} id={f.id} />
+                  </Fragment>
+                ))}
+              </div>
+            </PanelSection>
           );
         })}
-      </Accordion>
+      </PanelAccordion>
     </div>
   );
 }
@@ -78,7 +77,7 @@ function FeatureRow({ app, id }: { app: App; id: FeatureId }) {
     <div className="flex flex-col gap-2">
       <Field orientation="horizontal" className="gap-2">
         <FieldContent>
-          <FieldLabel htmlFor={sid} className="flex-wrap">
+          <FieldLabel htmlFor={sid} className="flex-wrap text-[0.857rem]! font-medium! text-fg-1!">
             {f.name}
             {f.prov && <ProvBadge prov={f.prov} />}
             {f.gpu && (
@@ -87,7 +86,7 @@ function FeatureRow({ app, id }: { app: App; id: FeatureId }) {
               </Badge>
             )}
           </FieldLabel>
-          <FieldDescription className="line-clamp-2" title={f.desc}>
+          <FieldDescription className="type-caption! line-clamp-2" title={f.desc}>
             {f.desc}
           </FieldDescription>
         </FieldContent>
@@ -100,5 +99,5 @@ function FeatureRow({ app, id }: { app: App; id: FeatureId }) {
 
 function Settings({ m }: { m: FeatureModule }) {
   useRev(m.rev ?? noRev);
-  return <div className="flex flex-col gap-2.5 border-l border-border-subtle pl-3">{m.settings!()}</div>;
+  return <div className="flex flex-col gap-1.5 border-l border-border-subtle pl-2.5">{m.settings!()}</div>;
 }

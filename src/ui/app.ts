@@ -11,7 +11,8 @@ import type { GuidedView, NavMode } from '../scene/cameraRig';
 import type { PropertyMode } from '../scene/wellbore';
 import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
-import { Rev, Signal } from './signal';
+import { onAnyChange, Rev, Signal } from './signal';
+import { Workspace } from './workspace/layout';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
@@ -110,10 +111,8 @@ export class App {
   readonly inspector = new Signal<InspectorView | null>(null);
   readonly tools = new Signal<ToolEntry[]>([]);
   readonly huds = new Signal<HudEntry[]>([]);
-  readonly sidebar = new Signal<SidebarTab>('scene');
-  /** side panels start open where they sit beside the 3D view, closed where they would cover it */
-  readonly leftOpen = new Signal(typeof window === 'undefined' || window.innerWidth >= 1024);
-  readonly rightOpen = new Signal(typeof window === 'undefined' || window.innerWidth >= 1024);
+  /** the panels over the 3D view: docked columns, groups of tabs, floating windows */
+  readonly workspace = new Workspace();
   readonly productionOpen = new Signal(false);
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
@@ -148,9 +147,12 @@ export class App {
     const e = engine;
     this.flags = new FeatureFlags(e.quality === 'low');
     this.display.postFx = e.quality !== 'low';
+    // the 3D view draws on demand: any state change the chrome shows is a reason to redraw
+    onAnyChange.hook = () => e.requestRender(300);
     this.logs.onPick = (md) => this.travelTo(md);
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
+      e.requestRender(200);
     };
     this.logs.onScroll = (md) => {
       e.rig.playing = false;
@@ -512,23 +514,23 @@ export class App {
   }
 
   // ------------------------------------------------------------------ panels
+  /** The left column folds to its icons and back; the right one is the well logs. */
   togglePanel(side: 'left' | 'right') {
-    const s = side === 'left' ? this.leftOpen : this.rightOpen;
-    s.set(!s.value);
+    if (side === 'right') this.workspace.toggle('logs');
+    else if (!this.workspace.toggleZone('left')) this.workspace.open('scene');
   }
 
-  /** Open a sidebar tab, showing the sidebar if it is collapsed; a second call on the open tab closes it. */
+  /** Show a panel (Scene, Interpretation, Features), opening it where it was; a second call on the showing panel closes it. */
   showSidebar(tab: SidebarTab, toggle = false) {
-    if (toggle && this.leftOpen.value && this.sidebar.value === tab) {
-      this.sidebar.set('scene');
+    if (toggle && this.workspace.isShown(tab)) {
+      this.workspace.close(tab);
       return;
     }
     if (tab === 'interpretation' && this.engine.mode !== 'hydrocarbon') {
       this.setProperty('hydrocarbon');
       this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
     }
-    this.sidebar.set(tab);
-    this.leftOpen.set(true);
+    this.workspace.open(tab);
   }
 
   inspectFormation(id: string) {

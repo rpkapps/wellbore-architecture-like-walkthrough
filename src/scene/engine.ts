@@ -208,10 +208,28 @@ export class Engine {
     new ResizeObserver(() => this.resize()).observe(container);
   }
 
-  private insets = { left: 0, right: 0 };
-  setInsets(left: number, right: number) {
-    this.insets = { left, right };
-    this.resize();
+  private insets = { left: 0, right: 0, bottom: 0 };
+  /**
+   * The parts of the view covered by panels (px). The projection centre moves
+   * to the middle of what is left, so the subject stays centred in the free
+   * area; the canvas itself keeps its size (no reallocation, no flash).
+   */
+  setInsets(left: number, right: number, bottom = 0) {
+    const i = this.insets;
+    if (i.left === left && i.right === right && i.bottom === bottom) return;
+    this.insets = { left, right, bottom };
+    this.applyViewOffset();
+    this.requestRender(300);
+  }
+  private applyViewOffset() {
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    if (!w || !h) return;
+    const dx = (this.insets.left - this.insets.right) / 2;
+    const dy = this.insets.bottom / 2;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) this.camera.setViewOffset(w, h, -dx, dy, w, h);
+    else this.camera.clearViewOffset();
+    this.camera.updateProjectionMatrix();
   }
 
   /** Glow + film grade can be switched off from the Display panel. */
@@ -276,17 +294,15 @@ export class Engine {
     const h = this.container.clientHeight;
     if (w === 0 || h === 0) return;
     this.camera.aspect = w / h;
-    // shift the projection centre into the free area between the side panels
-    const shift = (this.insets.left - this.insets.right) / 2;
-    if (Math.abs(shift) > 1 && w > 900) this.camera.setViewOffset(w, h, -shift, 0, w, h);
-    else this.camera.clearViewOffset();
-    this.camera.updateProjectionMatrix();
+    // shift the projection centre into the free area between the panels
+    this.applyViewOffset();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     const pr = this.renderer.getPixelRatio();
     this.aoPass.setSize(w * pr, h * pr);
     (this.lensPass.uniforms as Record<string, THREE.IUniform>).uAspect.value = w / h;
     this.labelRenderer.setSize(w, h);
+    this.requestRender(600);
   }
 
   setActiveWell(well: Well) {
@@ -343,7 +359,32 @@ export class Engine {
     this.wellbore?.setRadialScale(s);
   }
 
+  // ---- render on demand: the scene is drawn only when something can have changed
+  private renderUntil = 0;
+  private lastRenderAt = 0;
+  private lastView = new THREE.Matrix4();
+  private lastProj = new THREE.Matrix4();
+  /** Keep drawing for `ms` (state changed, input on the canvas, data arrived). */
+  requestRender(ms = 300) {
+    this.renderUntil = Math.max(this.renderUntil, performance.now() + ms);
+  }
+  private shouldRender(animating: boolean): boolean {
+    const now = performance.now();
+    this.camera.updateMatrixWorld();
+    const moved = !this.lastView.equals(this.camera.matrixWorld) || !this.lastProj.equals(this.camera.projectionMatrix);
+    // a slow heartbeat catches anything that changed without saying so
+    if (!moved && !animating && now > this.renderUntil && now - this.lastRenderAt < 1000) return false;
+    this.lastView.copy(this.camera.matrixWorld);
+    this.lastProj.copy(this.camera.projectionMatrix);
+    this.lastRenderAt = now;
+    return true;
+  }
+
   start() {
+    const cv = this.renderer.domElement;
+    for (const ev of ['pointerdown', 'pointermove', 'wheel']) cv.addEventListener(ev, () => this.requestRender(600), { passive: true });
+    window.addEventListener('keydown', () => this.requestRender(600));
+    window.addEventListener('resize', () => this.requestRender(600));
     const loop = (ts: number) => {
       requestAnimationFrame(loop);
       this.timer.update(ts);
@@ -445,6 +486,7 @@ export class Engine {
       this.mud.update(this.camera, t, true, Math.max(3, r * 3.2), this.renderer.domElement.height);
     } else this.mud.update(this.camera, t, false, 1, 1);
     this.onFrame?.(dt);
+    if (!this.shouldRender(this.rig.playing || tfx)) return;
     wb?.cullTubes(this.camera, this.renderer.domElement.height);
     this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);

@@ -149,7 +149,10 @@ function Body({ app }: { app: App }) {
           <Note>No downhole gauge data.</Note>
         )}
       </Section>
-      <Note>Volumes are the operator-reported, allocated well volumes from the Volve production database (NPD reporting). Production for the F-11 wellbores is reported at the well level (NPD wellbore 15/9-F-11).</Note>
+      <Note>
+        Volumes are the operator-reported, allocated well volumes from the Volve production database (NPD reporting). Production for the F-11 wellbores is reported at the well level (NPD wellbore
+        15/9-F-11).
+      </Note>
     </>
   );
 }

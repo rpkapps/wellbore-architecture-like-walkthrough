@@ -5,13 +5,116 @@
  * Tecton; the rules below style only what three.js puts in the scene (the
  * WebGL canvas and the CSS2D labels pinned to wells, tops and tools).
  */
+/*
+ * App tokens on top of Tecton's theme. Tecton is rem-based, so the root size
+ * is the density knob: text, controls and spacing scale together (the
+ * personalisation dialog sets --ui-root). The accent is the vivid step of
+ * Tecton's violet primary, for what must stand out: cursor, playhead,
+ * selection, slider fill.
+ */
+@theme inline {
+  --color-ui-accent: var(--ui-accent);
+  --color-fg-1: var(--fg-1);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-panel: var(--panel-bg);
+}
+
 @layer base {
+  :root {
+    --ui-root: 14px;
+    --ui-accent: var(--tecton-palette-orchid-460);
+    /* three text levels: values and titles / labels / captions and section headers */
+    --fg-1: var(--foreground);
+    --fg-2: var(--tecton-palette-gray-830);
+    --fg-3: var(--tecton-palette-gray-460);
+    /* panels float over the 3D view; opacity and blur are personal settings */
+    --panel-alpha: 1;
+    --panel-blur: 0px;
+    --panel-bg: color-mix(in oklab, var(--background) calc(var(--panel-alpha) * 100%), transparent);
+  }
+  html {
+    font-size: var(--ui-root);
+  }
   html,
   body,
   #app {
     height: 100%;
     overflow: hidden;
   }
+  /* thin scrollbars that stay out of the way until the pointer is over the pane */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  *:hover {
+    scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+  }
+  :root[data-reduce-motion] *,
+  :root[data-reduce-motion] *::before,
+  :root[data-reduce-motion] *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
+}
+
+/* text roles: use these instead of ad-hoc sizes and greys */
+@utility type-title {
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+@utility type-section {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+@utility type-label {
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 400;
+  color: var(--fg-2);
+}
+@utility type-value {
+  font-family: var(--font-mono);
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-1);
+}
+@utility type-key {
+  font-family: var(--font-mono);
+  font-size: 1.143rem;
+  line-height: 1.45rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+@utility type-caption {
+  font-size: 0.786rem;
+  line-height: 1.05rem;
+  color: var(--fg-3);
+}
+@utility type-unit {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--fg-3);
+}
+/* a floating panel's surface */
+@utility surface-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--panel-blur));
+  border: 1px solid var(--border-subtle);
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--foreground) 4%, transparent) inset,
+    0 8px 24px -8px rgb(0 0 0 / 0.55);
 }
 
 @layer components {
