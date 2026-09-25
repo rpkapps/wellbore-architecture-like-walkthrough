@@ -14,7 +14,7 @@ import {
   ScissorsIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import type { App } from '../app';
 import { ProvBadge } from '../prov';
 import { useRev, useSignal } from '../signal';
@@ -112,17 +112,9 @@ export function usePanels(app: App): Map<string, PanelDef> {
 
 const toolDefs = new WeakMap<ToolWindow, PanelDef>();
 
-/** A tool window's content: its provenance and own controls on a row, then its body (canvases redraw on resize). */
+/** A tool window's content: its provenance and own controls on a row, then its body (its canvases observe their own size). */
 function ToolBody({ win }: { win: ToolWindow }) {
   useRev(win.rev);
-  const el = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const ro = new ResizeObserver(() => win.onResize?.());
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, [win]);
   return (
     <>
       {(win.opts.badge || win.opts.header) && (
@@ -131,9 +123,7 @@ function ToolBody({ win }: { win: ToolWindow }) {
           {win.opts.header?.()}
         </div>
       )}
-      <div ref={el} className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
-        {win.opts.body()}
-      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">{win.opts.body()}</div>
     </>
   );
 }

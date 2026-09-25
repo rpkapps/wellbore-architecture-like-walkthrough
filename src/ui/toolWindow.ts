@@ -29,8 +29,6 @@ export const activeWindow = new Signal<string | null>(null);
 export class ToolWindow {
   /** bump when the body or header content changes */
   readonly rev = new Rev(SCENE);
-  /** body resized (and once after it is shown): redraw canvases */
-  onResize?: () => void;
 
   constructor(readonly opts: ToolWindowOptions) {
     toolWindows.update((l) => [...l, this]);
