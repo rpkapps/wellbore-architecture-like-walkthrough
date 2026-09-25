@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { z } from 'zod';
+import { selectionInput, type Selection, type SelectionKind } from '../ui/selection';
 
 /**
  * Every operation a person can do in the app, described once: the command
@@ -61,7 +62,39 @@ export interface Action<S extends z.ZodType = z.ZodType, Ctx = unknown> {
   choices?: (ctx: Ctx) => ActionChoice<ActionInput>[];
   /** a single typed argument asked for in the palette ("Go to depth → 3,200") */
   prompt?: { label: string; placeholder?: string; parse: (text: string, ctx: Ctx) => ActionInput | null };
+  /**
+   * The kinds of selected object it acts on, like a VS Code when-clause: the
+   * right-click menus, Properties and (later) the task bar list it for them,
+   * with the selected object filled in as its input.
+   */
+  appliesTo?: SelectionKind[];
+  /**
+   * How it acts on one selected object. By convention the input is the
+   * object's id under its kind (`{ formation: 'hugin' }`, `{ well: id }`,
+   * see `selectionInput`); return another `input` when the schema is shaped
+   * differently, a `label` for the menu ("Hide" rather than the title), and
+   * `checked` for a toggle that is on. Return null when it does not apply to
+   * this particular object (opening the well that is already open).
+   */
+  onSelection?: (sel: Selection, ctx: Ctx) => SelectionBinding | null;
   run: (ctx: Ctx, input: NoInfer<z.output<S>>) => unknown | Promise<unknown>;
+}
+
+/** What `onSelection` returns: the input for the selected object and how its menu entry reads. */
+export interface SelectionBinding {
+  input?: ActionInput;
+  label?: string;
+  checked?: boolean;
+}
+
+/** An action ready to run on the selected object: a right-click menu entry. */
+export interface SelectionEntry<Ctx> {
+  action: AnyAction<Ctx>;
+  /** the menu label: the action's own for this object, or its title */
+  label: string;
+  input: ActionInput | undefined;
+  checked?: boolean;
+  run: () => Promise<RunResult>;
 }
 
 export type AnyAction<Ctx> = Action<z.ZodType, Ctx>;
@@ -126,6 +159,31 @@ export class ActionRegistry<Ctx> {
     return r;
   }
 
+  /**
+   * The actions that apply to a selected object, in registration order, each
+   * with its input filled in: those whose `appliesTo` names the selection's
+   * kind, that can run now, that do not decline this object and whose input
+   * passes their schema. Right-click menus, Properties and the task bar list these.
+   */
+  actionsFor(sel: Selection | null): SelectionEntry<Ctx>[] {
+    if (!sel) return [];
+    const out: SelectionEntry<Ctx>[] = [];
+    for (const a of this.map.values()) {
+      if (!a.appliesTo?.includes(sel.kind) || !this.enabled(a)) continue;
+      let b: SelectionBinding | null;
+      try {
+        b = a.onSelection ? a.onSelection(sel, this.ctx) : {};
+      } catch {
+        b = null;
+      }
+      if (!b) continue;
+      const input = a.input ? (b.input ?? selectionInput(sel)) : undefined;
+      if (a.input && !a.input.safeParse(input).success) continue;
+      out.push({ action: a, label: b.label ?? a.title, input, checked: b.checked, run: () => this.run(a.id, input) });
+    }
+    return out;
+  }
+
   /** Called after every run (a history, an assistant's transcript, analytics). */
   onRun(fn: (id: string, input: unknown, r: RunResult) => void) {
     this.listeners.add(fn);
@@ -139,6 +197,8 @@ export class ActionRegistry<Ctx> {
       description: `${a.title}. ${a.description}`,
       input_schema: a.input ? z.toJSONSchema(a.input) : { type: 'object', properties: {} },
       needsApproval: !!a.needsApproval,
+      // the kinds of selected object it acts on (app.state names the selection)
+      ...(a.appliesTo ? { appliesTo: a.appliesTo } : {}),
     }));
   }
 }

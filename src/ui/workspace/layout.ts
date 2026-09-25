@@ -71,23 +71,23 @@ export const PRESETS: { id: PresetId; label: string; build: () => Layout }[] = [
   {
     id: 'walkthrough',
     label: 'Walkthrough',
-    build: () => ({ v: 1, left: col(300, ['scene', 'interpretation', 'features']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
+    build: () => ({ v: 1, left: col(300, ['scene', 'interpretation', 'features'], ['properties']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
   },
   {
     id: 'petrophysics',
     label: 'Petrophysics',
-    build: () => ({ v: 1, left: col(320, ['interpretation'], ['scene', 'features']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
+    build: () => ({ v: 1, left: col(320, ['interpretation'], ['scene', 'features'], ['properties']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
   },
   {
     id: 'geosteering',
     label: 'Geosteering',
-    build: () => ({ v: 1, left: col(280, ['scene', 'interpretation', 'features']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
+    build: () => ({ v: 1, left: col(280, ['scene', 'interpretation', 'features'], ['properties']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
   },
 ];
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
-  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
+  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
 }
 
 export function locate(L: Layout, id: string): Place | null {
@@ -374,7 +374,7 @@ export class Workspace {
     const inNext = new Set(openPanels(M));
     let out = M;
     for (const id of openPanels(this.value))
-      if (!inNext.has(id) && available(id) && !['scene', 'interpretation', 'features', 'logs'].includes(id)) out = attach(out, id, { kind: 'zone', zone: defaultZone(id) });
+      if (!inNext.has(id) && available(id) && !['scene', 'properties', 'interpretation', 'features', 'logs'].includes(id)) out = attach(out, id, { kind: 'zone', zone: defaultZone(id) });
     this.layout.set(out);
   }
 

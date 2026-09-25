@@ -2,7 +2,7 @@ import { Canvas, CanvasSurface } from '@tecton/react/tecton/canvas';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Engine } from '../../scene/engine';
 import type { App } from '../app';
-import { useSignal } from '../signal';
+import { useSignal, useSignalPart } from '../signal';
 import { activeWindow, openWindows, toolWindows } from '../toolWindow';
 import { WorkspaceFrame } from '../workspace/Frame';
 import { openPanels } from '../workspace/layout';
@@ -12,12 +12,13 @@ import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
 import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
+import { SelectionContextMenu } from './SelectionMenu';
 import { Morph } from './overlay';
 import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewToolbar } from './ViewControls';
 
-const BUILTIN = new Set(['scene', 'interpretation', 'features', 'logs']);
+const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'features', 'logs']);
 const TIMELINE_H = 64;
 
 /**
@@ -43,6 +44,7 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
         timelineHeight={chrome ? TIMELINE_H : 0}
         onFree={(f) => app.engine?.setInsets(f.left, f.right, f.bottom)}
       />
+      {ready && <SelectionContextMenu app={app} />}
     </div>
   );
 });
@@ -104,7 +106,10 @@ function Viewport({ app }: { app: App }) {
  */
 function Overlays({ app }: { app: App }) {
   const presentation = useSignal(app.presentation);
-  const inspecting = useSignal(app.inspector) !== null;
+  // the details card stands in for Properties while that panel is not showing
+  const properties = useSignalPart(app.workspace.layout, () => app.workspace.isShown('properties'));
+  const hidden = useSignal(app.workspace.hidden);
+  const inspecting = useSignal(app.inspector) !== null && !(properties && !hidden);
   // the same elements every time: opening the inspector re-renders these wrappers, not the widgets
   const legend = useMemo(() => <Legend app={app} />, [app]);
   const inspector = useMemo(() => <InspectorCard app={app} />, [app]);

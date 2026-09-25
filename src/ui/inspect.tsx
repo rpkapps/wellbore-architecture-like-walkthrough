@@ -7,9 +7,11 @@ import { Trajectory } from '../data/trajectory';
 import type { HorizonGrid, Zone } from '../data/types';
 import type { PickResult } from '../scene/engine';
 import type { Fracture } from '../scene/wellbore';
+import { FEATURE_BY_ID, type FeatureId } from '../features/registry';
 import type { App } from './app';
 import { fmt } from './dom';
 import type { Provenance } from './prov';
+import type { Selection } from './selection';
 
 export type InspectorRow = [string, string, (Provenance | '')?] | 'sep' | { h: string };
 
@@ -18,10 +20,12 @@ export interface InspectorAction {
   primary?: boolean;
   /** a toggle: read when the card renders, so the button follows the scene */
   pressed?: () => boolean;
+  /** Properties offers this as a setting (a switch), so it shows the button on the floating card only */
+  setting?: boolean;
   onPress: () => void;
 }
 
-/** What the inspector card shows for a picked object. */
+/** What the details card and Properties show for the selected object. */
 export interface InspectorView {
   title: string;
   sub: string;
@@ -38,73 +42,135 @@ function view(title: string, sub: string, color: string, rows: Row[], desc?: Rea
   return { title, sub, color, rows, desc, actions, badge };
 }
 
-/** Builds the inspector read-out for whatever was clicked in the scene. */
+/** Builds the read-out of the selected object, and turns a click in the 3D view into a selection. */
 class Inspect {
   constructor(private app: App) {}
 
-  pick(p: PickResult): InspectorView | null {
+  /**
+   * The object a click in the 3D view selected. Parts of the near-well
+   * geometry belong to the well; the platform to the sea layer it is drawn with.
+   */
+  selectionOf(p: PickResult): Selection | null {
     const d = p.object.userData;
+    const w = this.app.engine.activeWell;
+    const pt = { x: p.point.x, y: p.point.y, z: p.point.z };
     switch (p.kind) {
       case 'wall':
-        return this.wellAt(p.md ?? this.app.engine.rig.md);
+        return { kind: 'well', id: w.id, well: w.id, md: p.md ?? this.app.engine.rig.md };
       case 'casing':
-        return this.casing(d.casing as CasingString);
+        return { kind: 'well', id: w.id, well: w.id, part: { type: 'casing', index: d.index as number } };
       case 'cement':
-        return this.casing(d.casing as CasingString, true);
-      case 'formation':
-        return this.formation(d.formationId as string, p.point, d.top as HorizonGrid, d.base as HorizonGrid | null);
+        return { kind: 'well', id: w.id, well: w.id, part: { type: 'cement', index: Math.max(0, w.casing.indexOf(d.casing as CasingString)) } };
       case 'fracture':
-        return this.fracture(this.app.engine.wellbore!.fractures[d.index as number]);
-      case 'top':
-        return this.zone(d.zone as Zone);
-      case 'pay':
-        return this.pay(d.interval as { top: number; base: number });
+        return { kind: 'well', id: w.id, well: w.id, part: { type: 'fracture', index: d.index as number } };
+      case 'formation':
+        return { kind: 'formation', id: d.formationId as string, point: pt };
+      case 'top': {
+        const z = d.zone as Zone;
+        return { kind: 'pick', id: z.formationId, well: w.id, md: z.topMD };
+      }
+      case 'pay': {
+        const iv = d.interval as { top: number; base: number };
+        return { kind: 'interval', id: `pay:${iv.top.toFixed(1)}-${iv.base.toFixed(1)}`, well: w.id, top: iv.top, base: iv.base };
+      }
+      case 'contextWell':
+        return { kind: 'well', id: String(d.name) };
+      case 'detailWell':
+        return { kind: 'well', id: d.wellId as string };
+      case 'platform':
+        return { kind: 'overlay', id: 'sea' };
       default:
         return null;
-      case 'contextWell':
-        return view(
-          `15/9-${String(d.name).replace('15/9-', '')}`,
-          'Volve wellbore — context',
-          '#8795a3',
-          [d.status === 'definitive' ? ['Trajectory', 'definitive directional survey', 'measured'] : ['Trajectory', 'from pick coordinates', 'reconstructed'], ['Logs', 'not in demo package', '']],
-          d.status === 'definitive'
-            ? 'Equinor definitive directional survey (positions from the survey UTM coordinates). Its formation picks also constrain the regional structural surfaces.'
-            : 'Trajectory reconstructed through the official formation-pick coordinates (MD, TVD, easting, northing) of this wellbore. Its picks also constrain the regional structural surfaces.',
-        );
-      case 'detailWell': {
-        const w = this.app.field.wells.find((x) => x.id === d.wellId)!;
-        return view(
-          w.name,
-          w.summary,
-          '#7fe3ff',
-          [
-            ['Survey', w.trajectory.status, w.trajectory.status === 'reconstructed' ? 'reconstructed' : 'measured'],
-            ['TD', `${fmt.n(w.tdMD, 1)} m MD`, 'measured'],
-            ['Logs', w.lasFile ?? '—', w.lasFile ? 'measured' : ''],
-            ['Operator CPI', w.cpiFile ? 'available' : '—', w.cpiFile ? 'interpreted' : ''],
-            ['Production', w.productionWell ?? '—', w.productionWell ? 'measured' : ''],
-          ],
-          w.trajectory.note,
-          [{ label: 'Open this well', primary: true, onPress: () => this.app.selectWell(w.id) }],
-        );
-      }
-      case 'platform': {
-        const m = this.app.field.meta;
-        return view(
-          m.facility,
-          `${m.name} field · ${m.block} · ${m.country}`,
-          '#ffb547',
-          [
-            ['Operator', m.operator, ''],
-            ['CRS', m.crs, ''],
-            ['Origin E / N', `${m.originE.toFixed(1)} / ${m.originN.toFixed(1)}`, ''],
-            ['Datum', `${m.datum} +${m.datumElevation} m`, 'measured'],
-            ['Water depth', `${m.waterDepth} m`, 'measured'],
-          ],
-          'Platform geometry is a stylised representation of a jack-up production unit; well slot positions are real.',
-        );
-      }
     }
+  }
+
+  /** The details of a selected object (null when it no longer exists). */
+  view(sel: Selection): InspectorView | null {
+    const w = this.app.engine.activeWell;
+    // a point, a part, a pick or an interval of a well that is no longer the active one
+    if (sel.well && sel.well !== w.id) return null;
+    switch (sel.kind) {
+      case 'well': {
+        if (sel.md !== undefined) return this.wellAt(sel.md);
+        if (sel.part?.type === 'casing' || sel.part?.type === 'cement') {
+          const c = w.casing[sel.part.index];
+          return c ? this.casing(c, sel.part.type === 'cement') : null;
+        }
+        if (sel.part?.type === 'fracture') {
+          const fr = this.app.engine.wellbore?.fractures[sel.part.index];
+          return fr ? this.fracture(fr) : null;
+        }
+        return this.well(sel.id);
+      }
+      case 'formation':
+        return this.formation(sel.id, sel.point);
+      case 'pick': {
+        const z = w.zones.find((x) => x.formationId === sel.id && (sel.md === undefined || Math.abs(x.topMD - sel.md) < 0.5));
+        return z ? this.zone(z) : null;
+      }
+      case 'interval':
+        return sel.top !== undefined && sel.base !== undefined && w.petro && w.logs ? this.pay({ top: sel.top, base: sel.base }) : null;
+      case 'overlay':
+      case 'contact':
+        return this.overlay(sel.id);
+    }
+  }
+
+  /** A wellbore of the field (logs, survey, production), or a context wellbore (trajectory only). */
+  well(id: string): InspectorView | null {
+    const w = this.app.field.wells.find((x) => x.id === id);
+    if (!w) {
+      const c = this.app.field.context.find((x) => x.name === id);
+      if (!c) return null;
+      return view(
+        `15/9-${c.name.replace('15/9-', '')}`,
+        'Volve wellbore — context',
+        '#8795a3',
+        [c.status === 'definitive' ? ['Trajectory', 'definitive directional survey', 'measured'] : ['Trajectory', 'from pick coordinates', 'reconstructed'], ['Logs', 'not in demo package', '']],
+        c.status === 'definitive'
+          ? 'Equinor definitive directional survey (positions from the survey UTM coordinates). Its formation picks also constrain the regional structural surfaces.'
+          : 'Trajectory reconstructed through the official formation-pick coordinates (MD, TVD, easting, northing) of this wellbore. Its picks also constrain the regional structural surfaces.',
+      );
+    }
+    const active = w === this.app.engine.activeWell;
+    return view(
+      w.name,
+      active ? `${w.summary} · open` : w.summary,
+      '#7fe3ff',
+      [
+        ['Survey', w.trajectory.status, w.trajectory.status === 'reconstructed' ? 'reconstructed' : 'measured'],
+        ['TD', `${fmt.n(w.tdMD, 1)} m MD`, 'measured'],
+        ['Logs', w.lasFile ?? '—', w.lasFile ? 'measured' : ''],
+        ['Operator CPI', w.cpiFile ? 'available' : '—', w.cpiFile ? 'interpreted' : ''],
+        ['Production', w.productionWell ?? '—', w.productionWell ? 'measured' : ''],
+      ],
+      w.trajectory.note,
+      active ? [] : [{ label: 'Open this well', primary: true, onPress: () => this.app.selectWell(w.id) }],
+    );
+  }
+
+  /** A scene layer (the near-well geometry, labels, sea…) or an optional overlay feature. */
+  overlay(id: string): InspectorView | null {
+    const f = FEATURE_BY_ID.get(id as FeatureId);
+    if (f) return view(f.name, `Overlay · ${f.group}`, '#7fe3ff', [], f.desc, [], f.prov ? { prov: f.prov } : undefined);
+    if (id === 'sea') {
+      const m = this.app.field.meta;
+      return view(
+        'Sea, water column & platform',
+        `${m.facility} · ${m.name} field · ${m.block} · ${m.country}`,
+        '#ffb547',
+        [
+          ['Operator', m.operator, ''],
+          ['CRS', m.crs, ''],
+          ['Origin E / N', `${m.originE.toFixed(1)} / ${m.originN.toFixed(1)}`, ''],
+          ['Datum', `${m.datum} +${m.datumElevation} m`, 'measured'],
+          ['Water depth', `${m.waterDepth} m`, 'measured'],
+        ],
+        'Platform geometry is a stylised representation of a jack-up production unit; well slot positions are real.',
+      );
+    }
+    const layer = SCENE_LAYERS[id];
+    return layer ? view(layer.title, layer.sub, '#9aa1a8', [], layer.desc, [], layer.prov ? { prov: layer.prov } : undefined) : null;
   }
 
   wellAt(md: number): InspectorView {
@@ -244,12 +310,13 @@ class Inspect {
       </>,
       [
         // isolate: every other formation fades to a ghost so this one stands alone; press again to bring them back
-        { label: 'Isolate', pressed: () => app.engine.geology.isolatedId === id, onPress: () => app.isolate(app.engine.geology.isolatedId === id ? null : id) },
+        { label: 'Isolate', setting: true, pressed: () => app.engine.geology.isolatedId === id, onPress: () => app.isolate(app.engine.geology.isolatedId === id ? null : id) },
         {
           label: 'Hide',
+          setting: true,
           onPress: () => {
             app.setLayer(id, { visible: false });
-            app.inspector.set(null);
+            app.select(null);
           },
         },
       ],
@@ -346,8 +413,21 @@ function nearestIdx(d: Float64Array, md: number) {
   return md - d[lo] < d[hi] - md ? lo : hi;
 }
 
+/** Layers of the Scene tree that have no feature of their own: what Properties says about them. */
+const SCENE_LAYERS: Record<string, { title: string; sub: string; desc: string; prov?: Provenance }> = {
+  casing: { title: 'Casing & cement', sub: 'Near-well geometry', desc: 'Casing strings from the bit sizes and shoe depths, with a schematic cement sheath.', prov: 'reconstructed' },
+  fractures: { title: 'Natural fractures', sub: 'Near-well geometry', desc: 'Illustrative fractures in the chalk; the public package has no image-log data.', prov: 'schematic' },
+  markers: { title: 'Tops & depth marks', sub: 'Near-well geometry', desc: 'Formation tops of the active well and depth ticks along the hole.', prov: 'interpreted' },
+  labels: { title: 'Labels', sub: 'Scene layer', desc: 'Names of the wells, formations and the platform in the 3D view.' },
+  otherWells: { title: 'Other Volve wellbores', sub: 'Scene layer', desc: 'Every other Volve wellbore: the logged wells in colour (click one to open it), context wellbores in grey.' },
+  contours: { title: 'Structural contours (25 m)', sub: 'Scene layer', desc: 'Depth contours on the top of each formation surface, every 25 m.', prov: 'interpreted' },
+};
+
 export const inspect = {
-  pick: (app: App, p: PickResult) => new Inspect(app).pick(p),
+  /** the selection a click in the 3D view makes */
+  selectionOf: (app: App, p: PickResult) => new Inspect(app).selectionOf(p),
+  /** the details of a selected object */
+  view: (app: App, sel: Selection) => new Inspect(app).view(sel),
   wellAt: (app: App, md: number) => new Inspect(app).wellAt(md),
   formation: (app: App, id: string) => new Inspect(app).formation(id),
 };

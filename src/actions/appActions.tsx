@@ -12,6 +12,7 @@ import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
 import { PRESETS, type PresetId } from '../ui/workspace/layout';
 import { describeLocation } from '../ui/workspace/where';
+import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema } from '../ui/selection';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -19,14 +20,23 @@ import { defineAction, type Action, type AnyAction } from './registry';
  * from the palette, a key, a button or (later) an assistant does exactly the
  * same thing. Inputs are objects (tool calls always send one); enumerations
  * list their values so a model can pick without guessing.
+ *
+ * An action that acts on a selected object names its kinds in `appliesTo`;
+ * the right-click menus and Properties list it with the object filled in. Its
+ * input then takes the object's id under the kind's name (`{ formation }`,
+ * `{ well }`), or `onSelection` maps the selection to the input it has.
  */
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
+/** Scene-tree layers that are display options: their keys in `view.display` and `scene.wellbore_layers`. */
+const DISPLAY_LAYERS = ['labels', 'otherWells', 'sea', 'contours'] as const;
+const WELLBORE_LAYERS = ['casing', 'fractures', 'markers'] as const;
+const isFeature = (id: string): id is FeatureId => FEATURE_IDS.includes(id as FeatureId);
 const NUMERIC_PARAMS = (Object.keys(DEFAULT_PARAMS) as (keyof PetroParams)[]).filter((k) => typeof DEFAULT_PARAMS[k] === 'number') as [string, ...string[]];
 
 /**
@@ -81,7 +91,7 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'app.state',
       title: 'What the app is showing',
-      description: 'The active well, the camera position along it, the colouring, open panels and features on. Read this before acting.',
+      description: 'The active well, the camera position along it, the colouring, the selected object, open panels and features on. Read this before acting.',
       category: 'View',
       hidden: true,
       run: (app) => {
@@ -94,6 +104,8 @@ export function appActions(): AnyAction<App>[] {
           colourBy: e.mode,
           colormap: app.colormapName,
           isolatedFormation: e.geology.isolatedId,
+          // what is selected (the Properties panel and the right-click menu follow it); actions with `appliesTo` act on it
+          selection: app.selection.value ? { ...app.selection.value, name: app.inspector.value?.title } : null,
           panels: Object.keys(panelIds()).filter((id) => app.workspace.isShown(id)),
           featuresOn: FEATURES.filter((f) => app.flags.on(f.id)).map((f) => f.id),
           workspace: app.workspace.current.value,
@@ -180,6 +192,11 @@ export function appActions(): AnyAction<App>[] {
           return Number.isFinite(v) ? { md: v } : null;
         },
       },
+      appliesTo: ['well', 'pick', 'interval'],
+      onSelection: (sel, app) => {
+        const md = depthOf(sel);
+        return md !== null && sel.well === app.engine.activeWell.id ? { input: { md: sel.kind === 'pick' ? md + 1 : md }, label: sel.kind === 'pick' ? 'Travel to top' : 'Travel here' } : null;
+      },
       run: (app, { md }) => {
         const max = app.engine.rig.mdMax;
         const to = Math.min(md, max);
@@ -224,6 +241,9 @@ export function appActions(): AnyAction<App>[] {
       keywords: ['wellbore', 'switch'],
       input: z.object({ id: z.string().meta({ description: 'Well id, from the choices' }) }),
       choices: (app) => app.selectableWells().map((w) => ({ label: w.name, input: { id: w.id }, current: w.id === app.engine.activeWell.id })),
+      appliesTo: ['well'],
+      // its input predates the convention: `{ id }`; the open well has nothing to open
+      onSelection: (sel, app) => (sel.id !== app.engine.activeWell.id && app.selectableWells().some((w) => w.id === sel.id) ? { input: { id: sel.id }, label: 'Open well' } : null),
       run: (app, { id }) => {
         if (!app.selectableWells().some((w) => w.id === id)) throw new Error(`No well "${id}".`);
         app.selectWell(id);
@@ -272,7 +292,33 @@ export function appActions(): AnyAction<App>[] {
             ['contours', 'structural contours'],
           ] as const
         ).map(([k, l]) => ({ label: `${app.display[k] ? 'Hide' : 'Show'} ${l}`, input: { [k]: !app.display[k] } })),
+      appliesTo: ['overlay'],
+      onSelection: (sel, app) => {
+        const k = DISPLAY_LAYERS.find((x) => x === sel.id);
+        return k ? { input: { [k]: !app.display[k] }, label: app.display[k] ? 'Hide' : 'Show' } : null;
+      },
       run: (app, d) => app.setDisplay(d),
+    }),
+    A({
+      id: 'scene.wellbore_layers',
+      title: 'Near-well geometry',
+      description: 'Shows or hides the casing and cement, the natural fractures, and the formation tops and depth marks along the active well.',
+      category: 'Scene',
+      input: z.object({ casing: z.boolean().optional(), fractures: z.boolean().optional(), markers: z.boolean().optional() }),
+      choices: (app) =>
+        (
+          [
+            ['casing', 'casing and cement'],
+            ['fractures', 'natural fractures'],
+            ['markers', 'tops and depth marks'],
+          ] as const
+        ).map(([k, l]) => ({ label: `${app.wellbore[k] ? 'Hide' : 'Show'} ${l}`, input: { [k]: !app.wellbore[k] } })),
+      appliesTo: ['overlay'],
+      onSelection: (sel, app) => {
+        const k = WELLBORE_LAYERS.find((x) => x === sel.id);
+        return k ? { input: { [k]: !app.wellbore[k] }, label: app.wellbore[k] ? 'Hide' : 'Show' } : null;
+      },
+      run: (app, d) => app.setWellboreDisplay(d),
     }),
 
     // ------------------------------------------------------------------ scene
@@ -301,6 +347,11 @@ export function appActions(): AnyAction<App>[] {
       category: 'Scene',
       where: 'Scene › Layers',
       input: z.object({ formation: z.enum(FORMATIONS), visible: z.boolean().optional(), opacity: z.number().min(0).max(1).optional() }),
+      appliesTo: ['formation'],
+      onSelection: (sel, app) => {
+        const visible = app.engine.geology.state.get(sel.id)?.visible;
+        return visible === undefined ? null : { input: { formation: sel.id, visible: !visible }, label: visible ? 'Hide' : 'Show' };
+      },
       run: (app, { formation, visible, opacity }) => app.setLayer(formation, { visible, opacity }),
     }),
     A({
@@ -314,17 +365,44 @@ export function appActions(): AnyAction<App>[] {
         ...(app.engine.geology.isolatedId ? [{ label: 'Show all formations', input: { formation: null } }] : []),
         ...MODEL_HORIZONS.map((id) => ({ label: formationName(id), input: { formation: id }, current: app.engine.geology.isolatedId === id })),
       ],
+      appliesTo: ['formation', 'pick'],
+      // a toggle on the selected formation: pressed again, every formation comes back
+      onSelection: (sel, app) => {
+        const id = formationOf(sel)!;
+        const on = app.engine.geology.isolatedId === id;
+        return { input: { formation: on ? null : id }, label: 'Isolate', checked: on };
+      },
       run: (app, { formation }) => app.isolate(formation),
     }),
     A({
       id: 'scene.inspect',
       title: 'Show formation details',
-      description: 'Opens the details card of a formation (age, lithology, depths, pay in the active well).',
+      description: 'Selects a formation, so Properties (or the details card) shows it: age, lithology, depths, pay in the active well.',
       category: 'Scene',
       where: 'Scene › Layers › formation ⋯',
       input: z.object({ formation: z.enum(FORMATIONS) }),
       choices: () => MODEL_HORIZONS.map((id) => ({ label: formationName(id), input: { formation: id } })),
+      // from a formation top in a well to the formation itself
+      appliesTo: ['pick'],
+      onSelection: (sel) => ({ input: { formation: sel.id }, label: `Select ${formationName(sel.id)}` }),
       run: (app, { formation }) => app.inspectFormation(formation),
+    }),
+    A({
+      id: 'selection.set',
+      title: 'Select',
+      description:
+        'Selects an object, as a click in the 3D view or the Scene tree does: a well (id), a formation (id), a formation top in the active well (pick: formation id and md), an overlay or scene layer (feature or layer id), a contact, or a depth interval (top, base). Properties and the right-click menu follow it; null clears it.',
+      category: 'Scene',
+      hidden: true,
+      input: z.object({ selection: SelectionSchema.nullable(), show: z.boolean().optional().meta({ description: 'Also bring up the Properties panel' }) }),
+      run: (app, { selection, show }) => {
+        // what exists in one well belongs to the active one
+        const sel = selection && (selection.kind === 'pick' || selection.kind === 'interval' || selection.md !== undefined || selection.part) ? { well: app.engine.activeWell.id, ...selection } : selection;
+        if (sel && !app.inspectorFor(sel)) throw new Error(`Nothing to select as ${sel.kind} "${sel.id}".`);
+        app.select(sel);
+        if (show) withTransition(() => app.workspace.open('properties'));
+        return { selection: app.selection.value, name: app.inspector.value?.title ?? null };
+      },
     }),
 
     // ------------------------------------------------------------------ panels & workspace
@@ -391,6 +469,21 @@ export function appActions(): AnyAction<App>[] {
         const tool = toolWindows.value.find((w) => w.opts.id === panel);
         if (tool) tool.close();
         else withTransition(() => app.workspace.close(panel));
+      },
+    }),
+    A({
+      id: 'selection.properties',
+      title: 'Show properties',
+      description: 'Brings up the Properties panel: the details and settings of the selected object.',
+      category: 'Panels',
+      keywords: ['inspector', 'details', 'settings', 'selection'],
+      // without a selection it shows the current one (the palette); from a menu, the object the menu is for
+      input: z.object({ selection: SelectionSchema.optional() }).optional(),
+      appliesTo: [...SELECTION_KINDS],
+      onSelection: (sel) => ({ input: { selection: sel }, label: 'Properties' }),
+      run: (app, input) => {
+        if (input?.selection) app.select(input.selection);
+        withTransition(() => app.workspace.open('properties'));
       },
     }),
     A({
@@ -464,6 +557,9 @@ export function appActions(): AnyAction<App>[] {
       where: 'Features',
       input: z.object({ feature: z.enum(FEATURE_IDS), on: z.boolean() }),
       choices: (app) => FEATURES.map((f) => ({ label: `${app.flags.on(f.id) ? 'Turn off' : 'Turn on'} ${f.name}`, input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group], description: f.desc })),
+      // an overlay or a contact drawn by a feature: switching the feature shows or hides it
+      appliesTo: ['overlay', 'contact'],
+      onSelection: (sel, app) => (isFeature(sel.id) ? { input: { feature: sel.id, on: !app.flags.on(sel.id) }, label: app.flags.on(sel.id) ? 'Turn off' : 'Turn on' } : null),
       run: (app, { feature, on }) => app.flags.set(feature, on),
     }),
     A({

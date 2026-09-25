@@ -45,7 +45,9 @@ export function HelpDialog({ app, isOpen, onOpenChange }: { app: App; isOpen: bo
             <Row label="Up / down" keys={k('E', 'Q')} />
             <Row label="Boost" keys={k('Shift')} />
             <Row label="Focus point" keys={text('double-click')} />
-            <Row label="Inspect" keys={text('click anything')} />
+            <Row label="Select (Properties)" keys={text('click anything')} />
+            <Row label="Its actions" keys={text('right-click')} />
+            <Row label="Clear the selection" keys={k('Esc')} />
           </Section>
         </div>
         <Separator emphasis="subtle" />
