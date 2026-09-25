@@ -9,9 +9,11 @@ import { IconButton } from '../icon-button';
 /**
  * The surface of everything that floats over the 3D view: the app background
  * (with the opacity and blur the personalisation sets), a hairline border and
- * a soft drop shadow.
+ * a soft drop shadow. The backdrop blur applies only when one is set (see
+ * `applyPrefs`): even at 0px a backdrop filter makes the compositor redraw
+ * what is behind each panel.
  */
-export const SURFACE = 'rounded-lg! border-border-subtle! bg-panel! shadow-[0_10px_28px_-10px_rgb(0_0_0/0.65)]! backdrop-blur-(--panel-blur)';
+export const SURFACE = 'rounded-lg! border-border-subtle! bg-panel! shadow-[0_10px_28px_-10px_rgb(0_0_0/0.65)]! [:root[data-panel-blur]_&]:backdrop-blur-(--panel-blur)';
 
 /**
  * Widgets floating over the 3D view collapse to a one-line chip that keeps

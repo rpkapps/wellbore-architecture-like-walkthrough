@@ -3,7 +3,6 @@ import { ChevronsLeftRightIcon, EllipsisIcon, PanelLeftCloseIcon, PanelRightClos
 import { Activity, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, ViewTransition, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { IconButton } from '../icon-button';
 import { animate, useAnimatedSignal, withTransition } from '../transition';
-import { Signal, useSignal } from '../signal';
 import { SURFACE } from '../shell/overlay';
 import { SIZE_LIMITS, type Column, type DropTarget, type FloatWin, type Layout, type Stack, type Workspace, type Zone } from './layout';
 import type { PanelDef } from './panels';
@@ -43,14 +42,7 @@ interface Registered {
   zone: Zone | null;
 }
 
-interface DragState {
-  panel: string;
-  title: string;
-  x: number;
-  y: number;
-  target: DropTarget | null;
-  indicator: (Rect & { line?: boolean }) | null;
-}
+type Indicator = (Rect & { line?: boolean }) | null;
 
 /**
  * The workspace: the 3D view fills the stage and never changes size; the dock
@@ -89,7 +81,7 @@ export function WorkspaceFrame({
   const freeEl = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ W: 0, H: 0 });
   const registry = useRef(new Map<string, Registered>());
-  const drag = useMemo(() => new Signal<DragState | null>(null), []);
+  const ghost = useRef<Ghost | null>(null);
 
   useLayoutEffect(() => {
     const el = stage.current;
@@ -116,33 +108,40 @@ export function WorkspaceFrame({
     return () => window.removeEventListener('keydown', key);
   }, [ws]);
 
-  const dnd = useMemo(() => createDnd(ws, stage, registry, drag, () => geoRef.current), [ws, drag]);
+  const dnd = useMemo(() => createDnd(ws, stage, registry, ghost, () => geoRef.current), [ws]);
   const geoRef = useRef(geo);
   geoRef.current = geo;
 
   // a column edge being dragged: the columns, their edges and the free area
   // follow the pointer by writing styles directly (no React render per move);
-  // the layout, and the 3D view's centring, are updated when the drag ends
-  const live = (zone: Zone, v: number) => {
+  // the layout, and the 3D view's centring, are updated when the drag ends.
+  // The elements are looked up once per drag and only changed values are written.
+  const beginLive = (zone: Zone) => {
     const st = stage.current;
-    if (!st) return;
-    const g = geometry(L, size.W, size.H, hidden ? 0 : timelineHeight, hidden, { [zone]: v });
-    for (const z of ['left', 'right', 'bottom'] as Zone[]) {
-      const r = g.cols[z];
-      const box = st.querySelector<HTMLElement>(`[data-col="${z}"]`);
-      const edge = st.querySelector<HTMLElement>(`[data-edge="${z}"]`);
-      if (r && box) Object.assign(box.style, px(r));
-      if (r && edge) Object.assign(edge.style, px(edgeRect(z, r)));
-    }
-    if (freeEl.current) Object.assign(freeEl.current.style, { left: `${g.free.left}px`, right: `${g.free.right}px`, bottom: `${g.free.bottom}px` });
+    const els = (['left', 'right', 'bottom'] as Zone[]).map((z) => ({
+      z,
+      box: st?.querySelector<HTMLElement>(`[data-col="${z}"]`) ?? null,
+      edge: st?.querySelector<HTMLElement>(`[data-edge="${z}"]`) ?? null,
+    }));
+    const free = freeEl.current;
+    return (v: number) => {
+      const g = geometry(L, size.W, size.H, hidden ? 0 : timelineHeight, hidden, { [zone]: v });
+      for (const { z, box, edge } of els) {
+        const r = g.cols[z];
+        if (!r) continue;
+        if (box) setStyle(box, px(r));
+        if (edge) setStyle(edge, px(edgeRect(z, r)));
+      }
+      if (free) setStyle(free, { left: `${g.free.left}px`, right: `${g.free.right}px`, bottom: `${g.free.bottom}px` });
+    };
   };
 
-  const style = { '--free-l': `${geo.free.left}px`, '--free-r': `${geo.free.right}px`, '--free-b': `${geo.free.bottom}px` } as CSSProperties;
+  // (no inherited custom properties on the stage: changing one restyles every element in it)
   return (
-    <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden" style={style}>
+    <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden">
       <div className="absolute inset-0">{viewport}</div>
       {/* the area the panels leave free: overlays are laid out in it */}
-      <div ref={freeEl} className="pointer-events-none absolute @container" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
+      <div ref={freeEl} className="pointer-events-none absolute @container [contain:size_layout_style]" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
         {overlay}
       </div>
       {!hidden && (
@@ -150,11 +149,17 @@ export function WorkspaceFrame({
           {(['left', 'right', 'bottom'] as Zone[]).map((z) => {
             const r = geo.cols[z];
             if (!r) return null;
-            return <DockColumn key={z} ws={ws} zone={z} col={L[z]} rect={r} max={maxSize(geo, z)} panels={panels} dnd={dnd} registry={registry.current} onLive={(v) => live(z, v)} />;
+            return <DockColumn key={z} ws={ws} zone={z} col={L[z]} rect={r} max={maxSize(geo, z)} panels={panels} dnd={dnd} registry={registry.current} onLive={() => beginLive(z)} />;
           })}
-          {L.floating.map((f) => (
-            <FloatWindow key={f.id} ws={ws} win={f} panels={panels} dnd={dnd} registry={registry.current} bounds={size} others={L.floating.filter((o) => o !== f)} />
-          ))}
+          {/* in a fixed order, stacked by z-index: raising a window must not move its
+              element in the document, which would drop the pointer capture of its drag */}
+          <div className="pointer-events-none absolute inset-0 z-20">
+            {[...L.floating]
+              .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+              .map((f) => (
+                <FloatWindow key={f.id} ws={ws} win={f} z={L.floating.indexOf(f) + 1} panels={panels} dnd={dnd} registry={registry.current} bounds={size} others={L.floating.filter((o) => o !== f)} />
+              ))}
+          </div>
         </>
       )}
       <Activity mode={hidden ? 'hidden' : 'visible'}>
@@ -164,12 +169,43 @@ export function WorkspaceFrame({
           </div>
         </ViewTransition>
       </Activity>
-      <DragLayer drag={drag} />
+      <DragLayer api={ghost} />
     </div>
   );
 }
 
 const px = (r: Rect) => ({ left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+
+/** Write only the inline styles that change (a drag writes every frame). */
+function setStyle(el: HTMLElement, s: Record<string, string>) {
+  const st = el.style as unknown as Record<string, string>;
+  for (const k in s) if (st[k] !== s[k]) st[k] = s[k];
+}
+
+/**
+ * Follow one pointer from its pointerdown on `e.currentTarget` until it is
+ * released. The pointer is captured, so while it moves nothing else sees it:
+ * no hover styles or tooltips change, the 3D view does not pick under it and
+ * no text selection starts.
+ */
+function follow(e: ReactPointerEvent<HTMLElement>, move: (ev: PointerEvent) => void, end: (released: boolean) => void) {
+  const el = e.currentTarget;
+  const id = e.pointerId;
+  el.setPointerCapture(id);
+  const onMove = (ev: PointerEvent) => ev.pointerId === id && move(ev);
+  const done = (ev: PointerEvent) => {
+    if (ev.pointerId !== id) return;
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', done);
+    el.removeEventListener('pointercancel', done);
+    el.removeEventListener('lostpointercapture', done);
+    end(ev.type === 'pointerup');
+  };
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', done);
+  el.addEventListener('pointercancel', done);
+  el.addEventListener('lostpointercapture', done);
+}
 
 /** the strip along a column's inner edge that resizes it */
 function edgeRect(zone: Zone, r: Rect): Rect {
@@ -239,7 +275,8 @@ function DockColumn({
   panels: Map<string, PanelDef>;
   dnd: Dnd;
   registry: Map<string, Registered>;
-  onLive: (v: number) => void;
+  /** starts a live resize: the returned function moves the edge */
+  onLive: () => (v: number) => void;
 }) {
   const [flyout, setFlyout] = useState<{ stack: string; panel: string } | null>(null);
   const horizontal = zone === 'bottom';
@@ -255,8 +292,8 @@ function DockColumn({
   // weights are written when it ends
   const splitDown = (i: number) => (e: ReactPointerEvent<HTMLDivElement>) => {
     const kids = box.current?.querySelectorAll<HTMLElement>(':scope > [data-stack]');
-    if (!kids || !kids[i] || !kids[i + 1]) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.button !== 0 || !kids || !kids[i] || !kids[i + 1]) return;
+    e.preventDefault();
     const ka = kids[i];
     const kb = kids[i + 1];
     const a = horizontal ? ka.offsetWidth : ka.offsetHeight;
@@ -264,27 +301,30 @@ function DockColumn({
     const wSum = col.stacks[i].weight + col.stacks[i + 1].weight;
     const start = horizontal ? e.clientX : e.clientY;
     let weights: [number, number] | null = null;
-    const move = (ev: PointerEvent) => {
-      const d = (horizontal ? ev.clientX : ev.clientY) - start;
-      const na = Math.max(MIN_STACK, Math.min(a + b - MIN_STACK, a + d));
-      weights = [(na / (a + b)) * wSum, ((a + b - na) / (a + b)) * wSum];
-      ka.style.flex = `${weights[0]} 1 0`;
-      kb.style.flex = `${weights[1]} 1 0`;
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      if (weights) ws.resizeSplit(zone, i, weights);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    follow(
+      e,
+      (ev) => {
+        const d = (horizontal ? ev.clientX : ev.clientY) - start;
+        const na = Math.max(MIN_STACK, Math.min(a + b - MIN_STACK, a + d));
+        weights = [(na / (a + b)) * wSum, ((a + b - na) / (a + b)) * wSum];
+        ka.style.flex = `${weights[0]} 1 0`;
+        kb.style.flex = `${weights[1]} 1 0`;
+      },
+      () => weights && ws.resizeSplit(zone, i, weights),
+    );
   };
 
   return (
     <ViewTransition key="column" default="none" enter="ws-enter" exit="ws-exit">
-      <div ref={box} data-col={zone} className={`absolute flex ${horizontal ? 'flex-row' : 'flex-col'}`} style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, gap: G }}>
+      {/* sized from outside: contained, so what changes inside a group lays out only that group */}
+      <div
+        ref={box}
+        data-col={zone}
+        className={`absolute flex [contain:size_layout_style] ${horizontal ? 'flex-row' : 'flex-col'}`}
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, gap: G }}
+      >
         {col.stacks.map((s, i) => (
-          <div key={s.id} data-stack className="relative flex min-h-0 min-w-0" style={{ flex: `${s.weight} 1 0` }}>
+          <div key={s.id} data-stack className="relative flex min-h-0 min-w-0 [contain:size_layout_style]" style={{ flex: `${s.weight} 1 0` }}>
             <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
               <StackView ws={ws} group={s} zone={zone} panels={panels} dnd={dnd} registry={registry} />
             </ViewTransition>
@@ -292,7 +332,7 @@ function DockColumn({
               <div
                 aria-hidden
                 onPointerDown={splitDown(i)}
-                className={`absolute z-10 ${horizontal ? 'top-0 -right-[6px] h-full w-[6px] cursor-col-resize' : '-bottom-[6px] left-0 h-[6px] w-full cursor-row-resize'} group/split`}
+                className={`absolute z-10 touch-none ${horizontal ? 'top-0 -right-[6px] h-full w-[6px] cursor-col-resize' : '-bottom-[6px] left-0 h-[6px] w-full cursor-row-resize'} group/split`}
               >
                 <div
                   className={`absolute rounded-full bg-ui-accent opacity-0 transition-opacity group-hover/split:opacity-60 ${horizontal ? 'inset-y-6 left-[2px] w-0.5' : 'inset-x-6 top-[2px] h-0.5'}`}
@@ -308,30 +348,31 @@ function DockColumn({
 }
 
 /** The column's inner edge: drag to resize the column (the 3D view keeps its size). */
-function EdgeHandle({ zone, rect, size, max, onLive, onCommit }: { zone: Zone; rect: Rect; size: number; max: number; onLive: (v: number) => void; onCommit: (v: number) => void }) {
+function EdgeHandle({ zone, rect, size, max, onLive, onCommit }: { zone: Zone; rect: Rect; size: number; max: number; onLive: () => (v: number) => void; onCommit: (v: number) => void }) {
   const style: CSSProperties = { ...px(edgeRect(zone, rect)), cursor: zone === 'bottom' ? 'row-resize' : 'col-resize' };
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.button !== 0) return;
+    e.preventDefault();
     const x0 = e.clientX;
     const y0 = e.clientY;
     const lo = SIZE_LIMITS[zone][0];
     const hi = Math.max(lo, max);
+    const live = onLive();
     let v = size;
-    const move = (ev: PointerEvent) => {
-      const d = zone === 'left' ? ev.clientX - x0 : zone === 'right' ? x0 - ev.clientX : y0 - ev.clientY;
-      v = Math.round(Math.max(lo, Math.min(hi, size + d)));
-      onLive(v);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      if (v !== size) onCommit(v);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    follow(
+      e,
+      (ev) => {
+        const d = zone === 'left' ? ev.clientX - x0 : zone === 'right' ? x0 - ev.clientX : y0 - ev.clientY;
+        const next = Math.round(Math.max(lo, Math.min(hi, size + d)));
+        if (next === v) return;
+        v = next;
+        live(v);
+      },
+      () => v !== size && onCommit(v),
+    );
   };
   return (
-    <div aria-hidden data-edge={zone} onPointerDown={down} className="group/edge absolute z-10" style={style}>
+    <div aria-hidden data-edge={zone} onPointerDown={down} className="group/edge absolute z-10 touch-none" style={style}>
       <div
         className={`absolute rounded-full bg-ui-accent opacity-0 transition-opacity group-hover/edge:opacity-70 ${zone === 'bottom' ? 'inset-x-8 top-[2px] h-0.5' : 'inset-y-8 left-[2px] w-0.5'}`}
       />
@@ -603,6 +644,7 @@ function PanelMenu({ ws, id, zone, onClose }: { ws: Workspace; id: string; zone:
 function FloatWindow({
   ws,
   win,
+  z,
   panels,
   dnd,
   registry,
@@ -611,6 +653,8 @@ function FloatWindow({
 }: {
   ws: Workspace;
   win: FloatWin;
+  /** place in the stacking order, 1 at the back */
+  z: number;
   panels: Map<string, PanelDef>;
   dnd: Dnd;
   registry: Map<string, Registered>;
@@ -618,7 +662,9 @@ function FloatWindow({
   others: FloatWin[];
 }) {
   // position and size follow the pointer by writing the window's style
-  // directly (at most once a frame); the layout is written on release
+  // directly in the event handler (pointer events already come once a frame,
+  // so waiting for the next one would only add a frame of lag); the layout is
+  // written on release
   const el = useRef<HTMLDivElement>(null);
   const rect = { x: win.x, y: win.y, w: win.w, h: win.h };
   const clampR = (q: Rect): Rect => {
@@ -637,31 +683,31 @@ function FloatWindow({
     if (sy !== undefined) y = sy;
     return { ...q, x, y };
   };
-  const track = (e: ReactPointerEvent, f: (dx: number, dy: number, r0: Rect) => Rect) => {
+  // (the window is raised by its own pointerdown capture handler)
+  const track = (e: ReactPointerEvent<HTMLElement>, f: (dx: number, dy: number, r0: Rect) => Rect, moveOnly = false) => {
     e.preventDefault();
-    ws.raise(win.id);
+    const node = el.current;
+    if (!node) return;
     const x0 = e.clientX;
     const y0 = e.clientY;
     const r0 = { ...rect };
     let last = r0;
-    let raf = 0;
-    const move = (ev: PointerEvent) => {
-      last = clampR(f(ev.clientX - x0, ev.clientY - y0, r0));
-      if (!raf)
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          if (el.current) Object.assign(el.current.style, px(last));
-        });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      cancelAnimationFrame(raf);
-      if (el.current) Object.assign(el.current.style, px(last));
-      if (last.x !== r0.x || last.y !== r0.y || last.w !== r0.w || last.h !== r0.h) ws.setFloat(win.id, last);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    // a move only translates the window on the compositor: no layout, no repaint
+    if (moveOnly) node.style.willChange = 'transform';
+    follow(
+      e,
+      (ev) => {
+        last = clampR(f(ev.clientX - x0, ev.clientY - y0, r0));
+        if (moveOnly) node.style.transform = `translate(${last.x - r0.x}px, ${last.y - r0.y}px)`;
+        else setStyle(node, px(last));
+      },
+      () => {
+        node.style.transform = '';
+        node.style.willChange = '';
+        setStyle(node, px(last));
+        if (last.x !== r0.x || last.y !== r0.y || last.w !== r0.w || last.h !== r0.h) ws.setFloat(win.id, last);
+      },
+    );
   };
   const edges: [string, string, (dx: number, dy: number, r0: Rect) => Rect][] = [
     ['n', 'top-0 left-2 right-2 h-1.5 cursor-ns-resize', (_dx, dy, q) => ({ ...q, y: q.y + dy, h: q.h - dy })],
@@ -675,7 +721,13 @@ function FloatWindow({
   ];
   return (
     <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
-      <div ref={el} className="absolute z-20 flex" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} onPointerDownCapture={() => ws.raise(win.id)}>
+      <div
+        ref={el}
+        data-float={win.id}
+        className="pointer-events-auto absolute flex [contain:size_layout_style]"
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: z }}
+        onPointerDownCapture={() => ws.raise(win.id)}
+      >
         <StackView
           ws={ws}
           group={win}
@@ -684,11 +736,11 @@ function FloatWindow({
           dnd={dnd}
           registry={registry}
           onHeaderDown={(e) => {
-            if (e.button === 0) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }));
+            if (e.button === 0) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }), true);
           }}
         />
         {edges.map(([k, cls, f]) => (
-          <div key={k} aria-hidden className={`absolute ${cls}`} onPointerDown={(e) => track(e, f)} />
+          <div key={k} aria-hidden className={`absolute touch-none ${cls}`} onPointerDown={(e) => e.button === 0 && track(e, f)} />
         ))}
       </div>
     </ViewTransition>
@@ -698,30 +750,44 @@ function FloatWindow({
 // ---------------------------------------------------------------- drag and drop of tabs
 
 interface Dnd {
-  start: (e: ReactPointerEvent, panel: string, title: string, onClick: () => void) => void;
+  start: (e: ReactPointerEvent<HTMLElement>, panel: string, title: string, onClick: () => void) => void;
 }
 
-function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, registry: { current: Map<string, Registered> }, drag: Signal<DragState | null>, geo: () => Geometry): Dnd {
-  const hit = (cx: number, cy: number): { target: DropTarget | null; indicator: DragState['indicator'] } => {
-    const st = stage.current?.getBoundingClientRect();
-    if (!st) return { target: null, indicator: null };
+/** The drop targets as laid out when a tab drag begins (nothing moves until the drop), in client px. */
+interface Snapshot {
+  stage: DOMRect;
+  /** floating windows front to back, then the docked groups */
+  groups: { id: string; zone: Zone | null; r: DOMRect; strip: DOMRect | null; tabs: DOMRect[] }[];
+}
+
+function snapshot(ws: Workspace, stage: HTMLElement, registry: Map<string, Registered>): Snapshot {
+  const order = ws.value.floating.map((f) => f.id).reverse();
+  const rank = (id: string, r: Registered) => (r.zone === null ? order.indexOf(id) : 1000);
+  const groups = [...registry.entries()]
+    .sort((a, b) => rank(a[0], a[1]) - rank(b[0], b[1]))
+    .map(([id, reg]) => ({
+      id,
+      zone: reg.zone,
+      r: reg.el.getBoundingClientRect(),
+      strip: reg.strip?.getBoundingClientRect() ?? null,
+      tabs: [...(reg.strip?.querySelectorAll<HTMLElement>('[data-tab]') ?? [])].map((t) => t.getBoundingClientRect()),
+    }));
+  return { stage: stage.getBoundingClientRect(), groups };
+}
+
+function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, registry: { current: Map<string, Registered> }, ghost: { current: Ghost | null }, geo: () => Geometry): Dnd {
+  const hit = (snap: Snapshot, cx: number, cy: number): { target: DropTarget | null; indicator: Indicator } => {
+    const st = snap.stage;
     const x = cx - st.left;
     const y = cy - st.top;
     const rel = (r: DOMRect): Rect => ({ x: r.left - st.left, y: r.top - st.top, w: r.width, h: r.height });
-    // floating windows first (front to back), then the docked groups
-    const order = ws.value.floating.map((f) => f.id).reverse();
-    const rank = (id: string, r: Registered) => (r.zone === null ? order.indexOf(id) : 1000);
-    const entries = [...registry.current.entries()].sort((a, b) => rank(a[0], a[1]) - rank(b[0], b[1]));
-    for (const [id, reg] of entries) {
-      const r = reg.el.getBoundingClientRect();
+    for (const { id, zone, r, strip: s, tabs } of snap.groups) {
       if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) continue;
-      const s = reg.strip?.getBoundingClientRect();
       if (s && cy <= s.bottom + 2) {
-        const tabs = [...(reg.strip?.querySelectorAll<HTMLElement>('[data-tab]') ?? [])];
         let index = tabs.length;
-        let lx = tabs.length ? tabs[tabs.length - 1].getBoundingClientRect().right + 1 : s.left + 4;
+        let lx = tabs.length ? tabs[tabs.length - 1].right + 1 : s.left + 4;
         for (let i = 0; i < tabs.length; i++) {
-          const t = tabs[i].getBoundingClientRect();
+          const t = tabs[i];
           if (cx < t.left + t.width / 2) {
             index = i;
             lx = t.left - 1;
@@ -731,12 +797,11 @@ function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, reg
         return { target: { kind: 'tab', stack: id, index }, indicator: { x: lx - st.left - 1, y: s.top - st.top + 5, w: 2, h: s.height - 10, line: true } };
       }
       const R = rel(r);
-      if (reg.zone) {
-        const horiz = reg.zone === 'bottom';
+      if (zone) {
+        const horiz = zone === 'bottom';
         const f = horiz ? (cx - r.left) / r.width : (cy - r.top) / r.height;
-        if (f < 0.3) return { target: { kind: 'split', zone: reg.zone, stack: id, where: 'before' }, indicator: horiz ? { ...R, w: R.w / 2 } : { ...R, h: R.h / 2 } };
-        if (f > 0.7)
-          return { target: { kind: 'split', zone: reg.zone, stack: id, where: 'after' }, indicator: horiz ? { ...R, x: R.x + R.w / 2, w: R.w / 2 } : { ...R, y: R.y + R.h / 2, h: R.h / 2 } };
+        if (f < 0.3) return { target: { kind: 'split', zone, stack: id, where: 'before' }, indicator: horiz ? { ...R, w: R.w / 2 } : { ...R, h: R.h / 2 } };
+        if (f > 0.7) return { target: { kind: 'split', zone, stack: id, where: 'after' }, indicator: horiz ? { ...R, x: R.x + R.w / 2, w: R.w / 2 } : { ...R, y: R.y + R.h / 2, h: R.h / 2 } };
       }
       return { target: { kind: 'tab', stack: id, index: 999 }, indicator: R };
     }
@@ -764,53 +829,97 @@ function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, reg
       if (e.button !== 0) return;
       const x0 = e.clientX;
       const y0 = e.clientY;
-      let dragging = false;
-      const move = (ev: PointerEvent) => {
-        if (!dragging && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
-        dragging = true;
-        const st = stage.current?.getBoundingClientRect();
-        const { target, indicator } = hit(ev.clientX, ev.clientY);
-        drag.set({ panel, title, x: ev.clientX - (st?.left ?? 0), y: ev.clientY - (st?.top ?? 0), target, indicator });
-      };
+      // measured once, when the tab starts to move
+      let snap: Snapshot | null = null;
+      let target: DropTarget | null = null;
+      let done = false;
+      const key = (ev: KeyboardEvent) => ev.key === 'Escape' && end(false);
       const end = (commit: boolean) => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', up);
+        if (done) return;
+        done = true;
         window.removeEventListener('keydown', key);
-        const d = drag.value;
-        drag.set(null);
-        if (!dragging) {
+        ghost.current?.hide();
+        if (!snap) {
           if (commit) onClick();
           return;
         }
-        if (commit && d?.target) {
-          const t = d.target;
+        if (commit && target) {
+          const t = target;
           withTransition(() => ws.move(panel, t));
         }
       };
-      const up = () => end(true);
-      const key = (ev: KeyboardEvent) => ev.key === 'Escape' && end(false);
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', up);
+      // the ghost and the drop indicator are moved by writing their styles:
+      // no React render and no layout read per move
+      follow(
+        e,
+        (ev) => {
+          if (done) return;
+          if (!snap) {
+            if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5 || !stage.current) return;
+            snap = snapshot(ws, stage.current, registry.current);
+            ghost.current?.show(title);
+          }
+          const h = hit(snap, ev.clientX, ev.clientY);
+          target = h.target;
+          ghost.current?.move(ev.clientX - snap.stage.left, ev.clientY - snap.stage.top, h.indicator);
+        },
+        (released) => end(released),
+      );
       window.addEventListener('keydown', key);
     },
   };
 }
 
-function DragLayer({ drag }: { drag: Signal<DragState | null> }) {
-  const d = useSignal(drag);
-  if (!d) return null;
-  const i = d.indicator;
+interface Ghost {
+  show: (title: string) => void;
+  move: (x: number, y: number, indicator: Indicator) => void;
+  hide: () => void;
+}
+
+/** The dragged tab's label and the drop indicator, driven imperatively by the drag (see `Ghost`). */
+const DragLayer = memo(function DragLayer({ api }: { api: { current: Ghost | null } }) {
+  const root = useRef<HTMLDivElement>(null);
+  const line = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const tag = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = (el: HTMLElement | null, r: Rect | null) => {
+      if (!el) return;
+      if (!r) {
+        if (el.style.display !== 'none') el.style.display = 'none';
+        return;
+      }
+      // shown from display: none, a box starts where it is put rather than transitioning from its last place
+      setStyle(el, { display: '', ...px(r) });
+    };
+    api.current = {
+      show(title) {
+        if (tag.current) tag.current.textContent = title;
+        root.current?.removeAttribute('hidden');
+      },
+      move(x, y, i) {
+        place(line.current, i?.line ? i : null);
+        place(box.current, i && !i.line ? i : null);
+        if (tag.current) tag.current.style.transform = `translate(${x + 12}px, ${y + 10}px)`;
+      },
+      hide() {
+        root.current?.setAttribute('hidden', '');
+        place(line.current, null);
+        place(box.current, null);
+      },
+    };
+    return () => {
+      api.current = null;
+    };
+  }, [api]);
   return (
-    <div className="pointer-events-none absolute inset-0 z-50">
-      {i && (
-        <div
-          className={i.line ? 'absolute rounded-full bg-ui-accent' : 'absolute rounded-lg border-2 border-ui-accent bg-ui-accent/12 transition-all duration-75'}
-          style={{ left: i.x, top: i.y, width: i.w, height: i.h }}
-        />
-      )}
-      <div className="absolute flex h-6 items-center gap-1.5 rounded-md bg-popover px-2 text-xs font-medium text-fg-1 shadow-lg ring-1 ring-ui-accent/60" style={{ left: d.x + 12, top: d.y + 10 }}>
-        {d.title}
-      </div>
+    <div ref={root} hidden className="pointer-events-none absolute inset-0 z-50">
+      <div ref={line} className="absolute rounded-full bg-ui-accent" style={{ display: 'none' }} />
+      <div ref={box} className="absolute rounded-lg border-2 border-ui-accent bg-ui-accent/12 transition-all duration-75" style={{ display: 'none' }} />
+      <div
+        ref={tag}
+        className="absolute top-0 left-0 flex h-6 items-center gap-1.5 rounded-md bg-popover px-2 text-xs font-medium text-fg-1 shadow-lg ring-1 ring-ui-accent/60 will-change-transform"
+      />
     </div>
   );
-}
+});
