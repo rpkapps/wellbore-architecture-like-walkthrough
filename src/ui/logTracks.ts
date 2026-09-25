@@ -4,9 +4,9 @@ import { FORMATION_BY_ID } from '../data/stratigraphy';
 import { colormap, resToT, type ColormapName } from '../data/colormap';
 import { DEFAULT_TRACKS, defaultLayout, parseLayout, resolveCurve, visibleTracks, type CurveSpec, type Scale, type TrackSpec } from '../data/trackLayout';
 import type { Curve } from '../data/types';
-import { h, fmt } from './dom';
-import { I } from './icons';
-import { TrackMenu } from './trackMenu';
+import { fmt } from './dom';
+import { Rev, Signal } from './signal';
+import { cssVar, font, ink } from './tokens';
 
 const LAYOUT_KEY = 'vwt.logtracks.v1';
 
@@ -16,16 +16,35 @@ const ZONE_W = 9;
 const HOLE_W = 9;
 const PAY_W = 7;
 
+export interface ReadoutRow {
+  k: string;
+  v: string;
+  /** m = measured, c = calculated, i = operator interpretation */
+  tone: 'm' | 'c' | 'i';
+}
+
+/** What the hover read-out over the log canvas shows at one depth. */
+export interface Readout {
+  md: number;
+  /** pointer position and canvas size, to place the read-out beside the pointer */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  title: string;
+  zone: string;
+  groups: ReadoutRow[][];
+}
+
 /**
  * Conventional well-log display (Techlog / Petrel style) drawn on a canvas and
- * synchronised with the 3D scene cursor.
+ * synchronised with the 3D scene cursor. The panel around it (header, zoom,
+ * track menu, hover read-out) is React; this class owns the drawing.
  */
 export class LogTracks {
-  readonly el: HTMLElement;
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private readout: HTMLElement;
-  private well?: Well;
+  private canvas: HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
+  well?: Well;
   cursorMd = 0;
   hoverMd: number | null = null;
   window = 160;
@@ -34,94 +53,22 @@ export class LogTracks {
   onPick?: (md: number) => void;
   onHover?: (md: number | null) => void;
   onScroll?: (md: number) => void;
-  private winLabel: HTMLElement;
   private layout: { x: number; w: number; spec?: TrackSpec; kind: string }[] = [];
   /** user-editable track layout (built-in tracks + added ones), saved per browser */
   tracks: TrackSpec[] = defaultLayout();
   hideEmpty = false;
-  private menu: TrackMenu;
+  /** depth window shown, for the zoom read-out */
+  readonly windowSize = new Signal(160);
+  readonly readout = new Signal<Readout | null>(null);
+  /** the track layout or the active well changed (the track menu re-renders) */
+  readonly rev = new Rev();
+  private detach: (() => void) | null = null;
 
   constructor() {
-    this.canvas = h('canvas');
-    this.ctx = this.canvas.getContext('2d')!;
-    this.readout = h('div', { class: 'logs-readout' });
-    this.winLabel = h('span', { class: 'mono faint', style: 'font-size:10.5px;min-width:44px;text-align:center' });
-    const zoom = (f: number) => {
-      this.window = Math.max(20, Math.min(4000, this.window * f));
-      this.dirty = true;
-    };
     this.loadLayout();
-    const self = this;
-    this.menu = new TrackMenu({
-      get layout() {
-        return self.tracks;
-      },
-      set layout(v) {
-        self.tracks = v;
-      },
-      get hideEmpty() {
-        return self.hideEmpty;
-      },
-      set hideEmpty(v) {
-        self.hideEmpty = v;
-      },
-      get well() {
-        return self.well;
-      },
-      commit: () => {
-        this.saveLayout();
-        this.dirty = true;
-      },
-      reset: () => {
-        this.tracks = defaultLayout();
-        this.hideEmpty = false;
-        this.saveLayout();
-        this.dirty = true;
-      },
-    });
-    const wrap = h('div', { class: 'logs-canvas-wrap' }, this.canvas, this.readout, this.menu.el);
-    this.el = h(
-      'div',
-      { class: 'panel right glass', id: 'logs-panel' },
-      h(
-        'div',
-        { class: 'logs-head' },
-        h('h3', {}, 'Well logs'),
-        h('span', { class: 'chip measured', title: 'Acquired by logging tools, as delivered by the operator' }, 'M'),
-        h('span', { class: 'chip calculated', title: 'Computed live in this app from measured inputs' }, 'C'),
-        h('span', { class: 'chip interpreted', title: "Operator's published interpretation (Equinor CPI)" }, 'I'),
-        h('div', { style: 'flex:1' }),
-        h('button', { class: 'btn icon ghost', title: 'Add, remove and edit tracks', html: I.sliders, onclick: () => this.menu.toggle() }),
-        h('button', { class: 'btn icon ghost', title: 'Zoom out', onclick: () => zoom(1.6) }, '−'),
-        this.winLabel,
-        h('button', { class: 'btn icon ghost', title: 'Zoom in', onclick: () => zoom(1 / 1.6) }, '+'),
-      ),
-      wrap,
-    );
-    new ResizeObserver(() => (this.dirty = true)).observe(wrap);
-    this.canvas.addEventListener('pointermove', (e) => this.move(e));
-    this.canvas.addEventListener('pointerleave', () => {
-      this.hoverMd = null;
-      this.readout.style.display = 'none';
-      this.onHover?.(null);
-      this.dirty = true;
-    });
-    this.canvas.addEventListener('click', (e) => {
-      const md = this.mdAtY(e.offsetY);
-      if (md !== null) this.onPick?.(md);
-    });
-    this.canvas.addEventListener(
-      'wheel',
-      (e) => {
-        e.preventDefault();
-        if (e.ctrlKey || e.metaKey || e.altKey) zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15);
-        else this.onScroll?.(this.cursorMd + (e.deltaY / 100) * this.window * 0.08);
-      },
-      { passive: false },
-    );
     const loop = () => {
       requestAnimationFrame(loop);
-      if (this.dirty) {
+      if (this.dirty && this.canvas) {
         this.dirty = false;
         this.draw();
       }
@@ -129,10 +76,68 @@ export class LogTracks {
     requestAnimationFrame(loop);
   }
 
+  /** Draw into this canvas (from the logs panel's ref callback; null when it unmounts). */
+  attach(cv: HTMLCanvasElement | null) {
+    this.detach?.();
+    this.detach = null;
+    this.canvas = cv;
+    this.ctx = cv?.getContext('2d') ?? null;
+    if (!cv) return;
+    const move = (e: PointerEvent) => this.move(e);
+    const leave = () => {
+      this.hoverMd = null;
+      this.readout.set(null);
+      this.onHover?.(null);
+      this.dirty = true;
+    };
+    const click = (e: MouseEvent) => {
+      const md = this.mdAtY(e.offsetY);
+      if (md !== null) this.onPick?.(md);
+    };
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey || e.altKey) this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15);
+      else this.onScroll?.(this.cursorMd + (e.deltaY / 100) * this.window * 0.08);
+    };
+    const ro = new ResizeObserver(() => (this.dirty = true));
+    ro.observe(cv);
+    cv.addEventListener('pointermove', move);
+    cv.addEventListener('pointerleave', leave);
+    cv.addEventListener('click', click);
+    cv.addEventListener('wheel', wheel, { passive: false });
+    this.dirty = true;
+    this.detach = () => {
+      ro.disconnect();
+      cv.removeEventListener('pointermove', move);
+      cv.removeEventListener('pointerleave', leave);
+      cv.removeEventListener('click', click);
+      cv.removeEventListener('wheel', wheel);
+    };
+  }
+
+  zoom(f: number) {
+    this.window = Math.max(20, Math.min(4000, this.window * f));
+    this.windowSize.set(Math.round(this.window));
+    this.dirty = true;
+  }
+
   setWell(w: Well) {
     this.well = w;
     this.dirty = true;
-    this.menu.refresh();
+    this.rev.bump();
+  }
+
+  /** The track layout or its options changed: store and redraw. */
+  commitLayout() {
+    this.saveLayout();
+    this.dirty = true;
+    this.rev.bump();
+  }
+
+  resetLayout() {
+    this.tracks = defaultLayout();
+    this.hideEmpty = false;
+    this.commitLayout();
   }
 
   private loadLayout() {
@@ -154,9 +159,11 @@ export class LogTracks {
       /* private mode: keep in memory only */
     }
   }
+
   invalidate() {
     this.dirty = true;
   }
+
   setCursor(md: number) {
     if (Math.abs(md - this.cursorMd) > 1e-3) {
       this.cursorMd = md;
@@ -169,7 +176,7 @@ export class LogTracks {
   }
 
   private mdAtY(y: number): number | null {
-    const H = this.canvas.clientHeight;
+    const H = this.canvas?.clientHeight ?? 0;
     if (y < HEADER_H) return null;
     const { top, bot } = this.range();
     return top + ((y - HEADER_H) / (H - HEADER_H)) * (bot - top);
@@ -178,70 +185,61 @@ export class LogTracks {
   private move(e: PointerEvent) {
     const md = this.mdAtY(e.offsetY);
     if (md === null || !this.well) {
-      this.readout.style.display = 'none';
+      this.readout.set(null);
       return;
     }
     this.hoverMd = md;
     this.onHover?.(md);
     this.dirty = true;
-    this.readout.innerHTML = this.readoutHtml(md);
-    this.readout.style.display = 'block';
-    const W = this.canvas.clientWidth;
-    const rw = this.readout.offsetWidth;
-    const x = e.offsetX + 14 + rw > W ? e.offsetX - rw - 14 : e.offsetX + 14;
-    this.readout.style.left = `${Math.max(4, x)}px`;
-    this.readout.style.top = `${Math.min(this.canvas.clientHeight - this.readout.offsetHeight - 6, e.offsetY + 12)}px`;
+    this.readout.set(this.readoutAt(md, e.offsetX, e.offsetY));
   }
 
-  private readoutHtml(md: number): string {
+  private readoutAt(md: number, x: number, y: number): Readout {
     const w = this.well!;
     const logs = w.logs;
     const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
     const z = w.zoneAt(md);
-    const row = (k: string, v: string, cls = 'm') => `<div><span class="k">${k}</span><span class="${cls}">${v}</span></div>`;
-    let s = `<div style="color:#fff;margin-bottom:3px">${fmt.n(md, 1)} m MD · ${fmt.n(t.tvd, 1)} TVD</div>`;
-    s += `<div style="color:var(--text-2);margin-bottom:4px">${z?.name ?? ''}</div>`;
-    if (logs) {
-      const v = (k: string) => {
-        const c = findCurve(logs, k);
-        return c ? sampleCurve(logs.depth, c.values, md) : NaN;
-      };
-      s += row('GR', `${fmt.n(v('GR'), 1)} API`);
-      s += row('RT', `${fmt.res(v('RT'))} Ω·m`);
-      s += row('R shal', `${fmt.res(v('RSHAL'))} Ω·m`);
-      s += row('RHOB', `${fmt.n(v('RHOB'), 3)} g/cm³`);
-      s += row('NPHI', `${fmt.n(v('NPHI'), 3)} v/v`);
-      if (findCurve(logs, 'DT')) s += row('DTC', `${fmt.n(v('DT'), 1)} µs/ft`);
-      s += row('CALI', `${fmt.n(v('CALI'), 2)} in`);
-      const p = w.petro;
-      if (p) {
-        const pv = (c: Curve) => sampleCurve(logs.depth, c.values, md);
-        s += '<div style="height:4px"></div>';
-        s += row('Vsh', fmt.pct(pv(p.vsh)), 'c');
-        s += row('PHIE', fmt.pct(pv(p.phie), 1), 'c');
-        s += row('Sw', fmt.pct(pv(p.sw)), 'c');
-        s += row('So', fmt.pct(pv(p.so)), 'c');
-      }
-      if (w.cpi) {
-        const c = w.cpi.curves.get('SW');
-        const ph = w.cpi.curves.get('PHIF');
-        if (c) s += row('Sw CPI', fmt.pct(sampleCurve(w.cpi.depth, c.values, md)), 'i');
-        if (ph) s += row('PHIF CPI', fmt.pct(sampleCurve(w.cpi.depth, ph.values, md), 1), 'i');
-      }
-      // curves the user added to the layout
-      const extra = visibleTracks(this.tracks, w, this.hideEmpty)
-        .flatMap((t) => t.curves.map((c) => ({ c, t })))
-        .filter(({ c }) => !STANDARD_CURVES.has(curveId(c)));
-      if (extra.length) s += '<div style="height:4px"></div>';
-      for (const { c, t } of extra) {
-        const d = resolveCurve(w, c);
-        if (!d) continue;
-        const v = sampleCurve(d.depth, d.values, md);
-        const cls = c.source === 'petro' ? 'c' : c.source === 'cpi' ? 'i' : t.prov === 'calculated' ? 'c' : 'm';
-        s += row(escapeHtml(c.label).slice(0, 10), `${fmtVal(v)}${c.unit ? ` ${escapeHtml(c.unit)}` : ''}`, cls);
-      }
+    const out: Readout = { md, x, y, w: this.canvas?.clientWidth ?? 0, h: this.canvas?.clientHeight ?? 0, title: `${fmt.n(md, 1)} m MD · ${fmt.n(t.tvd, 1)} TVD`, zone: z?.name ?? '', groups: [] };
+    if (!logs) return out;
+    const v = (k: string) => {
+      const c = findCurve(logs, k);
+      return c ? sampleCurve(logs.depth, c.values, md) : NaN;
+    };
+    const measured: ReadoutRow[] = [
+      { k: 'GR', v: `${fmt.n(v('GR'), 1)} API`, tone: 'm' },
+      { k: 'RT', v: `${fmt.res(v('RT'))} Ω·m`, tone: 'm' },
+      { k: 'R shal', v: `${fmt.res(v('RSHAL'))} Ω·m`, tone: 'm' },
+      { k: 'RHOB', v: `${fmt.n(v('RHOB'), 3)} g/cm³`, tone: 'm' },
+      { k: 'NPHI', v: `${fmt.n(v('NPHI'), 3)} v/v`, tone: 'm' },
+    ];
+    if (findCurve(logs, 'DT')) measured.push({ k: 'DTC', v: `${fmt.n(v('DT'), 1)} µs/ft`, tone: 'm' });
+    measured.push({ k: 'CALI', v: `${fmt.n(v('CALI'), 2)} in`, tone: 'm' });
+    out.groups.push(measured);
+    const p = w.petro;
+    const interp: ReadoutRow[] = [];
+    if (p) {
+      const pv = (c: Curve) => sampleCurve(logs.depth, c.values, md);
+      interp.push({ k: 'Vsh', v: fmt.pct(pv(p.vsh)), tone: 'c' }, { k: 'PHIE', v: fmt.pct(pv(p.phie), 1), tone: 'c' }, { k: 'Sw', v: fmt.pct(pv(p.sw)), tone: 'c' }, { k: 'So', v: fmt.pct(pv(p.so)), tone: 'c' });
     }
-    return s;
+    if (w.cpi) {
+      const c = w.cpi.curves.get('SW');
+      const ph = w.cpi.curves.get('PHIF');
+      if (c) interp.push({ k: 'Sw CPI', v: fmt.pct(sampleCurve(w.cpi.depth, c.values, md)), tone: 'i' });
+      if (ph) interp.push({ k: 'PHIF CPI', v: fmt.pct(sampleCurve(w.cpi.depth, ph.values, md), 1), tone: 'i' });
+    }
+    if (interp.length) out.groups.push(interp);
+    // curves the user added to the layout
+    const extra: ReadoutRow[] = [];
+    for (const { c, t: tr } of visibleTracks(this.tracks, w, this.hideEmpty)
+      .flatMap((t) => t.curves.map((c) => ({ c, t })))
+      .filter(({ c }) => !STANDARD_CURVES.has(curveId(c)))) {
+      const d = resolveCurve(w, c);
+      if (!d) continue;
+      const val = sampleCurve(d.depth, d.values, md);
+      extra.push({ k: c.label.slice(0, 10), v: `${fmtVal(val)}${c.unit ? ` ${c.unit}` : ''}`, tone: c.source === 'petro' ? 'c' : c.source === 'cpi' ? 'i' : tr.prov === 'calculated' ? 'c' : 'm' });
+    }
+    if (extra.length) out.groups.push(extra);
+    return out;
   }
 
   private curveFor(spec: CurveSpec): { depth: Float64Array; values: Float32Array } | null {
@@ -250,6 +248,8 @@ export class LogTracks {
 
   private draw() {
     const cv = this.canvas;
+    const g = this.ctx;
+    if (!cv || !g) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const W = cv.clientWidth;
     const H = cv.clientHeight;
@@ -258,10 +258,8 @@ export class LogTracks {
       cv.width = Math.round(W * dpr);
       cv.height = Math.round(H * dpr);
     }
-    const g = this.ctx;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    this.winLabel.textContent = `${Math.round(this.window)} m`;
     const w = this.well;
     if (!w) return;
     const { top, bot } = this.range();
@@ -288,7 +286,7 @@ export class LogTracks {
     }
     this.layout.push({ x: x + 1, w: PAY_W, kind: 'pay' });
 
-    g.font = '500 9.5px "IBM Plex Mono", monospace';
+    g.font = font.mono(9.5);
     g.textBaseline = 'middle';
     // depth track
     const step = niceStep(this.window / 8);
@@ -302,11 +300,11 @@ export class LogTracks {
       g.lineTo(W, y);
       g.stroke();
       if (d < 0 || d > w.tdMD) continue;
-      g.fillStyle = '#a3aeb9';
+      g.fillStyle = ink.muted;
       g.textAlign = 'right';
       g.fillText(d.toFixed(step < 1 ? 1 : 0), DEPTH_W - 2, y - 5);
       const tv = w.trajectory.at(Math.min(d, w.trajectory.mdEnd)).tvd;
-      g.fillStyle = '#4a5561';
+      g.fillStyle = ink.faint;
       g.fillText(tv.toFixed(0), DEPTH_W - 2, y + 6);
     }
     // minor grid
@@ -382,7 +380,7 @@ export class LogTracks {
         if (k >= 0 && w.petro.pay[k]) g.fillRect(pl.x, py, pl.w, 1);
       }
     }
-    g.fillStyle = '#6d7986';
+    g.fillStyle = ink.faint;
     g.save();
     g.translate(pl.x + pl.w / 2 + 1, 40);
     g.rotate(-Math.PI / 2);
@@ -397,21 +395,21 @@ export class LogTracks {
     g.moveTo(0, HEADER_H + 0.5);
     g.lineTo(W, HEADER_H + 0.5);
     g.stroke();
-    g.fillStyle = '#6d7986';
+    g.fillStyle = ink.faint;
     g.textAlign = 'center';
     g.fillText('MD', 2 + DEPTH_W / 2, 16);
-    g.fillStyle = '#4a5561';
+    g.fillStyle = ink.faint;
     g.fillText('TVD', 2 + DEPTH_W / 2, 30);
     g.save();
     g.translate(zl.x + ZONE_W / 2, 44);
     g.rotate(-Math.PI / 2);
-    g.fillStyle = '#6d7986';
+    g.fillStyle = ink.faint;
     g.fillText('FM', 0, 0);
     g.restore();
     g.save();
     g.translate(hl.x + HOLE_W / 2 + 1, 44);
     g.rotate(-Math.PI / 2);
-    g.fillStyle = '#6d7986';
+    g.fillStyle = ink.faint;
     g.fillText('HOLE', 0, 0);
     g.restore();
 
@@ -616,9 +614,9 @@ export class LogTracks {
     const primaryMissing = !data[0] || !data[0].any;
     if (primaryMissing) {
       g.save();
-      g.fillStyle = '#4a5561';
+      g.fillStyle = ink.faint;
       g.textAlign = 'center';
-      g.font = '500 9.5px Inter Variable, sans-serif';
+      g.font = font.sans(9.5);
       const msg = !data[0] ? (t.prov === 'calculated' ? 'Inputs missing' : 'Not acquired') : 'No data in window';
       g.translate(x + w / 2, bodyTop + bodyH / 2);
       g.rotate(-Math.PI / 2);
@@ -629,17 +627,17 @@ export class LogTracks {
     // header
     g.save();
     g.textAlign = 'left';
-    g.font = '600 9px Inter Variable, sans-serif';
-    const provColor = { measured: '#7fe3ff', calculated: '#ffb547', interpreted: '#b8a2ff', mixed: '#ffb547' }[t.prov];
+    g.font = font.sans(9, 600);
+    const provColor = cssVar(`--tecton-palette-${{ measured: 'azure', calculated: 'saffron', interpreted: 'violet', mixed: 'saffron' }[t.prov]}-560`);
     g.fillStyle = provColor;
     g.fillRect(x + 4, 7, 3, 9);
-    g.fillStyle = '#a3aeb9';
+    g.fillStyle = ink.muted;
     g.fillText(t.title.toUpperCase(), x + 10, 12, w - 14);
     let hy = 24;
     t.curves.forEach((spec, i) => {
       const exists = !!data[i];
       g.globalAlpha = exists ? 1 : 0.28;
-      g.font = '600 9px Inter Variable, sans-serif';
+      g.font = font.sans(9, 600);
       g.fillStyle = spec.color;
       g.textAlign = 'left';
       g.fillText(spec.label, x + 5, hy, w - 10);
@@ -651,8 +649,8 @@ export class LogTracks {
       g.lineTo(x + w - 5, hy + 7);
       g.stroke();
       g.setLineDash([]);
-      g.font = '500 8.5px "IBM Plex Mono", monospace';
-      g.fillStyle = '#6d7986';
+      g.font = font.mono(8.5);
+      g.fillStyle = ink.faint;
       g.fillText(fmtNum(spec.scale.min), x + 5, hy + 14);
       g.textAlign = 'right';
       g.fillText(fmtNum(spec.scale.max), x + w - 5, hy + 14);
@@ -665,11 +663,6 @@ export class LogTracks {
 
 const curveId = (c: CurveSpec) => `${c.source ?? 'logs'}:${c.petroKey ?? c.cpiKey ?? c.key}`;
 const STANDARD_CURVES = new Set(DEFAULT_TRACKS.flatMap((t) => t.curves.map(curveId)));
-
-/** curve labels and units come from uploaded files: never insert them as HTML */
-function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-}
 
 function fmtVal(v: number) {
   if (!Number.isFinite(v)) return '—';

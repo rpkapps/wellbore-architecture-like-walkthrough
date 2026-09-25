@@ -1,0 +1,115 @@
+@import '@tecton/react/globals.css';
+
+/*
+ * BoreWalk is a full-viewport 3D workspace. Everything around the 3D view is
+ * Tecton; the rules below style only what three.js puts in the scene (the
+ * WebGL canvas and the CSS2D labels pinned to wells, tops and tools).
+ */
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .labels-layer {
+    position: absolute !important;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  canvas.gl {
+    display: block;
+    outline: none;
+    touch-action: none;
+  }
+
+  canvas.gl.measuring {
+    cursor: crosshair !important;
+  }
+
+  .label3d {
+    pointer-events: none;
+    font-size: 10.5px;
+    line-height: 1.25;
+    color: var(--foreground);
+    padding: 3px 7px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in oklab, var(--card) 72%, transparent);
+    border: 1px solid var(--border-subtle);
+    backdrop-filter: blur(6px);
+    white-space: nowrap;
+    transform-origin: 0 50%;
+    transition: opacity 0.3s;
+  }
+  .label3d b {
+    font-weight: 500;
+    margin-right: 5px;
+  }
+  .label3d span {
+    font-family: var(--font-mono);
+    color: var(--muted-foreground);
+    font-size: 9.5px;
+  }
+  .label3d.tick,
+  .label3d.ctx {
+    background: none;
+    border: 0;
+    backdrop-filter: none;
+    font-family: var(--font-mono);
+    padding: 0;
+    text-shadow: 0 1px 3px #000;
+  }
+  .label3d.tick {
+    color: color-mix(in oklab, var(--foreground) 75%, transparent);
+    font-size: 10px;
+  }
+  .label3d.ctx {
+    color: var(--muted-foreground);
+    font-size: 9.5px;
+  }
+  /* borders pick up the colour of the 3D object the label names */
+  .label3d.shoe {
+    border-color: rgba(154, 161, 168, 0.35);
+  }
+  .label3d.well {
+    border-color: rgba(127, 227, 255, 0.35);
+  }
+  .label3d.platform {
+    border-color: rgba(255, 181, 71, 0.3);
+  }
+  .label3d.gs.top {
+    border-color: rgba(255, 210, 122, 0.45);
+  }
+  .label3d.gs.base {
+    border-color: rgba(255, 143, 163, 0.45);
+  }
+  .label3d.unc {
+    border-color: rgba(184, 200, 255, 0.4);
+  }
+  .label3d.curtain {
+    border-color: rgba(155, 226, 122, 0.4);
+  }
+  .label3d.owc {
+    border-color: rgba(79, 179, 255, 0.5);
+  }
+  .label3d.owc span,
+  .label3d.measure span {
+    display: block;
+  }
+  .label3d.owc.field {
+    background: rgba(10, 30, 50, 0.72);
+  }
+  .label3d.measure {
+    border-color: rgba(255, 210, 122, 0.6);
+    background: rgba(20, 16, 8, 0.8);
+  }
+  .label3d.measure b {
+    font-size: 12.5px;
+    color: #ffd27a;
+  }
+}

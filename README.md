@@ -2,6 +2,8 @@
 
 BoreWalk is a web-based 3D wellbore visualization that works like an architectural walkthrough, built on real public oil and gas data from Equinor's **Volve** field (North Sea, block 15/9). You can travel from the drill floor through the water column, the cased vertical hole, the build section and the near-horizontal lateral of well **15/9-F-11 B**. Along the way you see the borehole geometry from the caliper log, the inferred casing strings, formation tops, bedding, fractures and the Hugin oil reservoir. You can also fly freely around a structural geomodel built from 34 wellbores.
 
+The interface is built with [Tecton UI](#user-interface-tecton), the `@tecton/react` component library (shadcn/ui on React Aria, with the Tecton theme), around a three.js engine.
+
 | Field overview | Landing in the reservoir (measured resistivity) |
 | --- | --- |
 | ![overview](docs/screenshots/hero_overview.png) | ![resistivity](docs/screenshots/hero_resistivity.png) |
@@ -58,6 +60,22 @@ cd dist && python3 -m http.server 8080    # http://localhost:8080
 
 Even without it, the app lowers its render resolution automatically when the frame rate drops.
 
+### User interface (Tecton)
+
+Everything around the 3D view is React with [`@tecton/react`](https://github.com/rpkapps/tecton-ui-1): the application frame is Tecton's `AppShell`, the work area is its `Canvas` with floating overlays, and the panels, dialogs, sheets, forms, tables, stats and charts are Tecton components themed by its dark token set (Figtree and IBM Plex Mono). The 3D scene and the canvas-drawn plots (log tracks, strips, crossplots, maps) keep their own renderers and take their chrome colours and fonts from the Tecton tokens.
+
+`@tecton/react` is a private package, so it is vendored as a packed tarball in `vendor/` and installed from there (`"@tecton/react": "file:vendor/tecton-react-0.1.0.tgz"`). To update it, pack it in the Tecton repository and replace the tarball:
+
+```bash
+# in a checkout of rpkapps/tecton-ui-1
+pnpm install
+pnpm --filter @tecton/react pack --pack-destination /path/to/borewalk/vendor
+# back in this repository
+pnpm install
+```
+
+When the version number changes, update the file name in `package.json` too. The package ships its usage guidelines as a command: `pnpm exec tecton search "<what the UI must do>"` finds a component and `pnpm exec tecton docs <id>` prints how to use it.
+
 ### Tests and checks
 
 ```bash
@@ -83,7 +101,7 @@ pnpm prepare-data ~/volve-src
 ### Troubleshooting
 
 - **Blank or black viewport:** check that WebGL 2 is available (visit `chrome://gpu` or https://get.webgl.org/webgl2/) and that hardware acceleration is switched on in the browser settings.
-- **Low frame rate:** add `?q=low`, collapse the side panels, or lower *Radial exaggeration* and *Halo / fluid volume intensity* in the Scene panel.
+- **Low frame rate:** add `?q=low`, hide the side panels (top-bar buttons), or lower *Radial exaggeration* and *Halo / fluid volume intensity* in the Scene panel.
 - **"Failed to load …" on the loading screen:** the site isn't being served from its root folder, or it was opened via `file://`. Serve `dist/` over HTTP as shown above.
 
 The app has no backend. Uploaded files are parsed in the browser and never leave it.
@@ -133,7 +151,7 @@ Defaults are calibrated to the operator's own interpretation:
 
 (`Rw = 0.025 Ω·m` at 106 °C, the median downhole gauge temperature of Volve producers; a = 1, m = n = 2; ρma = 2.65 g/cm³.)
 
-Oil-bearing pore space is drawn as a volume around the borehole: a soft pore network whose pore fraction follows φ, where each pore is filled with oil (amber) or brine (blue) in proportion to So. The borehole wall takes an oil stain like slabbed core. The volume is drawn only where density and resistivity logs exist. The Interpretation drawer shows zone summaries (N/G, net pay, φ, Sw, HC column), validates against the CPI live, and exports the calculated curves as CSV.
+Oil-bearing pore space is drawn as a volume around the borehole: a soft pore network whose pore fraction follows φ, where each pore is filled with oil (amber) or brine (blue) in proportion to So. The borehole wall takes an oil stain like slabbed core. The volume is drawn only where density and resistivity logs exist. The Interpretation tab of the sidebar shows zone summaries (N/G, net pay, φ, Sw, HC column), validates against the CPI live, and exports the calculated curves as CSV.
 
 ## Features
 
@@ -141,14 +159,14 @@ Oil-bearing pore space is drawn as a volume around the borehole: a soft pore net
 - **Free exploration**: fly with WASD/QE, drag to look, Shift to boost, wheel to set speed. Orbit mode is also available. Double-click focuses on a point. You can go above, below and sideways from the well. Inside the rock, a proximity bubble dissolves nearby geology into a contour grid so it doesn't block the view.
 - **Geomodel**: 12 horizons interpolated from multi-well picks (planar trend + inverse-distance residuals, forced into stratigraphic order), built as capped solids. A BIM-style **section box** lets you strip overburden to a TVDSS and move each face. You can show, hide, fade and **isolate** any formation, and use presets such as *Reservoir focus* and *Isolate pay*. The procedural PBR lithologies (sandstone, claystone, chalk with stylolites and flint, marl couplets, organic shale, coal-streaked delta plain, red beds) follow conformable bedding.
 - **Wellbore**: tube radius from the caliper log (bit size as fallback), with adjustable radial exaggeration. Casing strings and cement are inferred from the bit-size log and drawn as steel with couplings. The view also shows formation-top rings, casing shoes, the sidetrack point, depth ticks with MD/TVD, fractures (schematic) and pay brackets.
-- **Log tracks synced with 3D**: GR/caliper, resistivity with the matching colour strip, density–neutron with crossover shading, sonic, calculated Vsh/φ, and Sw with So fill plus the CPI Sw overlay. Hovering highlights the depth in 3D, clicking travels there, the wheel scrolls and Ctrl+wheel zooms. The **track menu** (sliders button in the log panel) shows, hides and reorders tracks, edits each curve's scale, log/linear, direction and colour, and **adds tracks for any curve the well has** — every LAS curve (PEF, DRHO, ROP, the other resistivity curves, or any mnemonic in your own file), the Equinor CPI (KLOGH, PHIF, VSH, BVW, flags) or the calculated curves. New tracks get the conventional scale for known mnemonics and a rounded P2–P98 range otherwise (logarithmic when the data span decades). The layout is saved in the browser and applies to every well; added tracks are skipped on wells that lack their curves.
+- **Log tracks synced with 3D**: GR/caliper, resistivity with the matching colour strip, density–neutron with crossover shading, sonic, calculated Vsh/φ, and Sw with So fill plus the CPI Sw overlay. Hovering highlights the depth in 3D, clicking travels there, the wheel scrolls and Ctrl+wheel zooms. The **track editor** (sliders button in the log panel, opens as a window beside the logs) shows, hides and reorders tracks, edits each curve's scale, log/linear, direction and colour, and **adds tracks for any curve the well has** — every LAS curve (PEF, DRHO, ROP, the other resistivity curves, or any mnemonic in your own file), the Equinor CPI (KLOGH, PHIF, VSH, BVW, flags) or the calculated curves. New tracks get the conventional scale for known mnemonics and a rounded P2–P98 range otherwise (logarithmic when the data span decades). The layout is saved in the browser and applies to every well; added tracks are skipped on wells that lack their curves.
 - **Inspector**: click the borehole, casing, a formation, a fracture, a top, a pay interval, another well or the platform to see its data with provenance.
-- **Production**: monthly rates, cumulative oil, water cut, GOR and downhole gauges.
+- **Production** (a sheet from the top bar): cumulative volumes, water cut and GOR as stats, monthly rates with cumulative oil, and the downhole gauges as charts.
 - **Uploads** (drag and drop anywhere): LAS, CSV and Excel files for logs, tops, surveys and production. Details and real open datasets are under [Importing your own data](#importing-your-own-data).
 
 ## Optional features (Features panel)
 
-Every feature below can be switched on or off in **Features** (top bar). The choice is remembered in your browser. `?features=all`, `?features=none` or a list such as `?features=geosteer,curtain` in the URL overrides it. Features marked *GPU* start off in the low-quality mode (`?q=low`).
+Every feature below can be switched on or off in the **Features** tab of the sidebar (also opened from the top bar). The choice is remembered in your browser. `?features=all`, `?features=none` or a list such as `?features=geosteer,curtain` in the URL overrides it. Features marked *GPU* start off in the low-quality mode (`?q=low`).
 
 | Feature | What it does | Provenance | Default |
 | --- | --- | --- | --- |
@@ -219,6 +237,8 @@ public/data/volve/              preloaded dataset + manifest.json (+ sim/volve_2
 src/features/                   optional features (registry, one module per feature)
 src/data/                       LAS/CSV parsers, minimum curvature, petrophysics, horizons, stratigraphy
 src/scene/                      three.js engine, geomodel, wellbore assembly, shaders, camera rig
-src/ui/                         glass UI: panels, log tracks, inspector, drawers, data manager, tour
+src/ui/                         controller (app.ts), log-track renderer, inspector model, data import, tour
+src/ui/shell/                   React + Tecton chrome: app shell, sidebar tabs, 3D overlays, timeline, logs, dialogs
+vendor/                         @tecton/react packed tarball (private package)
 tests/                          unit tests against the real Volve files
 ```

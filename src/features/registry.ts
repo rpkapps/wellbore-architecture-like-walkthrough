@@ -1,3 +1,6 @@
+import type { ReactNode } from 'react';
+import type { Rev } from '../ui/signal';
+
 /**
  * Optional 3D / analysis features. Every feature can be switched on and off
  * independently from the Features panel; the choice is remembered per browser.
@@ -232,8 +235,9 @@ export class FeatureFlags {
     return () => this.listeners.get(id)?.delete(fn);
   }
 
-  onAny(fn: (id: FeatureId, on: boolean) => void) {
+  onAny(fn: (id: FeatureId, on: boolean) => void): () => void {
     this.anyListeners.add(fn);
+    return () => this.anyListeners.delete(fn);
   }
 
   resetDefaults(lowQuality = false) {
@@ -258,6 +262,8 @@ export interface FeatureModule {
   onWell?(): void;
   /** per-frame update while enabled */
   frame?(dt: number): void;
-  /** optional settings UI shown under the switch in the Features panel */
-  settings?(): HTMLElement | null;
+  /** optional settings shown under the switch in the Features panel while the feature is on */
+  settings?(): ReactNode;
+  /** bump to re-render the settings */
+  readonly rev?: Rev;
 }
