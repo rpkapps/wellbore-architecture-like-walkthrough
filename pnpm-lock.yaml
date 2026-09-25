@@ -449,7 +449,7 @@ packages:
     hasBin: true
 
   '@tecton/react@file:vendor/tecton-react-0.1.0.tgz':
-    resolution: {integrity: sha512-Ux5QjWeEvEtiSm7IT/5Q4zjXMa1fa+x3YLOfONImguDUp/CM4yxZeknjaEgr8Vtyc+Gr/Mnrx1InR5egx3dbkg==, tarball: file:vendor/tecton-react-0.1.0.tgz}
+    resolution: {integrity: sha512-5ZY5o+rKxHFh7ktYSeivyUO3/ojYJtQsiiB4z0g+/cQA/MAuRLpRUJi/SFsTm6mB/xQXPzqp8BjDAXm6VhIhEw==, tarball: file:vendor/tecton-react-0.1.0.tgz}
     version: 0.1.0
     hasBin: true
     peerDependencies:

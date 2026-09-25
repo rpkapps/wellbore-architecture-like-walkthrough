@@ -65,9 +65,18 @@ function Dot({ color }: { color: string }) {
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
-/** Full-height divider between header groups. */
+/**
+ * Divider between the brand, the well and the row. Every divider in the header
+ * is the same short rule with the same space either side: the header's gap
+ * here, the row's smaller gap plus a margin in `GroupDivider`.
+ */
 function Divider() {
-  return <Separator orientation="vertical" emphasis="subtle" />;
+  return <Separator orientation="vertical" className="h-4 aria-[orientation=vertical]:self-center" />;
+}
+
+/** Divider between groups in the row; it leaves with the items around it. */
+function GroupDivider() {
+  return <OverflowDivider className="mx-1" />;
 }
 
 /**
@@ -167,7 +176,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
             </TabStrip>
           </Tabs>
         </OverflowItem>
-        <OverflowDivider />
+        <GroupDivider />
         <OverflowItem
           id="colour"
           priority={8}
@@ -214,8 +223,9 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
             </Select>
           )}
         </OverflowItem>
-        <OverflowDivider />
+        {/* the spacer comes first, so the divider stays beside the commands, not before the gap */}
         <OverflowSpacer />
+        <GroupDivider />
         <OverflowItem id="interpretation" priority={6} label="Interpretation" icon={<FlaskConicalIcon />} onAction={() => app.showSidebar('interpretation', true)}>
           <Button variant={tab('interpretation') ? 'secondary' : 'ghost'} size="sm">
             <FlaskConicalIcon data-icon="inline-start" />
@@ -241,16 +251,16 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
           </Button>
         </OverflowItem>
         <LiveItem app={app} />
-        {tools.length > 0 && <OverflowDivider />}
+        {tools.length > 0 && <GroupDivider />}
         {tools.map((t) => (
           <Tool key={t.id} t={t} />
         ))}
-        <OverflowDivider />
+        <GroupDivider />
         <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
         <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
         <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
         <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
-        <OverflowDivider />
+        <GroupDivider />
         <OverflowItem id="palette" priority={10} label="Command palette" icon={<SearchIcon />} shortcut={palette} onAction={() => app.paletteOpen.set(true)}>
           <Button variant="ghost" size="sm" aria-label="Command palette" className="gap-1.5 text-fg-2">
             <SearchIcon data-icon="inline-start" />
