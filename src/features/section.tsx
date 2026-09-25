@@ -3,7 +3,7 @@ import { FORMATION_BY_ID } from '../data/stratigraphy';
 import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
-import { ToolWindow, fitCanvas } from '../ui/toolWindow';
+import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { font, ink } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
@@ -30,12 +30,15 @@ interface PathPt {
 export class SectionFeature implements FeatureModule {
   readonly id = 'section' as const;
   private panel: ToolWindow;
-  private canvas: HTMLCanvasElement | null = null;
+  /** the section is cached; playback only moves the cursor dot over it */
+  private view = new PanelCanvas({ draw: (g, W, H) => this.draw(g, W, H), cursor: (g) => this.drawCursor(g), visible: () => this.panel.visible && this.path.length >= 2 });
   private path: PathPt[] = [];
   private mode: 'reservoir' | 'full' | 'cursor' = 'reservoir';
   private ve = 0; // 0 = auto
   private curve = 'GR';
   private lastMd = -1;
+  /** what the section shows from other features, to redraw when it changes */
+  private overlays = '';
   private tx: ((s: number) => number) | null = null;
   private ty: ((d: number) => number) | null = null;
 
@@ -52,7 +55,7 @@ export class SectionFeature implements FeatureModule {
             value={this.mode}
             onChange={(v) => {
               this.mode = v as typeof this.mode;
-              this.draw();
+              this.view.invalidate();
               this.panel.rev.bump();
             }}
             options={[
@@ -66,7 +69,7 @@ export class SectionFeature implements FeatureModule {
             value={String(this.ve)}
             onChange={(v) => {
               this.ve = +v;
-              this.draw();
+              this.view.invalidate();
               this.panel.rev.bump();
             }}
             options={[0, 1, 2, 5, 10, 20].map((v) => ({ id: String(v), label: v ? `VE ×${v}` : 'VE auto' }))}
@@ -76,7 +79,7 @@ export class SectionFeature implements FeatureModule {
             value={this.curve || NONE}
             onChange={(v) => {
               this.curve = v === NONE ? '' : v;
-              this.draw();
+              this.view.invalidate();
               this.panel.rev.bump();
             }}
             options={[{ id: NONE, label: 'No log' }, ...CURVES.map((c) => ({ id: c.key, label: c.label }))]}
@@ -84,17 +87,14 @@ export class SectionFeature implements FeatureModule {
         </>
       ),
       body: () => (
-        <canvas
-          ref={(el) => {
-            this.canvas = el;
-          }}
+        <CanvasBox
+          view={this.view}
           aria-label="Cross-section along the well path: click near the well to travel there"
-          className="block min-h-0 w-full flex-1 cursor-pointer"
+          className="cursor-pointer"
           onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
         />
       ),
     });
-    this.panel.onResize = () => this.draw();
   }
 
   enable() {
@@ -111,10 +111,19 @@ export class SectionFeature implements FeatureModule {
   }
 
   frame() {
+    const { flags } = this.app;
+    const gs = flags.on('geosteer') ? this.app.feature<GeosteerFeature>('geosteer')?.profile : null;
+    const overlays = `${gs ? `${gs.source}:${gs.samples.length}:${gs.samples[0]?.top}` : ''}|${flags.on('owc') ? this.app.feature<ContactsFeature>('owc')?.planeDepth : ''}|${flags.on('uncertainty')}`;
+    if (overlays !== this.overlays) {
+      this.overlays = overlays;
+      this.view.invalidate();
+    }
     const md = this.app.engine.rig.md;
     if (Math.abs(md - this.lastMd) < 0.5) return;
     this.lastMd = md;
-    this.draw();
+    // following the cursor moves the section; otherwise only the cursor dot moves
+    if (this.mode === 'cursor') this.view.redraw();
+    else this.view.moveCursor();
   }
 
   settings() {
@@ -137,7 +146,7 @@ export class SectionFeature implements FeatureModule {
     }
     this.path = out;
     this.lastMd = -1;
-    this.draw();
+    this.view.invalidate();
   }
 
   /** plan position at horizontal distance s, extending along the end azimuths */
@@ -215,11 +224,7 @@ export class SectionFeature implements FeatureModule {
     if (bd < 40 * 40) this.app.travelTo(best.md);
   }
 
-  draw() {
-    if (!this.panel.visible || this.path.length < 2) return;
-    const fit = fitCanvas(this.canvas);
-    if (!fit) return;
-    const { g, W, H } = fit;
+  private draw(g: CanvasRenderingContext2D, W: number, H: number) {
     const PL = 48;
     const PR = 10;
     const PT = 8;
@@ -385,16 +390,6 @@ export class SectionFeature implements FeatureModule {
       g.arc(x, y, 2.6, 0, Math.PI * 2);
       g.fill();
     }
-    // cursor
-    const md = this.app.engine.rig.md;
-    const cp = this.path.reduce((a, b) => (Math.abs(b.md - md) < Math.abs(a.md - md) ? b : a));
-    g.fillStyle = '#7fe3ff';
-    g.strokeStyle = '#0b0e13';
-    g.lineWidth = 2;
-    g.beginPath();
-    g.arc(X(cp.s), Y(cp.tvdss), 5, 0, Math.PI * 2);
-    g.fill();
-    g.stroke();
     // axes
     g.fillStyle = ink.card;
     g.globalAlpha = 0.85;
@@ -414,5 +409,20 @@ export class SectionFeature implements FeatureModule {
     const ve = ((s1 - s0) / (W - PL - PR)) / ((d1 - d0) / (H - PT - PB));
     g.textAlign = 'right';
     g.fillText(`along-path distance m · VE ×${ve.toFixed(ve < 2 ? 1 : 0)}${def && data ? ` · ${def.label} (${def.range})` : ''}`, W - PR, H - 6 - 12);
+  }
+
+  private drawCursor(g: CanvasRenderingContext2D) {
+    const X = this.tx;
+    const Y = this.ty;
+    if (!X || !Y || this.path.length < 2) return;
+    const md = this.app.engine.rig.md;
+    const cp = this.path.reduce((a, b) => (Math.abs(b.md - md) < Math.abs(a.md - md) ? b : a));
+    g.fillStyle = '#7fe3ff';
+    g.strokeStyle = '#0b0e13';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(X(cp.s), Y(cp.tvdss), 5, 0, Math.PI * 2);
+    g.fill();
+    g.stroke();
   }
 }

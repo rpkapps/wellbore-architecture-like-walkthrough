@@ -8,6 +8,7 @@ import { CompactSelect } from '../controls';
 import { IconButton } from '../icon-button';
 import { useSignal } from '../signal';
 import { cssVar, font, ink, wash } from '../tokens';
+import { fitStore } from '../toolWindow';
 
 /**
  * Strip charts of the readings a live source delivers by time — the rig's
@@ -132,13 +133,14 @@ export function LiveBody({ app }: { app: App }) {
   const { series, shown, windowMs, wellId } = useLiveState(app);
   const cv = useRef<HTMLCanvasElement>(null);
   const hover = useRef<number | null>(null);
+  const size = useRef({ W: 0, H: 0 });
   const draw = useRef<() => void>(() => {});
   const channels = useMemo(() => shown.filter((n) => series?.channels.has(n)), [shown, series, series?.channels.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   draw.current = () => {
     const c = cv.current;
     if (!c || !series) return;
-    paint(c, series, channels, windowMs === 'all' ? Infinity : Number(windowMs), hover.current);
+    paint(c, size.current.W, size.current.H, series, channels, windowMs === 'all' ? Infinity : Number(windowMs), hover.current);
   };
 
   // redraw when readings arrive, the size changes or the pointer moves; at most once a frame
@@ -148,9 +150,14 @@ export function LiveBody({ app }: { app: App }) {
       if (!raf) raf = requestAnimationFrame(() => ((raf = 0), draw.current()));
     };
     const off = app.hub.seriesRev.subscribe(kick);
-    const ro = new ResizeObserver(kick);
-    if (cv.current) ro.observe(cv.current);
     const c = cv.current;
+    // the size comes with the observation, once per frame after layout: draw now, so the chart never shows stretched
+    const ro = new ResizeObserver((es) => {
+      const r = es[es.length - 1].contentRect;
+      size.current = { W: Math.round(r.width), H: Math.round(r.height) };
+      draw.current();
+    });
+    if (c?.parentElement) ro.observe(c.parentElement);
     const move = (e: PointerEvent) => {
       hover.current = e.offsetX;
       kick();
@@ -184,8 +191,9 @@ export function LiveBody({ app }: { app: App }) {
       </Empty>
     );
   return (
-    <div className="relative min-h-0 flex-1">
-      <canvas ref={cv} role="img" aria-label={`Live readings: ${channels.join(', ')}`} className="absolute inset-0 block size-full cursor-crosshair" />
+    // the canvas keeps its backing store's size (grown in steps); this box clips it
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <canvas ref={cv} role="img" aria-label={`Live readings: ${channels.join(', ')}`} className="absolute top-0 left-0 block cursor-crosshair" />
     </div>
   );
 }
@@ -195,18 +203,16 @@ export function LiveBody({ app }: { app: App }) {
 const AXIS = 18;
 const GAP = 4;
 
-function paint(c: HTMLCanvasElement, s: TimeSeries, names: string[], windowMs: number, hoverX: number | null) {
+function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], windowMs: number, hoverX: number | null) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const W = c.clientWidth;
-  const H = c.clientHeight;
   if (!W || !H) return;
-  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
-    c.width = Math.round(W * dpr);
-    c.height = Math.round(H * dpr);
+  if (fitStore(c, W, H, dpr)) {
+    c.style.width = `${c.width / dpr}px`;
+    c.style.height = `${c.height / dpr}px`;
   }
   const g = c.getContext('2d')!;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, W, H);
+  g.clearRect(0, 0, c.width, c.height);
   if (!names.length) return;
   const t1 = s.last;
   // a fixed window once there is enough data; until then the data fills the width

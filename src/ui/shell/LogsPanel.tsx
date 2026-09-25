@@ -61,7 +61,10 @@ export function LogsBody({ app }: { app: App }) {
   return (
     <div className="relative min-h-0 flex-1">
       {loading && <LogsSkeleton name={loading} />}
-      <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute inset-0 block size-full cursor-crosshair" />
+      {/* the canvas keeps its own size (grown in steps while the panel resizes); this box clips it to the panel */}
+      <div className="absolute inset-0 overflow-hidden">
+        <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute top-0 left-0 block cursor-crosshair" />
+      </div>
       <LogReadout logs={logs} />
     </div>
   );
