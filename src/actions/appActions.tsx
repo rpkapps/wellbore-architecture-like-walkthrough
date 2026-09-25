@@ -10,7 +10,7 @@ import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, ty
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
-import { locate, PRESETS, type PresetId } from '../ui/workspace/layout';
+import { locate, PRESETS } from '../ui/workspace/layout';
 import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
@@ -561,41 +561,106 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'workspace.apply',
       title: 'Workspace',
-      description: 'Arranges the panels for a task, or as a saved workspace.',
+      description:
+        'Switches to a workspace tab. Each keeps its own panel layout as you left it, and can set up its task: Petrophysics colours the well by hydrocarbons, Geosteering follows the bit in guided mode.',
       category: 'Workspace',
-      where: 'Top bar › Workspace',
-      input: z.object({ id: z.string().meta({ description: 'A built-in layout (walkthrough, petrophysics, geosteering) or a saved workspace id' }) }),
-      choices: (app) => [
-        ...PRESETS.map((p) => ({ label: p.label, input: { id: p.id }, current: app.workspace.current.value === p.id })),
-        ...app.workspace.saved.value.map((w) => ({ label: w.name, input: { id: w.id }, current: app.workspace.current.value === w.id })),
-      ],
+      where: 'Top bar › Workspace tabs',
+      input: z.object({ id: z.string().meta({ description: 'A built-in workspace (walkthrough, petrophysics, geosteering) or the id of one of yours' }) }),
+      choices: (app) => app.workspace.list().map((w) => ({ label: w.name, input: { id: w.id }, current: app.workspace.current.value === w.id })),
       run: (app, { id }) => {
-        const has = (p: string) => p in panelIds();
-        if (PRESETS.some((p) => p.id === id)) withTransition(() => app.workspace.preset(id as PresetId, has));
-        else if (app.workspace.saved.value.some((w) => w.id === id)) withTransition(() => app.workspace.load(id, has));
-        else throw new Error(`No workspace "${id}".`);
+        if (!app.switchWorkspace(id)) throw new Error(`No workspace "${id}".`);
+      },
+    }),
+    A({
+      id: 'workspace.next',
+      title: 'Next workspace',
+      description: 'Switches to the workspace tab to the right (wrapping round).',
+      category: 'Workspace',
+      shortcut: 'Ctrl PgDn',
+      run: (app) => {
+        const id = app.workspace.neighbour(1, app.targetWorkspace);
+        app.switchWorkspace(id);
+        return { workspace: id };
+      },
+    }),
+    A({
+      id: 'workspace.previous',
+      title: 'Previous workspace',
+      description: 'Switches to the workspace tab to the left (wrapping round).',
+      category: 'Workspace',
+      shortcut: 'Ctrl PgUp',
+      run: (app) => {
+        const id = app.workspace.neighbour(-1, app.targetWorkspace);
+        app.switchWorkspace(id);
+        return { workspace: id };
+      },
+    }),
+    A({
+      id: 'workspace.reset',
+      title: 'Reset workspace',
+      description: "Puts a workspace's panel layout back to where it started: a built-in one to its preset, one of yours to the layout it was saved or duplicated with.",
+      category: 'Workspace',
+      keywords: ['layout', 'default', 'restore'],
+      input: z.object({ id: z.string() }),
+      choices: (app) => app.workspace.list().map((w) => ({ label: w.name, input: { id: w.id }, current: app.workspace.current.value === w.id })),
+      run: (app, { id }) => {
+        if (!app.workspace.has(id)) throw new Error(`No workspace "${id}".`);
+        app.resetWorkspace(id);
       },
     }),
     A({
       id: 'workspace.save',
       title: 'Save workspace as',
-      description: 'Saves the current panel layout under a name (a name in use is replaced).',
+      description: 'Saves the current panel layout as a new workspace tab and switches to it (a name in use by one of yours replaces it).',
       category: 'Workspace',
-      where: 'Top bar › Workspace',
+      where: 'Top bar › Workspace tabs',
       input: z.object({ name: z.string().min(1).max(60) }),
       prompt: { label: 'Workspace name', placeholder: 'e.g. Logs review', parse: (t) => (t.trim() ? { name: t.trim() } : null) },
       run: (app, { name }) => ({ id: app.workspace.saveAs(name) }),
     }),
     A({
-      id: 'workspace.delete',
-      title: 'Delete saved workspace',
-      description: 'Removes one of your saved workspaces.',
+      id: 'workspace.duplicate',
+      title: 'Duplicate workspace',
+      description: 'Copies a workspace (its layout as it is now and its task context) into a new tab of yours, and switches to it.',
       category: 'Workspace',
-      where: 'Top bar › Workspace',
+      input: z.object({ id: z.string(), name: z.string().min(1).max(60).optional() }),
+      choices: (app) => app.workspace.list().map((w) => ({ label: w.name, input: { id: w.id }, current: app.workspace.current.value === w.id })),
+      run: (app, { id, name }) => {
+        if (!app.workspace.has(id)) throw new Error(`No workspace "${id}".`);
+        const copy = app.workspace.duplicate(id, name);
+        app.switchWorkspace(copy);
+        return { id: copy, name: app.workspace.info(copy)?.name };
+      },
+    }),
+    A({
+      id: 'workspace.rename',
+      title: 'Rename workspace',
+      description: 'Renames one of your workspaces (the active one when no id is given). Built-in workspaces keep their names.',
+      category: 'Workspace',
+      input: z.object({ id: z.string().optional(), name: z.string().min(1).max(60) }),
+      enabled: (app) => app.workspace.saved.value.length > 0,
+      prompt: { label: 'New name for the active workspace', placeholder: 'e.g. Logs review', parse: (t) => (t.trim() ? { name: t.trim() } : null) },
+      run: (app, { id = app.workspace.current.value, name }) => {
+        if (!app.workspace.saved.value.some((w) => w.id === id)) throw new Error('Built-in workspaces keep their names: duplicate one to make your own.');
+        app.workspace.rename(id, name);
+      },
+    }),
+    A({
+      id: 'workspace.delete',
+      title: 'Delete workspace',
+      description: 'Removes one of your workspace tabs (built-in ones stay). Deleting the active one goes back to Walkthrough.',
+      category: 'Workspace',
+      where: 'Top bar › Workspace tabs',
       needsApproval: true,
       input: z.object({ id: z.string() }),
+      enabled: (app) => app.workspace.saved.value.length > 0,
       choices: (app) => app.workspace.saved.value.map((w) => ({ label: w.name, input: { id: w.id } })),
-      run: (app, { id }) => app.workspace.remove(id),
+      run: (app, { id }) => {
+        if (!app.workspace.saved.value.some((w) => w.id === id)) throw new Error(`No workspace of yours with id "${id}".`);
+        if (app.workspace.current.value === id) app.switchWorkspace(PRESETS[0].id);
+        // after the switch has run (it waits for the next frame), so the tab leaves once its layout has
+        withTransition(() => app.workspace.remove(id, app.hasPanel));
+      },
     }),
 
     // ------------------------------------------------------------------ features

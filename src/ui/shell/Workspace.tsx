@@ -36,7 +36,7 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
   const rail = useMemo(() => ({ extra: <DataEntry app={app} />, footer: <RailFooter app={app} /> }), [app]);
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
-      {!presenting && <TopBar app={app} panels={panels} brand={brand} />}
+      {!presenting && <TopBar app={app} brand={brand} />}
       <WorkspaceFrame
         ws={app.workspace}
         panels={panels}
