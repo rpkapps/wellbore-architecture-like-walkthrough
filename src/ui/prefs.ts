@@ -37,7 +37,7 @@ export const DEFAULT_PREFS: Prefs = {
   reduceMotion: false,
 };
 
-export const DENSITY_ROOT: Record<Density, number> = { compact: 13, default: 14, comfortable: 15 };
+export const DENSITY_ROOT: Record<Density, number> = { compact: 14, default: 15, comfortable: 17 };
 
 /** Palette step of each accent family that reads well on the dark theme. */
 export const ACCENTS: { id: Accent; label: string; step: string }[] = [

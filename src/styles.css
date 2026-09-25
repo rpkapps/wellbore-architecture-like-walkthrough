@@ -22,7 +22,7 @@
 
 @layer base {
   :root {
-    --ui-root: 14px;
+    --ui-root: 15px;
     --ui-accent: var(--tecton-palette-orchid-460);
     /* three text levels: values and titles / labels / captions and section headers */
     --fg-1: var(--foreground);
