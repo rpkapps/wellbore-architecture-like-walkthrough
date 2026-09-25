@@ -78,7 +78,7 @@ export class MeasureFeature implements FeatureModule {
   setActive(on: boolean) {
     this.pending = null;
     this.step.set(on ? 'first' : 'off');
-    if (on) this.app.addHud({ id: 'measure', render: () => <MeasureHint m={this} /> });
+    if (on) this.app.addHud({ id: 'measure', render: () => <MeasureHint m={this} />, prompt: true });
     else this.app.removeHud('measure');
     this.app.engine.renderer.domElement.classList.toggle('measuring', on);
   }
@@ -163,9 +163,7 @@ export class MeasureFeature implements FeatureModule {
   }
 }
 
-/** Top-bar ruler button; shows as pressed while measuring. */
-
-/** HUD hint while measuring: which point to click next, Clear and Done. */
+/** The prompt while measuring, over the 3D view above its toolbar: which point to click next, Clear and Done. */
 function MeasureHint({ m }: { m: MeasureFeature }) {
   const step = useSignal(m.step);
   if (step === 'off') return null;

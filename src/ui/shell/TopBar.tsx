@@ -1,30 +1,17 @@
 import { Button } from '@tecton/react/components/button';
-import {
-  DropdownMenu,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@tecton/react/components/dropdown-menu';
+import { DropdownMenu, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@tecton/react/components/select';
 import { Separator } from '@tecton/react/components/separator';
-import { Tabs } from '@tecton/react/components/tabs';
-import { Tab, TabStrip } from '../tabs';
-import { AppShellBrand, AppShellHeader, useMinWidth } from '@tecton/react/tecton/app-shell';
+import { AppShellBrand, AppShellHeader } from '@tecton/react/tecton/app-shell';
 import { Overflow, OverflowDivider, OverflowItem, OverflowLabel, OverflowSpacer } from '@tecton/react/tecton/overflow';
-import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
+import { LogCurveIcon, WellIcon } from '@tecton/react/icons';
 import {
   AppWindowIcon,
   ChartColumnIcon,
   CircleHelpIcon,
-  CompassIcon,
   FlaskConicalIcon,
   LayoutDashboardIcon,
   MaximizeIcon,
-  PaintBucketIcon,
   PaletteIcon,
   PanelLeftIcon,
   RadioTowerIcon,
@@ -35,9 +22,7 @@ import {
 } from 'lucide-react';
 import { memo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
-import type { NavMode } from '../../scene/cameraRig';
-import type { PropertyMode } from '../../scene/wellbore';
-import type { App, ToolEntry } from '../app';
+import type { App } from '../app';
 import { IconButton, Tip } from '../icon-button';
 import { Logo } from '../logo';
 import { useWindowMenu, useWorkspaceMenu } from '../workspace/menus';
@@ -50,19 +35,6 @@ import { PersonaliseDialog } from './PersonaliseDialog';
 import { CommandPalette } from './CommandPalette';
 import { Kbd } from '@tecton/react/components/kbd';
 import { ProductionSheet } from './ProductionSheet';
-
-const PROPERTIES: { id: PropertyMode; label: string; dot: string }[] = [
-  { id: 'resistivity', label: 'Resistivity', dot: '#7fe3ff' },
-  { id: 'hydrocarbon', label: 'Hydrocarbons', dot: '#ffb547' },
-  { id: 'lithology', label: 'Lithology', dot: '#a28e67' },
-  { id: 'rop', label: 'ROP', dot: '#f28a3c' },
-];
-
-const idle = new Signal<unknown>(0);
-
-function Dot({ color }: { color: string }) {
-  return <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: color }} />;
-}
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -81,8 +53,9 @@ function GroupDivider() {
 }
 
 /**
- * Brand, well selector and one row holding everything else: navigation,
- * colouring, commands, and the window and panel controls. As the window
+ * Brand, well selector and one row holding everything else: commands and
+ * the window and panel controls (navigation and the view tools are on the
+ * viewport toolbar, colour-by on the colour key). As the window
  * narrows, labels collapse to icons, then controls move into the More menu
  * at the end, least used first, down to the well, search and More on a phone.
  */
@@ -133,9 +106,6 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
       <WellSelect app={app} />
       <Divider />
       <Overflow role="group" aria-label="View and commands" className="min-w-0 flex-1 flex-nowrap justify-end gap-1">
-        <NavItem app={app} />
-        <GroupDivider />
-        <ColourItem app={app} />
         {/* the spacer comes first, so the divider stays beside the commands, not before the gap */}
         <OverflowSpacer />
         <GroupDivider />
@@ -154,9 +124,7 @@ const Controls = memo(function Controls({ app, panels }: { app: App; panels: Map
           </Button>
         </OverflowItem>
         <LiveItem app={app} />
-        <Tools app={app} />
         <GroupDivider />
-        <IconItem id="overview" priority={3} label="Field overview" icon={<OilRigOffshoreIcon />} onAction={() => app.overview()} />
         <IconItem id="personalise" priority={1} label="Personalise" icon={<PaletteIcon />} onAction={() => app.personaliseOpen.set(true)} />
         <IconItem id="help" priority={1} label="Controls & data notes" icon={<CircleHelpIcon />} onAction={() => app.helpOpen.set(true)} />
         <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
@@ -225,86 +193,6 @@ function WellSelect({ app }: { app: App }) {
   );
 }
 
-function NavItem({ app }: { app: App }) {
-  useRev(app.viewRev);
-  const mode = app.engine.rig.mode;
-  return (
-    <OverflowItem
-      id="nav"
-      priority={9}
-      labelBehavior="keep"
-      tooltip={false}
-      overflow={<ChoiceMenu id="nav" label="Navigation" icon={<CompassIcon />} value={mode} choices={NAV} onChange={(k) => app.setNav(k as NavMode)} />}
-    >
-      <Tabs selectedKey={mode} onSelectionChange={(k) => app.setNav(String(k) as NavMode)} className="shrink-0">
-        <TabStrip aria-label="Navigation">
-          {NAV.map((n) => (
-            <Tab key={n.id} id={n.id}>
-              {n.label}
-            </Tab>
-          ))}
-        </TabStrip>
-      </Tabs>
-    </OverflowItem>
-  );
-}
-
-function ColourItem({ app }: { app: App }) {
-  useRev(app.viewRev);
-  const optional = useSignal(app.optionalModes);
-  const roomy = useMinWidth(1360);
-  const mode = app.engine.mode;
-  const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop'));
-  return (
-    <OverflowItem
-      id="colour"
-      priority={8}
-      labelBehavior="keep"
-      tooltip={false}
-      overflow={
-        <ChoiceMenu
-          id="colour"
-          label="Colour by"
-          icon={<PaintBucketIcon />}
-          value={mode}
-          choices={props.map((p) => ({ id: p.id, label: p.label, icon: <Dot color={p.dot} /> }))}
-          onChange={(k) => app.setProperty(k as PropertyMode)}
-        />
-      }
-    >
-      {roomy ? (
-        <Tabs selectedKey={mode} onSelectionChange={(k) => app.setProperty(String(k) as PropertyMode)} className="shrink-0">
-          <TabStrip aria-label="Colour the wellbore by">
-            {props.map((p) => (
-              <Tab key={p.id} id={p.id}>
-                <Dot color={p.dot} />
-                {p.label}
-              </Tab>
-            ))}
-          </TabStrip>
-        </Tabs>
-      ) : (
-        <Select aria-label="Colour the wellbore by" selectedKey={mode} onSelectionChange={(k: Key | null) => k !== null && app.setProperty(String(k) as PropertyMode)} className="w-36 shrink-0">
-          <SelectTrigger size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-max min-w-(--trigger-width)">
-            {props.map((p) => (
-              <SelectItem key={p.id} id={p.id} textValue={p.label}>
-                {/* the item's own row does not centre its children vertically */}
-                <span className="flex items-center gap-2">
-                  <Dot color={p.dot} />
-                  {p.label}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-    </OverflowItem>
-  );
-}
-
 /** A panel's button (Interpretation, Features): highlighted while the panel shows. */
 function PanelItem({ app, id, priority, label, Icon }: { app: App; id: 'interpretation' | 'features'; priority: number; label: string; Icon: LucideIcon }) {
   const shown = useShown(app, id);
@@ -315,18 +203,6 @@ function PanelItem({ app, id, priority, label, Icon }: { app: App; id: 'interpre
         <OverflowLabel>{label}</OverflowLabel>
       </Button>
     </OverflowItem>
-  );
-}
-
-function Tools({ app }: { app: App }) {
-  const tools = useSignal(app.tools);
-  return (
-    <>
-      {tools.length > 0 && <GroupDivider />}
-      {tools.map((t) => (
-        <Tool key={t.id} t={t} />
-      ))}
-    </>
   );
 }
 
@@ -363,58 +239,6 @@ function LeftToggle({ app }: { app: App }) {
 function LogsToggle({ app }: { app: App }) {
   const open = useShown(app, 'logs');
   return <IconItem id="logs" priority={7} label="Well logs" menuLabel={open ? 'Hide well logs' : 'Show well logs'} icon={<LogCurveIcon />} onAction={() => app.togglePanel('right')} isActive={open} />;
-}
-
-const NAV: { id: NavMode; label: string }[] = [
-  { id: 'guided', label: 'Guided' },
-  { id: 'explore', label: 'Explore' },
-];
-
-/** The More-menu form of a set of tabs: a submenu with the current choice ticked. */
-function ChoiceMenu({
-  id,
-  label,
-  icon,
-  value,
-  choices,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  icon: ReactNode;
-  value: string;
-  choices: { id: string; label: string; icon?: ReactNode }[];
-  onChange: (id: string) => void;
-}) {
-  const current = choices.find((c) => c.id === value);
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger id={id} textValue={label}>
-        {icon}
-        {label}
-        {current && <span className="ml-auto pl-3 text-muted-foreground">{current.label}</span>}
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        <DropdownMenuGroup
-          selectionMode="single"
-          selectedKeys={[value]}
-          onSelectionChange={(keys) => {
-            const k = keys === 'all' ? undefined : [...keys][0];
-            if (k !== undefined && String(k) !== value) onChange(String(k));
-          }}
-        >
-          {choices.map((c) => (
-            <DropdownMenuItem key={c.id} id={c.id} textValue={c.label}>
-              <span className="flex items-center gap-2">
-                {c.icon}
-                {c.label}
-              </span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
 }
 
 /** A labelled menu button (Window, Workspace); in the More menu it becomes a submenu. */
@@ -477,63 +301,6 @@ function IconItem({
       <IconButton label={label} variant={isActive ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={isActive}>
         {icon}
       </IconButton>
-    </OverflowItem>
-  );
-}
-
-/** A feature's command: a toggle or action button, or a menu of choices. */
-function Tool({ t }: { t: ToolEntry }) {
-  useSignal(t.watch ?? idle);
-  if (!t.menu) return <IconItem id={t.id} priority={2} label={t.label} icon={t.icon} onAction={t.onAction} isActive={t.isActive?.()} />;
-  const actions = t.menu.filter((m) => !m.isSelected);
-  const toggles = t.menu.filter((m) => m.isSelected);
-  const contents = (
-    <>
-      <DropdownMenuGroup>
-        {actions.map((m) => (
-          <DropdownMenuItem key={m.id} id={m.id} onAction={m.onAction}>
-            {m.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuGroup>
-      {toggles.length > 0 && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup selectionMode="multiple" selectedKeys={toggles.filter((m) => m.isSelected!()).map((m) => m.id)}>
-            {toggles.map((m) => (
-              <DropdownMenuItem key={m.id} id={m.id} onAction={m.onAction}>
-                {m.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-        </>
-      )}
-    </>
-  );
-  return (
-    <OverflowItem
-      id={t.id}
-      priority={2}
-      label={t.label}
-      icon={t.icon}
-      labelBehavior="keep"
-      tooltip={false}
-      overflow={
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger id={t.id}>
-            {t.icon}
-            {t.label}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>{contents}</DropdownMenuSubContent>
-        </DropdownMenuSub>
-      }
-    >
-      <DropdownMenuTrigger>
-        <IconButton label={t.label}>{t.icon}</IconButton>
-        <DropdownMenu placement="bottom end" className="w-max min-w-56">
-          {contents}
-        </DropdownMenu>
-      </DropdownMenuTrigger>
     </OverflowItem>
   );
 }

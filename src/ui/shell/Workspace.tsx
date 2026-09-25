@@ -7,7 +7,7 @@ import { activeWindow, openWindows, toolWindows } from '../toolWindow';
 import { WorkspaceFrame } from '../workspace/Frame';
 import { openPanels } from '../workspace/layout';
 import { usePanels } from '../workspace/panels';
-import { Hud } from './Hud';
+import { HudPrompts } from './Hud';
 import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
 import { trackEditor } from './LogsPanel';
@@ -15,7 +15,7 @@ import { Narrative } from './Narrative';
 import { Morph } from './overlay';
 import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
-import { ViewControls } from './ViewControls';
+import { ViewToolbar } from './ViewControls';
 
 const BUILTIN = new Set(['scene', 'interpretation', 'features', 'logs']);
 const TIMELINE_H = 64;
@@ -95,16 +95,22 @@ function Viewport({ app }: { app: App }) {
   );
 }
 
-/** The widgets over the 3D view, inside the area the panels leave free. */
+/**
+ * The widgets over the 3D view, inside the area the panels leave free: only
+ * what belongs to the view. The colour key (or the inspector, while something
+ * is inspected) at the top right; at the bottom centre the toolbar, with a
+ * tool's prompt above it and the chapter card above that, over its marker.
+ * Where the camera is lives in the timeline.
+ */
 function Overlays({ app }: { app: App }) {
   const presentation = useSignal(app.presentation);
   const inspecting = useSignal(app.inspector) !== null;
   // the same elements every time: opening the inspector re-renders these wrappers, not the widgets
-  const hud = useMemo(() => <Hud app={app} />, [app]);
   const legend = useMemo(() => <Legend app={app} />, [app]);
   const inspector = useMemo(() => <InspectorCard app={app} />, [app]);
   const narrative = useMemo(() => <Narrative app={app} />, [app]);
-  const controls = useMemo(() => <ViewControls app={app} />, [app]);
+  const toolbar = useMemo(() => <ViewToolbar app={app} />, [app]);
+  const prompts = useMemo(() => <HudPrompts app={app} />, [app]);
   if (presentation !== null)
     return (
       <div className="absolute inset-x-0 bottom-8 flex justify-center px-4">
@@ -113,23 +119,16 @@ function Overlays({ app }: { app: App }) {
     );
   return (
     <>
-      <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
-        <div className="pointer-events-auto">
-          <Morph anchor="tl">{hud}</Morph>
-        </div>
-      </div>
-      <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
+      <div className="absolute top-2 right-2 bottom-14 flex max-w-[calc(100%-1rem)] flex-col items-end @2xl:max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto flex min-h-0 flex-col">
           <Morph anchor="tr">{inspecting ? inspector : legend}</Morph>
         </div>
       </div>
-      <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
-        <div className="pointer-events-auto">
-          <Morph anchor="bl">{narrative}</Morph>
-        </div>
-      </div>
-      <div className="absolute right-2 bottom-2">
-        <div className="pointer-events-auto">{controls}</div>
+      <div className="absolute inset-x-2 bottom-2 flex flex-col items-center gap-2">
+        {narrative}
+        {prompts}
+        {/* positioned, so it paints over the chapter card's line */}
+        <div className="pointer-events-auto relative max-w-full">{toolbar}</div>
       </div>
     </>
   );

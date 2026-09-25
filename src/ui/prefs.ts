@@ -113,7 +113,7 @@ prefs.subscribe(() => {
 });
 applyPrefs();
 
-const OVERLAYS = ['hud', 'legend', 'inspector', 'narrative'];
+const OVERLAYS = ['legend', 'inspector', 'narrative'];
 
 /** bumped by "collapse / expand all": every overlay adopts `overlayState.collapsed` */
 export const overlayBroadcast = new Signal(0);

@@ -1,51 +1,94 @@
+import { Popover, PopoverTrigger } from '@tecton/react/components/popover';
 import { Separator } from '@tecton/react/components/separator';
-import { Panel, PanelContent } from '@tecton/react/tecton/panel';
+import { Panel } from '@tecton/react/tecton/panel';
 import { useLayoutEffect, useRef } from 'react';
+import { Button as AriaButton } from 'react-aria-components';
 import type { App } from '../app';
 import { fmt } from '../dom';
+import { Tip } from '../icon-button';
 import { useSignal } from '../signal';
-import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
+import { SURFACE } from './overlay';
+
+/**
+ * Where along the well, at the left end of the timeline: MD, TVDSS, the
+ * inclination, the formation and what features add in a few words
+ * (geosteering: IN ZONE). Pressing it opens the full details above it.
+ * Fixed width, so the strip beside it does not move as the numbers change.
+ */
+export function PoseReadout({ app }: { app: App }) {
+  return (
+    <PopoverTrigger>
+      <Tip label="Position details" placement="top">
+        <AriaButton className="flex h-11 w-48 shrink-0 cursor-pointer flex-col justify-center gap-0.5 rounded-md px-2 text-left outline-none data-focus-visible:ring-2 data-focus-visible:ring-ring data-hovered:bg-ghost-hover data-pressed:bg-ghost-active">
+          <ReadoutText app={app} />
+        </AriaButton>
+      </Tip>
+      <Popover placement="top start" offset={10} className="w-80">
+        <HudDetails app={app} />
+      </Popover>
+    </PopoverTrigger>
+  );
+}
+
+/** The read-out's two lines; only they render as the camera moves (at most ~15 times a second). */
+function ReadoutText({ app }: { app: App }) {
+  const p = useSignal(app.poseText);
+  const chips = useSignal(app.huds).filter((h) => h.chip);
+  return (
+    <>
+      <span className="type-value flex items-baseline gap-1 text-xs! whitespace-nowrap">
+        <span className="type-unit">MD</span>
+        {fmt.n(p.md, 1)}
+        <span className="type-unit ml-1.5">TVDSS</span>
+        {fmt.n(p.tvdss, 1)}
+      </span>
+      <span className="type-caption flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+        <span className="type-value text-xs!">{fmt.n(p.inc, 0)}°</span>
+        <span className="min-w-0 truncate text-fg-2">{p.zone}</span>
+        {chips.map((h) => (
+          <span key={h.id} className="flex shrink-0 items-center">
+            {h.chip!()}
+          </span>
+        ))}
+      </span>
+    </>
+  );
+}
 
 /** Where the camera is and where along the well: compass, attitude, depths and the read-outs features add. */
-export function Hud({ app }: { app: App }) {
-  const huds = useSignal(app.huds);
-  const [collapsed, setCollapsed] = useCollapsed('hud');
-  if (collapsed) return <HudChip app={app} onExpand={() => setCollapsed(false)} />;
+export function HudDetails({ app }: { app: App }) {
+  const huds = useSignal(app.huds).filter((h) => !h.prompt);
   return (
-    <Panel variant="elevated" size="sm" aria-label="Position" className={`w-80 max-w-full ${SURFACE}`}>
-      <PanelContent className="flex flex-col gap-2">
-        <Camera app={app} end={<CollapseButton collapsed={false} name="position" onChange={setCollapsed} />} />
-        <Separator emphasis="subtle" />
-        <Depth app={app} />
-        {huds.map((h) => (
+    <div aria-label="Position" className="flex flex-col gap-2">
+      <Camera app={app} />
+      <Separator emphasis="subtle" />
+      <Depth app={app} />
+      {huds.map((h) => (
+        <div key={h.id} className="contents">
+          {h.render()}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What the next click in the 3D view does (measuring), over the view just
+ * above its toolbar: an instruction has to be in sight, not in the details.
+ */
+export function HudPrompts({ app }: { app: App }) {
+  const prompts = useSignal(app.huds).filter((h) => h.prompt);
+  if (!prompts.length) return null;
+  return (
+    <Panel variant="elevated" size="sm" aria-label="Prompt" className={`pointer-events-auto relative w-fit max-w-full ${SURFACE}`}>
+      <div className="flex flex-col gap-1 py-1 pr-1 pl-2.5">
+        {prompts.map((h) => (
           <div key={h.id} className="contents">
             {h.render()}
           </div>
         ))}
-      </PanelContent>
+      </div>
     </Panel>
-  );
-}
-
-function HudChip({ app, onExpand }: { app: App; onExpand: () => void }) {
-  return (
-    <OverlayChip name="position" onExpand={onExpand}>
-      <Compass app={app} className="size-6" />
-      <ChipText app={app} />
-    </OverlayChip>
-  );
-}
-
-function ChipText({ app }: { app: App }) {
-  const p = useSignal(app.poseText);
-  return (
-    <>
-      <span className="type-value whitespace-nowrap">
-        {fmt.n(p.md, 0)} <span className="type-unit">MD</span> <span className="text-fg-3">·</span> {fmt.n(p.tvdss, 0)} <span className="type-unit">TVDSS</span> <span className="text-fg-3">·</span>{' '}
-        {fmt.n(p.inc, 0)}°
-      </span>
-      <span className="type-caption hidden max-w-32 truncate @3xl:inline">{p.zone}</span>
-    </>
   );
 }
 
@@ -91,12 +134,11 @@ function Compass({ app, className }: { app: App; className: string }) {
 const label = (heading: number, azi: number) => `Heading ${fmt.n((heading + 360) % 360, 0)}°, well azimuth ${fmt.n(azi, 0)}°`;
 
 /** The compass, then where the camera is; only the read-outs render as it moves (at most ~15 times a second). */
-function Camera({ app, end }: { app: App; end: React.ReactNode }) {
+function Camera({ app }: { app: App }) {
   return (
     <div className="flex items-center gap-2">
       <Compass app={app} className="size-9" />
       <CameraText app={app} />
-      <div className="self-start">{end}</div>
     </div>
   );
 }

@@ -48,7 +48,7 @@ export class SnapshotFeature implements FeatureModule {
   settings() {
     return (
       <>
-        <Note>Camera button in the top bar. Renders the current view off-screen at 2× or 4K with MSAA and post-processing, then draws the 3D labels, a legend, north arrow and data credits on top.</Note>
+        <Note>Camera button in the view toolbar (bottom of the 3D view). Renders the current view off-screen at 2× or 4K with MSAA and post-processing, then draws the 3D labels, a legend, north arrow and data credits on top.</Note>
         <div className="flex gap-1.5">
           <Button variant="ghost" size="sm" onPress={() => void this.capture('2x')}>
             Snapshot 2×

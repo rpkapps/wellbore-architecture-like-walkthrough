@@ -105,6 +105,24 @@ export function appActions(): AnyAction<App>[] {
       },
     }),
     A({
+      id: 'nav.explore_view',
+      title: 'Explore camera',
+      description: 'How the free camera moves in Explore mode: fly (WASD + drag) or orbit around a point.',
+      category: 'Navigate',
+      input: z.object({ view: z.enum(['fly', 'orbit']) }),
+      choices: (app) =>
+        (
+          [
+            ['fly', 'Fly'],
+            ['orbit', 'Orbit'],
+          ] as const
+        ).map(([view, label]) => ({ label, input: { view }, current: app.engine.rig.mode === 'explore' && app.engine.rig.exploreView === view })),
+      run: (app, { view }) => {
+        if (app.engine.rig.mode !== 'explore') app.setNav('explore');
+        app.setExploreView(view);
+      },
+    }),
+    A({
       id: 'nav.go_to_depth',
       title: 'Go to depth',
       description: 'Travels the camera to a measured depth (MD, metres) along the active well.',
@@ -297,7 +315,7 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'panels.overlays',
       title: 'Overlays',
-      description: 'Collapses the widgets over the 3D view (position, colour key, story) to one-line chips, or expands them.',
+      description: 'Collapses the cards over the 3D view (colour key, chapter card) to one-line chips, or expands them.',
       category: 'Panels',
       input: z.object({ collapsed: z.boolean() }),
       choices: () => [
