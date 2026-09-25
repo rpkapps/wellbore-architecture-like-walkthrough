@@ -25,7 +25,7 @@ export function Narrative({ app }: { app: App }) {
         <PanelDescription>{c.text}</PanelDescription>
       </PanelHeader>
       <PanelContent>
-        <StatGroup className="gap-x-4 gap-y-2">
+        <StatGroup className="grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-x-3 gap-y-1">
           {c.facts.map((f) => (
             <Stat key={f.k} size="sm" title={PROV_DESCRIPTION[f.prov]}>
               <StatLabel className="flex items-center gap-1">

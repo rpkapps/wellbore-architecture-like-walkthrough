@@ -23,7 +23,7 @@ export function Legend({ app }: { app: App }) {
       <Frame title="Resistivity · Ω·m" prov="measured">
         <Ramp stops={stops} ticks={[0.2, 1, 10, 100, 1000].map((v) => [v, (Math.log10(v) - lmin) / (lmax - lmin)])} />
         <Note>
-          Log scale {RES_RANGE.min}–{RES_RANGE.max} Ω·m. Borehole wall shows the shallow reading; the halo grades outward to the deep reading (RT). Radial scale ×{app.engine.radialScale}; investigation depth schematic.
+          Log scale · wall = shallow reading, halo → deep (RT) · radial ×{app.engine.radialScale}
         </Note>
       </Frame>
     );
@@ -79,7 +79,7 @@ export function Legend({ app }: { app: App }) {
           ]}
         />
         <Note>
-          {p.satModel === 'archie' ? 'Archie' : 'Simandoux'} Sw from measured RT & RHOB · a {p.a}, m {p.m}, n {p.n}, Rw {p.rw} Ω·m @ {p.rwTemp} °C. Pore size tracks φ; drawn only where density and resistivity logs exist.
+          {p.satModel === 'archie' ? 'Archie' : 'Simandoux'} Sw · a {p.a}, m {p.m}, n {p.n}, Rw {p.rw} Ω·m @ {p.rwTemp} °C
         </Note>
       </Frame>
     );

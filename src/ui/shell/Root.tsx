@@ -61,7 +61,7 @@ export function Root() {
     <>
       {boot.stage === 'running' && <Workspace app={boot.app} />}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
-      <Toaster theme="dark" position="top-center" />
+      <Toaster theme="dark" position="top-center" offset={56} />
     </>
   );
 }

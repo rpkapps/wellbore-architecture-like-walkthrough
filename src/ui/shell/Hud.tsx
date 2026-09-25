@@ -54,7 +54,7 @@ function Depth({ app }: { app: App }) {
   const p = useSignal(app.pose);
   return (
     <div className="flex flex-col gap-1">
-      <StatGroup className="grid-cols-2 gap-x-3 gap-y-1">
+      <StatGroup className="grid-cols-3 gap-x-3">
         <Stat size="sm">
           <StatLabel>MD</StatLabel>
           <StatValue unit="m">{fmt.n(p.md, 1)}</StatValue>
@@ -64,16 +64,12 @@ function Depth({ app }: { app: App }) {
           <StatValue unit="m">{fmt.n(p.tvdss, 1)}</StatValue>
         </Stat>
         <Stat size="sm">
-          <StatLabel>Inc</StatLabel>
+          <StatLabel>Inclination</StatLabel>
           <StatValue>{fmt.n(p.inc, 1)}°</StatValue>
-        </Stat>
-        <Stat size="sm">
-          <StatLabel>Azi</StatLabel>
-          <StatValue>{fmt.n(p.azi, 0)}°</StatValue>
         </Stat>
       </StatGroup>
       <span className="truncate text-xs text-muted-foreground" title={`${p.zone} · ${p.section}`}>
-        {p.zone} · {p.section}
+        {p.zone} · {p.section} · azimuth {fmt.n(p.azi, 0)}°
       </span>
     </div>
   );

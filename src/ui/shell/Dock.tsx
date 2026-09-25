@@ -17,7 +17,7 @@ export function Dock() {
   if (!current) return null;
   return (
     <Tabs selectedKey={current.opts.id} onSelectionChange={(k) => activeWindow.set(String(k))} className="h-full min-h-0 gap-0 bg-card">
-      <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-2">
+      <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle pr-1 pl-2">
         <TabsList variant="line" aria-label="Tool windows" className="min-w-0 shrink overflow-x-auto">
           {open.map((p) => (
             <TabsTrigger key={p.opts.id} id={p.opts.id}>
@@ -25,8 +25,11 @@ export function Dock() {
             </TabsTrigger>
           ))}
         </TabsList>
-        <Header win={current} />
+        <IconButton label={`Close ${current.opts.title}`} size="icon-xs" className="ml-auto" onPress={() => current.close()}>
+          <XIcon />
+        </IconButton>
       </div>
+      <Header win={current} />
       {open.map((p) => (
         <TabsContent key={p.opts.id} id={p.opts.id} className="flex min-h-0 flex-col">
           <Body win={p} />
@@ -36,15 +39,14 @@ export function Dock() {
   );
 }
 
+/** The active window's provenance and its own controls, on a row under the tabs. */
 function Header({ win }: { win: ToolWindow }) {
   useRev(win.rev);
+  if (!win.opts.badge && !win.opts.header) return null;
   return (
-    <div className="ml-auto flex min-w-0 items-center gap-1.5 py-1">
+    <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border-subtle px-2 py-1">
       {win.opts.badge && <ProvBadge prov={win.opts.badge} />}
       {win.opts.header?.()}
-      <IconButton label={`Close ${win.opts.title}`} size="icon-xs" onPress={() => win.close()}>
-        <XIcon />
-      </IconButton>
     </div>
   );
 }
