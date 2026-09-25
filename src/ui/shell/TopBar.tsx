@@ -16,7 +16,7 @@ import { Tab, TabStrip } from '../tabs';
 import { AppShellAction, AppShellActions, AppShellBrand, AppShellHeader, AppShellNav, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { OverflowDivider, OverflowItem, OverflowLabel, Toolbar } from '@tecton/react/tecton/overflow';
 import { LogCurveIcon, OilRigOffshoreIcon, WellIcon } from '@tecton/react/icons';
-import { ChartColumnIcon, CircleHelpIcon, FlaskConicalIcon, MaximizeIcon, PaletteIcon, PanelLeftIcon, SearchIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
+import { ChartColumnIcon, CircleHelpIcon, FlaskConicalIcon, MaximizeIcon, PaletteIcon, PanelLeftIcon, RadioTowerIcon, SearchIcon, SlidersHorizontalIcon, UploadIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { NavMode } from '../../scene/cameraRig';
@@ -28,6 +28,7 @@ import { WindowMenu, WorkspaceMenu } from '../workspace/menus';
 import type { PanelDef } from '../workspace/panels';
 import { Signal, useRev, useSignal } from '../signal';
 import { DataDialog } from './DataDialog';
+import { ConnectDialog } from './ConnectDialog';
 import { HelpDialog } from './HelpDialog';
 import { PersonaliseDialog } from './PersonaliseDialog';
 import { CommandPalette } from './CommandPalette';
@@ -113,7 +114,13 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
           {app.selectableWells().map((w) => (
             <SelectItem key={w.id} id={w.id} textValue={w.name}>
               {w.name}
-              {w.userAdded ? <span className="text-muted-foreground">uploaded</span> : !w.lasFile && <span className="text-muted-foreground">survey + production</span>}
+              {w.liveSource ? (
+                <span className="text-success">live</span>
+              ) : w.userAdded ? (
+                <span className="text-muted-foreground">uploaded</span>
+              ) : (
+                !w.lasFile && <span className="text-muted-foreground">survey + production</span>
+              )}
             </SelectItem>
           ))}
         </SelectContent>
@@ -182,6 +189,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
               <OverflowLabel>Data</OverflowLabel>
             </Button>
           </OverflowItem>
+          <LiveItem app={app} />
           {tools.length > 0 && <OverflowDivider />}
           {tools.map((t) => (
             <Tool key={t.id} t={t} />
@@ -213,6 +221,7 @@ function Controls({ app, panels }: { app: App; panels: Map<string, PanelDef> }) 
       <HelpDialog app={app} isOpen={help} onOpenChange={(o) => app.helpOpen.set(o)} />
       <PersonaliseDialog app={app} isOpen={personalise} onOpenChange={(o) => app.personaliseOpen.set(o)} />
       <CommandPalette app={app} />
+      <ConnectDialog app={app} />
     </>
   );
 }
@@ -282,6 +291,24 @@ function Tool({ t }: { t: ToolEntry }) {
           {contents}
         </DropdownMenu>
       </DropdownMenuTrigger>
+    </OverflowItem>
+  );
+}
+
+/** Live data: a pulsing dot while any source is streaming. */
+function LiveItem({ app }: { app: App }) {
+  const list = useSignal(app.hub.connections);
+  const live = list.filter((c) => (c.status === 'live' || c.status === 'connecting' || c.status === 'reconnecting') && !c.paused).length;
+  const label = live ? `Live data (${live} streaming)` : 'Live data';
+  return (
+    <OverflowItem id="live" priority={4} label={label} icon={<RadioTowerIcon />} onAction={() => app.openSources()}>
+      <Button variant={app.workspace.isShown('sources') ? 'secondary' : 'ghost'} size="sm" aria-label={label}>
+        <span className="relative flex" data-icon="inline-start">
+          <RadioTowerIcon className="size-4" />
+          {live > 0 && <span aria-hidden className="absolute -top-0.5 -right-0.5 size-1.5 animate-pulse rounded-full bg-success ring-2 ring-background" />}
+        </span>
+        <OverflowLabel>Live</OverflowLabel>
+      </Button>
     </OverflowItem>
   );
 }

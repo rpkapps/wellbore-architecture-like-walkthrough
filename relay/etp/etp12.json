@@ -1,0 +1,489 @@
+{
+  "_source": "Energistics Transport Protocol 1.2 Avro schemas, from the etptypes 1.2.0 Python package (Geosiris), extracted by relay/etp/extract.mjs",
+  "_license": "Apache-2.0",
+  "version": "1.2",
+  "messages": {
+    "Datatypes.MessageHeader": { "type": "Energistics.Etp.v12.Datatypes.MessageHeader" },
+    "Datatypes.MessageHeaderExtension": { "type": "Energistics.Etp.v12.Datatypes.MessageHeaderExtension" },
+    "Core.RequestSession": { "protocol": 0, "messageType": 1, "type": "Energistics.Etp.v12.Protocol.Core.RequestSession" },
+    "Core.OpenSession": { "protocol": 0, "messageType": 2, "type": "Energistics.Etp.v12.Protocol.Core.OpenSession" },
+    "Core.CloseSession": { "protocol": 0, "messageType": 5, "type": "Energistics.Etp.v12.Protocol.Core.CloseSession" },
+    "Core.ProtocolException": { "protocol": 0, "messageType": 1000, "type": "Energistics.Etp.v12.Protocol.Core.ProtocolException" },
+    "Core.Acknowledge": { "protocol": 0, "messageType": 1001, "type": "Energistics.Etp.v12.Protocol.Core.Acknowledge" },
+    "Core.Ping": { "protocol": 0, "messageType": 8, "type": "Energistics.Etp.v12.Protocol.Core.Ping" },
+    "Core.Pong": { "protocol": 0, "messageType": 9, "type": "Energistics.Etp.v12.Protocol.Core.Pong" },
+    "Discovery.GetResources": { "protocol": 3, "messageType": 1, "type": "Energistics.Etp.v12.Protocol.Discovery.GetResources" },
+    "Discovery.GetResourcesResponse": { "protocol": 3, "messageType": 4, "type": "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse" },
+    "ChannelSubscribe.GetChannelMetadata": { "protocol": 21, "messageType": 1, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadata" },
+    "ChannelSubscribe.GetChannelMetadataResponse": { "protocol": 21, "messageType": 2, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadataResponse" },
+    "ChannelSubscribe.SubscribeChannels": { "protocol": 21, "messageType": 3, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannels" },
+    "ChannelSubscribe.SubscribeChannelsResponse": { "protocol": 21, "messageType": 12, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannelsResponse" },
+    "ChannelSubscribe.ChannelData": { "protocol": 21, "messageType": 4, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelData" },
+    "ChannelSubscribe.GetRanges": { "protocol": 21, "messageType": 9, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRanges" },
+    "ChannelSubscribe.GetRangesResponse": { "protocol": 21, "messageType": 10, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRangesResponse" },
+    "ChannelSubscribe.UnsubscribeChannels": { "protocol": 21, "messageType": 7, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.UnsubscribeChannels" },
+    "ChannelSubscribe.SubscriptionsStopped": { "protocol": 21, "messageType": 8, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscriptionsStopped" },
+    "ChannelSubscribe.RangeReplaced": { "protocol": 21, "messageType": 6, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.RangeReplaced" },
+    "ChannelSubscribe.ChannelsTruncated": { "protocol": 21, "messageType": 13, "type": "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelsTruncated" }
+  },
+  "types": {
+    "Energistics.Etp.v12.Datatypes.MessageHeader": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.MessageHeader",
+      "fields": [
+        { "name": "protocol", "type": "int" },
+        { "name": "messageType", "type": "int" },
+        { "name": "correlationId", "type": "long" },
+        { "name": "messageId", "type": "long" },
+        { "name": "messageFlags", "type": "int" }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfBoolean": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfBoolean",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "boolean" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfNullableBoolean": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfNullableBoolean",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": ["null", "boolean"] } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfInt": { "type": "record", "name": "Energistics.Etp.v12.Datatypes.ArrayOfInt", "fields": [{ "name": "values", "type": { "type": "array", "items": "int" } }] },
+    "Energistics.Etp.v12.Datatypes.ArrayOfNullableInt": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfNullableInt",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": ["null", "int"] } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfLong": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfLong",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "long" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfNullableLong": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfNullableLong",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": ["null", "long"] } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfFloat": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfFloat",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "float" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfDouble": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfDouble",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "double" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfString": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfString",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "string" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ArrayOfBytes": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ArrayOfBytes",
+      "fields": [{ "name": "values", "type": { "type": "array", "items": "bytes" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.AnyArray": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.AnyArray",
+      "fields": [
+        {
+          "name": "item",
+          "type": [
+            "Energistics.Etp.v12.Datatypes.ArrayOfBoolean",
+            "Energistics.Etp.v12.Datatypes.ArrayOfInt",
+            "Energistics.Etp.v12.Datatypes.ArrayOfLong",
+            "Energistics.Etp.v12.Datatypes.ArrayOfFloat",
+            "Energistics.Etp.v12.Datatypes.ArrayOfDouble",
+            "Energistics.Etp.v12.Datatypes.ArrayOfString",
+            "bytes"
+          ]
+        }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.AnySubarray": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.AnySubarray",
+      "fields": [
+        { "name": "start", "type": "long" },
+        { "name": "slice", "type": "Energistics.Etp.v12.Datatypes.AnyArray" }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.AnySparseArray": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.AnySparseArray",
+      "fields": [{ "name": "slices", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.AnySubarray" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.DataValue": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.DataValue",
+      "fields": [
+        {
+          "name": "item",
+          "type": [
+            "null",
+            "boolean",
+            "int",
+            "long",
+            "float",
+            "double",
+            "string",
+            "Energistics.Etp.v12.Datatypes.ArrayOfBoolean",
+            "Energistics.Etp.v12.Datatypes.ArrayOfNullableBoolean",
+            "Energistics.Etp.v12.Datatypes.ArrayOfInt",
+            "Energistics.Etp.v12.Datatypes.ArrayOfNullableInt",
+            "Energistics.Etp.v12.Datatypes.ArrayOfLong",
+            "Energistics.Etp.v12.Datatypes.ArrayOfNullableLong",
+            "Energistics.Etp.v12.Datatypes.ArrayOfFloat",
+            "Energistics.Etp.v12.Datatypes.ArrayOfDouble",
+            "Energistics.Etp.v12.Datatypes.ArrayOfString",
+            "Energistics.Etp.v12.Datatypes.ArrayOfBytes",
+            "bytes",
+            "Energistics.Etp.v12.Datatypes.AnySparseArray"
+          ]
+        }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.MessageHeaderExtension": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.MessageHeaderExtension",
+      "fields": [{ "name": "extension", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }]
+    },
+    "Energistics.Etp.v12.Datatypes.Uuid": { "type": "fixed", "name": "Energistics.Etp.v12.Datatypes.Uuid", "size": 16 },
+    "Energistics.Etp.v12.Datatypes.Version": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.Version",
+      "fields": [
+        { "name": "major", "type": "int", "default": 0 },
+        { "name": "minor", "type": "int", "default": 0 },
+        { "name": "revision", "type": "int", "default": 0 },
+        { "name": "patch", "type": "int", "default": 0 }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.SupportedProtocol": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.SupportedProtocol",
+      "fields": [
+        { "name": "protocol", "type": "int" },
+        { "name": "protocolVersion", "type": "Energistics.Etp.v12.Datatypes.Version" },
+        { "name": "role", "type": "string" },
+        { "name": "protocolCapabilities", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.SupportedDataObject": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.SupportedDataObject",
+      "fields": [
+        { "name": "qualifiedType", "type": "string" },
+        { "name": "dataObjectCapabilities", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Core.RequestSession": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.Core.RequestSession",
+      "fields": [
+        { "name": "applicationName", "type": "string" },
+        { "name": "applicationVersion", "type": "string" },
+        { "name": "clientInstanceId", "type": "Energistics.Etp.v12.Datatypes.Uuid" },
+        { "name": "requestedProtocols", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.SupportedProtocol" } },
+        { "name": "supportedDataObjects", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.SupportedDataObject" } },
+        { "name": "supportedCompression", "type": { "type": "array", "items": "string" }, "default": [] },
+        { "name": "supportedFormats", "type": { "type": "array", "items": "string" }, "default": ["xml"] },
+        { "name": "currentDateTime", "type": "long" },
+        { "name": "earliestRetainedChangeTime", "type": "long" },
+        { "name": "serverAuthorizationRequired", "type": "boolean", "default": false },
+        { "name": "endpointCapabilities", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Core.OpenSession": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.Core.OpenSession",
+      "fields": [
+        { "name": "applicationName", "type": "string" },
+        { "name": "applicationVersion", "type": "string" },
+        { "name": "serverInstanceId", "type": "Energistics.Etp.v12.Datatypes.Uuid" },
+        { "name": "supportedProtocols", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.SupportedProtocol" } },
+        { "name": "supportedDataObjects", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.SupportedDataObject" } },
+        { "name": "supportedCompression", "type": "string", "default": "" },
+        { "name": "supportedFormats", "type": { "type": "array", "items": "string" }, "default": ["xml"] },
+        { "name": "currentDateTime", "type": "long" },
+        { "name": "earliestRetainedChangeTime", "type": "long" },
+        { "name": "sessionId", "type": "Energistics.Etp.v12.Datatypes.Uuid" },
+        { "name": "endpointCapabilities", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Core.CloseSession": { "type": "record", "name": "Energistics.Etp.v12.Protocol.Core.CloseSession", "fields": [{ "name": "reason", "type": "string", "default": "" }] },
+    "Energistics.Etp.v12.Datatypes.ErrorInfo": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ErrorInfo",
+      "fields": [
+        { "name": "message", "type": "string" },
+        { "name": "code", "type": "int" }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Core.ProtocolException": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.Core.ProtocolException",
+      "fields": [
+        { "name": "error", "type": ["null", "Energistics.Etp.v12.Datatypes.ErrorInfo"] },
+        { "name": "errors", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.ErrorInfo" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Core.Acknowledge": { "type": "record", "name": "Energistics.Etp.v12.Protocol.Core.Acknowledge", "fields": [] },
+    "Energistics.Etp.v12.Protocol.Core.Ping": { "type": "record", "name": "Energistics.Etp.v12.Protocol.Core.Ping", "fields": [{ "name": "currentDateTime", "type": "long" }] },
+    "Energistics.Etp.v12.Protocol.Core.Pong": { "type": "record", "name": "Energistics.Etp.v12.Protocol.Core.Pong", "fields": [{ "name": "currentDateTime", "type": "long" }] },
+    "Energistics.Etp.v12.Datatypes.Object.RelationshipKind": { "type": "enum", "name": "Energistics.Etp.v12.Datatypes.Object.RelationshipKind", "symbols": ["Primary", "Secondary", "Both"] },
+    "Energistics.Etp.v12.Datatypes.Object.ContextInfo": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.Object.ContextInfo",
+      "fields": [
+        { "name": "uri", "type": "string" },
+        { "name": "depth", "type": "int" },
+        { "name": "dataObjectTypes", "type": { "type": "array", "items": "string" }, "default": [] },
+        { "name": "navigableEdges", "type": "Energistics.Etp.v12.Datatypes.Object.RelationshipKind" },
+        { "name": "includeSecondaryTargets", "type": "boolean", "default": false },
+        { "name": "includeSecondarySources", "type": "boolean", "default": false }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.Object.ContextScopeKind": {
+      "type": "enum",
+      "name": "Energistics.Etp.v12.Datatypes.Object.ContextScopeKind",
+      "symbols": ["self", "sources", "targets", "sourcesOrSelf", "targetsOrSelf"]
+    },
+    "Energistics.Etp.v12.Datatypes.Object.ActiveStatusKind": { "type": "enum", "name": "Energistics.Etp.v12.Datatypes.Object.ActiveStatusKind", "symbols": ["Active", "Inactive"] },
+    "Energistics.Etp.v12.Protocol.Discovery.GetResources": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.Discovery.GetResources",
+      "fields": [
+        { "name": "context", "type": "Energistics.Etp.v12.Datatypes.Object.ContextInfo" },
+        { "name": "scope", "type": "Energistics.Etp.v12.Datatypes.Object.ContextScopeKind" },
+        { "name": "countObjects", "type": "boolean", "default": false },
+        { "name": "storeLastWriteFilter", "type": ["null", "long"] },
+        { "name": "activeStatusFilter", "type": ["null", "Energistics.Etp.v12.Datatypes.Object.ActiveStatusKind"] },
+        { "name": "includeEdges", "type": "boolean", "default": false }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.Object.Resource": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.Object.Resource",
+      "fields": [
+        { "name": "uri", "type": "string" },
+        { "name": "alternateUris", "type": { "type": "array", "items": "string" }, "default": [] },
+        { "name": "name", "type": "string" },
+        { "name": "sourceCount", "type": ["null", "int"], "default": null },
+        { "name": "targetCount", "type": ["null", "int"], "default": null },
+        { "name": "lastChanged", "type": "long" },
+        { "name": "storeLastWrite", "type": "long" },
+        { "name": "storeCreated", "type": "long" },
+        { "name": "activeStatus", "type": "Energistics.Etp.v12.Datatypes.Object.ActiveStatusKind" },
+        { "name": "customData", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.Discovery.GetResourcesResponse",
+      "fields": [{ "name": "resources", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.Object.Resource" }, "default": [] }]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadata": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadata",
+      "fields": [{ "name": "uris", "type": { "type": "map", "values": "string" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.ChannelIndexKind": {
+      "type": "enum",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelIndexKind",
+      "symbols": ["DateTime", "ElapsedTime", "MeasuredDepth", "TrueVerticalDepth", "PassIndexedDepth", "Pressure", "Temperature", "Scalar"]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.PassDirection": { "type": "enum", "name": "Energistics.Etp.v12.Datatypes.ChannelData.PassDirection", "symbols": ["Up", "HoldingSteady", "Down"] },
+    "Energistics.Etp.v12.Datatypes.ChannelData.PassIndexedDepth": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.PassIndexedDepth",
+      "fields": [
+        { "name": "pass", "type": "long" },
+        { "name": "direction", "type": "Energistics.Etp.v12.Datatypes.ChannelData.PassDirection" },
+        { "name": "depth", "type": "double" }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.IndexValue": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.IndexValue",
+      "fields": [{ "name": "item", "type": ["null", "long", "double", "Energistics.Etp.v12.Datatypes.ChannelData.PassIndexedDepth"] }]
+    },
+    "Energistics.Etp.v12.Datatypes.Object.IndexInterval": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.Object.IndexInterval",
+      "fields": [
+        { "name": "startIndex", "type": "Energistics.Etp.v12.Datatypes.IndexValue" },
+        { "name": "endIndex", "type": "Energistics.Etp.v12.Datatypes.IndexValue" },
+        { "name": "uom", "type": "string" },
+        { "name": "depthDatum", "type": "string", "default": "" }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.IndexDirection": {
+      "type": "enum",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.IndexDirection",
+      "symbols": ["Increasing", "Decreasing", "Unordered"]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.IndexMetadataRecord": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.IndexMetadataRecord",
+      "fields": [
+        { "name": "indexKind", "type": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelIndexKind", "default": "DateTime" },
+        { "name": "interval", "type": "Energistics.Etp.v12.Datatypes.Object.IndexInterval" },
+        { "name": "direction", "type": "Energistics.Etp.v12.Datatypes.ChannelData.IndexDirection", "default": "Increasing" },
+        { "name": "name", "type": "string", "default": "" },
+        { "name": "uom", "type": "string" },
+        { "name": "depthDatum", "type": "string", "default": "" },
+        { "name": "indexPropertyKindUri", "type": "string" },
+        { "name": "filterable", "type": "boolean", "default": true }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.ChannelDataKind": {
+      "type": "enum",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelDataKind",
+      "symbols": ["DateTime", "ElapsedTime", "MeasuredDepth", "PassIndexedDepth", "TrueVerticalDepth", "typeBoolean", "typeInt", "typeLong", "typeFloat", "typeDouble", "typeString", "typeBytes"]
+    },
+    "Energistics.Etp.v12.Datatypes.AttributeMetadataRecord": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.AttributeMetadataRecord",
+      "fields": [
+        { "name": "attributeId", "type": "int" },
+        { "name": "attributeName", "type": "string" },
+        { "name": "dataKind", "type": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelDataKind" },
+        { "name": "uom", "type": "string" },
+        { "name": "depthDatum", "type": "string" },
+        { "name": "attributePropertyKindUri", "type": "string" },
+        { "name": "axisVectorLengths", "type": { "type": "array", "items": "int" } }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.ChannelMetadataRecord": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelMetadataRecord",
+      "fields": [
+        { "name": "uri", "type": "string" },
+        { "name": "id", "type": "long" },
+        { "name": "indexes", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.IndexMetadataRecord" } },
+        { "name": "channelName", "type": "string" },
+        { "name": "dataKind", "type": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelDataKind" },
+        { "name": "uom", "type": "string" },
+        { "name": "depthDatum", "type": "string" },
+        { "name": "channelClassUri", "type": "string" },
+        { "name": "status", "type": "Energistics.Etp.v12.Datatypes.Object.ActiveStatusKind" },
+        { "name": "source", "type": "string" },
+        { "name": "axisVectorLengths", "type": { "type": "array", "items": "int" } },
+        { "name": "attributeMetadata", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.AttributeMetadataRecord" }, "default": [] },
+        { "name": "customData", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.DataValue" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadataResponse": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetChannelMetadataResponse",
+      "fields": [{ "name": "metadata", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelMetadataRecord" }, "default": {} }]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.ChannelSubscribeInfo": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelSubscribeInfo",
+      "fields": [
+        { "name": "channelId", "type": "long" },
+        { "name": "startIndex", "type": "Energistics.Etp.v12.Datatypes.IndexValue" },
+        { "name": "dataChanges", "type": "boolean", "default": true },
+        { "name": "requestLatestIndexCount", "type": ["null", "int"] }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannels": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannels",
+      "fields": [{ "name": "channels", "type": { "type": "map", "values": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelSubscribeInfo" } }]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannelsResponse": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscribeChannelsResponse",
+      "fields": [{ "name": "success", "type": { "type": "map", "values": "string" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.DataAttribute": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.DataAttribute",
+      "fields": [
+        { "name": "attributeId", "type": "int" },
+        { "name": "attributeValue", "type": "Energistics.Etp.v12.Datatypes.DataValue" }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.DataItem": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.DataItem",
+      "fields": [
+        { "name": "channelId", "type": "long" },
+        { "name": "indexes", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.IndexValue" } },
+        { "name": "value", "type": "Energistics.Etp.v12.Datatypes.DataValue" },
+        { "name": "valueAttributes", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.DataAttribute" }, "default": [] }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelData": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelData",
+      "fields": [{ "name": "data", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.DataItem" } }]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.ChannelRangeInfo": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelRangeInfo",
+      "fields": [
+        { "name": "channelIds", "type": { "type": "array", "items": "long" } },
+        { "name": "interval", "type": "Energistics.Etp.v12.Datatypes.Object.IndexInterval" },
+        { "name": "secondaryIntervals", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.Object.IndexInterval" }, "default": [] }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRanges": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRanges",
+      "fields": [
+        { "name": "requestUuid", "type": "Energistics.Etp.v12.Datatypes.Uuid" },
+        { "name": "channelRanges", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.ChannelRangeInfo" } }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRangesResponse": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.GetRangesResponse",
+      "fields": [{ "name": "data", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.DataItem" }, "default": [] }]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.UnsubscribeChannels": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.UnsubscribeChannels",
+      "fields": [{ "name": "channelIds", "type": { "type": "map", "values": "long" } }]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscriptionsStopped": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.SubscriptionsStopped",
+      "fields": [
+        { "name": "reason", "type": "string" },
+        { "name": "channelIds", "type": { "type": "map", "values": "long" }, "default": {} }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.RangeReplaced": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.RangeReplaced",
+      "fields": [
+        { "name": "changeTime", "type": "long" },
+        { "name": "channelIds", "type": { "type": "array", "items": "long" } },
+        { "name": "changedInterval", "type": "Energistics.Etp.v12.Datatypes.Object.IndexInterval" },
+        { "name": "data", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.DataItem" } }
+      ]
+    },
+    "Energistics.Etp.v12.Datatypes.ChannelData.TruncateInfo": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Datatypes.ChannelData.TruncateInfo",
+      "fields": [
+        { "name": "channelId", "type": "long" },
+        { "name": "newEndIndex", "type": "Energistics.Etp.v12.Datatypes.IndexValue" }
+      ]
+    },
+    "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelsTruncated": {
+      "type": "record",
+      "name": "Energistics.Etp.v12.Protocol.ChannelSubscribe.ChannelsTruncated",
+      "fields": [
+        { "name": "channels", "type": { "type": "array", "items": "Energistics.Etp.v12.Datatypes.ChannelData.TruncateInfo" } },
+        { "name": "changeTime", "type": "long" }
+      ]
+    }
+  }
+}

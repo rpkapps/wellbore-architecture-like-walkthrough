@@ -1,0 +1,71 @@
+{
+  "port": 8787,
+  "tokens": ["${RELAY_TOKEN}"],
+  "origins": ["http://localhost:5173", "https://borewalk.example.com"],
+  "sources": {
+    "rig-a-wits": {
+      "type": "tcp",
+      "label": "Rig A — WITS feed",
+      "host": "10.0.4.20",
+      "port": 9901,
+      "format": "wits0"
+    },
+    "rig-kafka": {
+      "type": "kafka",
+      "label": "Rig sensors (Kafka)",
+      "brokers": ["kafka-1.example.com:9093", "kafka-2.example.com:9093"],
+      "ssl": true,
+      "sasl": { "mechanism": "scram-sha-512", "username": "borewalk", "password": "${KAFKA_PASSWORD}" },
+      "topics": ["rig.realtime", "rig.surveys"],
+      "value": "auto",
+      "schemaRegistry": { "url": "https://schema-registry.example.com", "username": "borewalk", "password": "${REGISTRY_PASSWORD}" },
+      "wellField": "key"
+    },
+    "store": {
+      "type": "witsml",
+      "label": "WITSML store — F-12",
+      "url": "https://witsml.example.com/Witsml/Store",
+      "username": "borewalk",
+      "password": "${WITSML_PASSWORD}",
+      "version": "1.4.1.1",
+      "uidWell": "W-12",
+      "uidWellbore": "WB-12",
+      "interval": 10
+    },
+    "etp": {
+      "type": "etp",
+      "label": "ETP server",
+      "url": "wss://etp.example.com/etp",
+      "version": "1.2",
+      "auth": { "kind": "bearer", "token": "${ETP_TOKEN}" },
+      "uris": ["eml:///witsml20.Log(0d9c0a7e-…)"],
+      "well": "15/9-F-12"
+    },
+    "osdu": {
+      "type": "osdu",
+      "label": "OSDU — Volve",
+      "baseUrl": "https://osdu.example.com",
+      "partition": "opendes",
+      "auth": { "kind": "client-credentials", "tokenUrl": "https://login.example.com/oauth2/token", "clientId": "…", "clientSecret": "${OSDU_SECRET}", "scope": "…" },
+      "wellbores": ["opendes:master-data--Wellbore:1234"],
+      "interval": 60
+    },
+    "pi": {
+      "type": "http",
+      "label": "PI Web API — standpipe pressure",
+      "url": "https://pi.example.com/piwebapi/streams/F1DP…/recorded?startTime={lastTime}",
+      "headers": { "Authorization": "Basic ${PI_BASIC}" },
+      "interval": 5,
+      "format": "json",
+      "formatOptions": { "path": "Items" }
+    },
+    "capture": {
+      "type": "file",
+      "label": "Recorded WITS capture",
+      "path": "./captures/rig-a.wits",
+      "format": "wits0",
+      "rate": 5,
+      "loop": true
+    }
+  }
+}

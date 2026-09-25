@@ -87,7 +87,7 @@ export const PRESETS: { id: PresetId; label: string; build: () => Layout }[] = [
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
-  return id === 'logs' ? 'right' : id === 'scene' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
+  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
 }
 
 export function locate(L: Layout, id: string): Place | null {

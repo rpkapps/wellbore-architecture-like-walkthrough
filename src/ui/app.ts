@@ -15,12 +15,14 @@ import { onAnyChange, Rev, Signal } from './signal';
 import { Workspace } from './workspace/layout';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
-import { withTransition } from './transition';
+import { noteSyncUpdate, transitionBusyFor, withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
 import { inspect, type InspectorView } from './inspect';
 import { DataImporter } from './dataImport';
+import { DataHub } from '../connect/hub';
+import type { ConnectRequest } from './shell/ConnectDialog';
 
 export type SidebarTab = 'scene' | 'interpretation' | 'features';
 
@@ -150,9 +152,14 @@ export class App {
   readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
 
   readonly importer: DataImporter;
+  /** live and streamed data: the connectors (src/connect) */
+  readonly hub: DataHub;
+  /** the connect dialog: open with a draft, or to edit a connection */
+  readonly connectRequest = new Signal<ConnectRequest | null>(null);
 
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
+    this.hub = new DataHub(this);
     // formation colours the user picked, before the geology is built from them
     try {
       const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
@@ -194,11 +201,16 @@ export class App {
       e.requestRender(200);
     };
     this.logs.onScroll = (md) => {
+      this.followingBit = false;
       e.rig.playing = false;
       e.rig.targetMd = null;
       e.rig.setMd(md);
     };
-    e.rig.onUserInput = () => this.stopTour();
+    e.rig.onUserInput = () => {
+      this.stopTour();
+      // orbiting the view in Explore keeps following (the camera moves with the bit); travelling along the well stops it
+      if (e.rig.mode !== 'explore') this.followingBit = false;
+    };
     e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
@@ -226,7 +238,11 @@ export class App {
     });
   }
 
-  toast(msg: string, kind: 'info' | 'error' = 'info') {
+  toast(msg: string, kind: 'info' | 'error' = 'info', since = performance.now()) {
+    // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
+    const wait = transitionBusyFor();
+    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, since), wait);
+    noteSyncUpdate();
     if (kind === 'error') toast.error(msg);
     else toast(msg);
   }
@@ -329,6 +345,86 @@ export class App {
     this.logs.invalidate();
     this.interpRev.bump();
   }
+
+  /**
+   * Streamed data changed the active well. The cheap path re-runs the
+   * interpretation and re-uploads the wellbore's data textures; `rebuild`
+   * rebuilds its geometry too (the well got deeper or its path changed).
+   * The hub decides which, and how often, from what each costs.
+   */
+  liveRefresh(o: { rebuild: boolean; curves: boolean; features: boolean; fromMd?: number; panels?: boolean }) {
+    const w = this.engine.activeWell;
+    w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
+    this.zoneCache = null;
+    if (o.rebuild) {
+      this.engine.refreshWellData();
+      this.applyWellboreDisplay();
+      this.chapters = buildChapters(w, this.field);
+    } else this.engine.refreshFrom(o.fromMd ?? 0);
+    this.engine.wellbore?.setClip(w.tdMD);
+    this.engine.rig.mdMax = w.tdMD;
+    if (o.curves) this.logs.setWell(w);
+    else this.logs.invalidate();
+    if (o.features) this.notifyFeatures();
+    // the panels' numbers follow at their own, slower pace
+    if (o.panels !== false) this.interpRev.bump();
+    this.engine.requestRender(300);
+  }
+
+  /** the well the Live charts panel shows (null: the active well, or the first with readings) */
+  readonly liveWell = new Signal<string | null>(null);
+
+  /** Show the live charts (of a well). */
+  openLive(wellId?: string) {
+    if (wellId) this.liveWell.set(wellId);
+    withTransition(() => this.workspace.open('live'));
+  }
+
+  /** Show the live data panel (and, with an id, that connection in it). */
+  openSources(id?: string) {
+    withTransition(() => this.workspace.open('sources'));
+    if (id) this.hub.focus.set(id);
+  }
+
+  /** following the bit of a well being drilled (until the user moves the view) */
+  private followingBit = false;
+
+  /** Start keeping the view at the bit (the hub calls this when it opens a well being drilled). */
+  startFollowing() {
+    this.followingBit = true;
+    this.followPos = null;
+  }
+
+  /**
+   * Keep the view at the bit of a well being drilled. It starts following
+   * once the view is near the bottom, and lets go when the user moves.
+   */
+  followDepth(md: number) {
+    const rig = this.engine.rig;
+    if (rig.playing || this.chapter.value?.touring) return;
+    if (!this.followingBit) {
+      if (Math.abs(rig.md - md) > 60) return;
+      this.followingBit = true;
+    }
+    if (rig.mode === 'explore') {
+      // the free camera keeps its angle and distance, and moves with the bit
+      const p = this.engine.wellbore?.frameAt(Math.min(md, rig.mdMax)).pos;
+      if (!p) return;
+      if (this.followPos) {
+        const d = p.clone().sub(this.followPos);
+        rig.camera.position.add(d);
+        rig.orbit.target.add(d);
+      }
+      this.followPos = p.clone();
+      rig.md = Math.min(md, rig.mdMax);
+      this.engine.requestRender(300);
+      return;
+    }
+    this.followPos = null;
+    if (Math.abs(rig.md - md) < 0.05) return;
+    rig.targetMd = Math.min(md, rig.mdMax);
+  }
+  private followPos: THREE.Vector3 | null = null;
 
   reinterpret() {
     const w = this.engine.activeWell;

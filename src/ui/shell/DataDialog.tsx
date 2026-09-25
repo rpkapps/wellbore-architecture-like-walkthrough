@@ -8,7 +8,7 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle }
 import { RadioGroup, RadioGroupItem } from '@tecton/react/components/radio-group';
 import { Separator } from '@tecton/react/components/separator';
 import { Link } from '@tecton/react/tecton/link';
-import { CircleCheckIcon, CircleXIcon, DownloadIcon, InfoIcon, UploadIcon } from 'lucide-react';
+import { CircleCheckIcon, CircleXIcon, DownloadIcon, InfoIcon, RadioTowerIcon, UploadIcon } from 'lucide-react';
 import { Fragment, useId, type ReactNode } from 'react';
 import { DropZone, FileTrigger } from 'react-aria-components';
 import type { App } from '../app';
@@ -57,6 +57,34 @@ export function DataDialog({ app, isOpen, onOpenChange }: { app: App; isOpen: bo
       <div className="-mx-6 flex max-h-[70vh] flex-col gap-6 overflow-y-auto px-6">
         <ActiveDataset app={app} />
         <Upload app={app} />
+        <Section title="Live and streamed data">
+          <p className="type-caption">
+            Connect APIs, WebSockets, MQTT, or — through the BoreWalk relay — Kafka, WITSML stores, ETP servers, OSDU and WITS rig feeds. Data is read in the background, previewed first, and wells
+            grow as it arrives. Large files can be read this way too, in any of the supported formats (DLIS, WITSML, Parquet, Arrow, Avro and more).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onPress={() => {
+                app.dataOpen.set(false);
+                app.connectRequest.set({});
+              }}
+            >
+              <RadioTowerIcon data-icon="inline-start" />
+              Connect a source…
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onPress={() => {
+                app.dataOpen.set(false);
+                void app.actions.run('data.replay', { speed: 60 });
+              }}
+            >
+              Replay a well live
+            </Button>
+          </div>
+        </Section>
         <Separator emphasis="subtle" />
         <ImportGuide />
         <Section title="Sources & licence">

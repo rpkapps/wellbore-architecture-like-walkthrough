@@ -85,7 +85,8 @@ When the version number changes, update the file name in `package.json` too. The
 ### Tests and checks
 
 ```bash
-pnpm test              # unit tests against the real Volve files (parsers, min-curvature, CPI calibration, zonation)
+pnpm test              # unit tests against the real Volve files (parsers, min-curvature, CPI calibration, zonation),
+                       # the connector codecs and steps, and the relay against fake Kafka, WITSML, ETP, OSDU, TCP and MQTT servers
 pnpm typecheck         # TypeScript only
 ```
 
@@ -217,6 +218,46 @@ Multi-well files are matched to the target well by name. For example, production
 
 The Volve, SEG, P11-A-02 and Volve-workbook imports were tested end to end with the real files. The Sodir FactPages column mapping follows the published attribute names but could not be tested from the build environment.
 
+## Live and streamed data (connectors)
+
+Open **Live** in the top bar (or **Data → Connect a source**, or `data.add_source` in the command palette). A connection is three kinds of plugin, and the built-in ones are registered exactly like a custom one would be:
+
+- a **transport** says how data arrives: files (read in pieces, however large), a URL, REST polling (with `{lastTime}`/`{lastDepth}` placeholders and conditional requests), server-sent events, WebSocket, MQTT over WebSocket, the **relay**, or a **replay** of a Volve well;
+- a **codec** reads a format: CSV/TSV (header and units-row detection, decimal commas), JSON and JSON Lines (records, columns, row arrays, pandas “split”, envelopes like `{"data": […]}`), LAS 2.0, **DLIS (RP66 v1)**, **WITSML 1.3.1/1.4.1 and 2.0/2.1** (bare or inside a SOAP response), **WITS level 0**, Excel, **Parquet**, **Apache Arrow**, **Avro** (container files, or messages with a schema or a Schema Registry id), MessagePack, fixed-width text, key=value lines, and any line format through a regular expression with named groups;
+- **steps** transform batches as they arrive: map columns (index, time format, well, names, units), convert units (to metric, or per column), **time to depth** (rig readings onto measured depth from the bit depth, new hole only, with sensor offsets behind the bit), resample, order and de-duplicate, remove spikes, rolling windows (mean, min, max, rate…), formulas (`(GR - 20) / (130 - 20)`, `if(SPPA > 250, 1, 0)`, a small safe expression language with no `eval`) and row filters.
+
+The dialog previews a connection before it touches any well: the columns as read, and what it would add (survey, tops, production, logs by depth, readings by time), with suggested steps. Rows that name a well go to that well, and a well BoreWalk does not have is created. A well being drilled grows in 3D (the view can **follow the bit**), its logs fill in behind the sensors, and readings by time show as strip charts in **Live charts**. **Replay a well live** drills a Volve well again, up to 3600× faster, as a rig feed through the same pipeline: a demo, and the test bench.
+
+**Custom formats.** Save a codec, its options and steps as a named format (a vendor's text feed, an API's JSON shape) and pick it for other connections. Anything else is a **plugin module**: an ES module URL whose default export is a codec, a step or a transport (or a function receiving `{ defineCodec, defineTransform, defineTransport, z, batch }`). It runs in the connection's worker with no access to the page; its options schema gives it a form in the dialog.
+
+**Never stalls the page.** Each connection runs in its own worker: transport, decoding and steps happen off the main thread, and results cross as typed arrays (transferred, not copied). The worker coalesces what arrives while the page is busy and sends at most two unacknowledged deliveries; the page applies deliveries for at most ~4 ms per frame and acknowledges each one only once it is applied, so a fast source slows down in its worker instead of piling up in the page. The 3D view refreshes at a pace set by what each refresh costs: the data textures are refilled in place from the new hole down, the wellbore geometry is built 50 m ahead of the bit (clipped in the shader) so it is rebuilt only every ~50 m, and the feature panels refresh in idle time. Measured in headless Chrome with software rendering, replaying at 600×: about 8 000 values/s arrive, and the steady state has 3 long tasks in 12 s, all of them the geometry rebuild.
+
+Connections are remembered in this browser without their credentials (tokens, passwords and `Authorization` headers are left out); they come back stopped.
+
+### The relay (Kafka, WITSML, ETP, OSDU, TCP)
+
+Some sources cannot be reached from a browser: Kafka has its own protocol, rig feeds are TCP, WITSML stores and OSDU need credentials that should not live in a page, and many servers do not allow other sites (CORS). The relay is one small Node process in between; see [`relay/README.md`](relay/README.md).
+
+```bash
+pnpm relay:build                                  # bundles relay/dist/relay.mjs (one file, Node 20+)
+RELAY_TOKEN=… node relay/dist/relay.mjs relay.config.json
+```
+
+Sources are configured on the relay, with their credentials; the page names a source and passes only the options the source allows (a start time, a well, a subset of topics):
+
+| Source type | What it reads |
+| --- | --- |
+| `kafka` | Topics; values as JSON, **Avro or Protobuf behind a Schema Registry**, or text (CSV, WITS…). Starts at latest, earliest, or a time (`6h`, a date) via offsets-by-timestamp; one consumer group per browser; filters by well; pauses while the browser is behind. |
+| `witsml` | A WITSML 1.3.1/1.4.1 store over SOAP: trajectory and formation markers once, then growing logs polled from the last index received. |
+| `etp` | An ETP 1.2 (ChannelSubscribe, Discovery) or ETP 1.1 (ChannelStreaming) server, with history by range then live data. |
+| `osdu` | OSDU Wellbore DDMS: well logs and trajectories of the configured wellbores (static token or OAuth client credentials), polled for new rows. |
+| `tcp` | Raw TCP feeds, typically WITS level 0 from a rig's acquisition system. |
+| `mqtt` | MQTT brokers reachable only over TCP (1883/8883). |
+| `http` | Any HTTP API that needs a secret header or does not allow the page's origin (e.g. PI Web API). |
+| `file` | A recorded feed played back at a steady pace, for demos and for trying steps against a real capture. |
+
+The Kafka, WITS/TCP, MQTT, HTTP and file sources are tested end to end through the relay, and WITSML, ETP 1.1/1.2 and OSDU against fake servers written from the specifications. **None of them has been tested against a production Kafka cluster, WITSML store, ETP server or OSDU instance**; the relay's README lists the protocol details that are assumptions.
+
 ## Honest limitations
 
 - All detailed wells now use Equinor **definitive directional surveys** (from a public mirror of the Volve release). They agree with the official formation-pick coordinates within 0.6 m. 14 of the 29 context wells still have no public survey and are drawn through their pick coordinates, labelled *reconstructed*.
@@ -247,6 +288,8 @@ src/ui/                         controller (app.ts), log-track renderer, inspect
 src/ui/shell/                   React + Tecton chrome: page loader, top bar, panels, 3D overlays, timeline, logs, dialogs
 src/ui/workspace/               the panel workspace: layout model, dock columns, floating windows, menus
 src/actions/                    the action registry, the app's actions and the TanStack AI tool adapter
+src/connect/                    connectors: batch model, plugin registry, codecs, steps, transports, worker, page hub
+relay/                          the Node relay: server, source adapters (Kafka, WITSML, ETP, OSDU, TCP, MQTT, HTTP, file)
 vendor/                         @tecton/react packed tarball (private package)
 tests/                          unit tests against the real Volve files
 ```

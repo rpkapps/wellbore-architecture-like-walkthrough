@@ -14,7 +14,7 @@ import { GeologyModel } from './geology';
 import { WellboreAssembly, type PropertyMode } from './wellbore';
 import { Environment, WellPaths } from './environment';
 import { CameraRig } from './cameraRig';
-import { buildWellTextures, makeLutTexture } from './wellData';
+import { buildWellTextures, makeLutTexture, updateWellTextures } from './wellData';
 import { FOCUS, SEABED } from './rockMaterial';
 import { LensBlurShader, LogDepthAOPass, MudParticles } from './postfx';
 import type { SectionBox } from './geology';
@@ -328,7 +328,8 @@ export class Engine {
       if (this.wellbore === wb) ensureBVHFor([wb.wall, wb.overviewTube, ...wb.casings]);
     };
     // the render loop can keep the browser from ever going idle: cap the wait
-    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: 1500 });
+    // a well being drilled is rebuilt often: its index waits for a longer quiet spell
+    if ('requestIdleCallback' in window) requestIdleCallback(build, { timeout: well.buildAhead > 0 ? 8000 : 1500 });
     else setTimeout(build, 500);
   }
 
@@ -336,6 +337,17 @@ export class Engine {
   /** Interpretation changed only: update data textures in place. */
   refreshInterpretation() {
     if (this.wellbore) this.wellbore.updateTextures(buildWellTextures(this.activeWell));
+  }
+
+  /**
+   * Live data reached the well from `fromMd` down: refill that part of the
+   * wellbore's data textures in place (or rebuild them when TD outgrew them).
+   */
+  refreshFrom(fromMd: number) {
+    const wb = this.wellbore;
+    if (!wb) return;
+    if (updateWellTextures(wb.tex, this.activeWell, fromMd)) wb.texturesChanged();
+    else wb.updateTextures(buildWellTextures(this.activeWell));
   }
 
   refreshWellData() {

@@ -1,5 +1,19 @@
 import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
-import { BookmarkIcon, BoxesIcon, ChartScatterIcon, ColumnsIcon, FlaskConicalIcon, LayersIcon, MapIcon, PanelTopIcon, RulerIcon, ScissorsIcon, SlidersHorizontalIcon } from 'lucide-react';
+import {
+  ActivityIcon,
+  BookmarkIcon,
+  BoxesIcon,
+  ChartScatterIcon,
+  ColumnsIcon,
+  FlaskConicalIcon,
+  LayersIcon,
+  MapIcon,
+  PanelTopIcon,
+  RadioTowerIcon,
+  RulerIcon,
+  ScissorsIcon,
+  SlidersHorizontalIcon,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import type { App } from '../app';
 import { ProvBadge } from '../prov';
@@ -9,6 +23,8 @@ import { FeaturesPanel } from '../shell/FeaturesPanel';
 import { InterpretationPanel } from '../shell/InterpretationPanel';
 import { LogsActions, LogsBody } from '../shell/LogsPanel';
 import { ScenePanel } from '../shell/ScenePanel';
+import { LiveActions, LiveBody } from '../shell/LivePanel';
+import { SourcesActions, SourcesBody } from '../shell/SourcesPanel';
 
 /** What the workspace needs to show a panel: its tab, its header controls and its content. */
 export interface PanelDef {
@@ -72,6 +88,8 @@ export function builtinPanels(app: App): PanelDef[] {
       ),
     },
     { id: 'logs', title: 'Well logs', icon: <LogCurveIcon />, actions: () => <LogsActions app={app} />, body: () => <LogsBody app={app} /> },
+    { id: 'sources', title: 'Live data', icon: <RadioTowerIcon />, actions: () => <SourcesActions app={app} />, body: () => <SourcesBody app={app} /> },
+    { id: 'live', title: 'Live charts', icon: <ActivityIcon />, actions: () => <LiveActions app={app} />, body: () => <LiveBody app={app} /> },
   ];
 }
 
