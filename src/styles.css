@@ -127,6 +127,8 @@
     inset: 0;
     pointer-events: none;
     z-index: 1;
+    /* sized by the engine: label changes never reach the layout of the panels around it */
+    contain: strict;
   }
 
   canvas.gl {
@@ -146,9 +148,9 @@
     color: var(--foreground);
     padding: 3px 7px;
     border-radius: 6px;
-    background: color-mix(in oklab, var(--card) 72%, transparent);
+    /* no backdrop blur: over a canvas that redraws, every label would be re-blurred by the compositor each frame */
+    background: color-mix(in oklab, var(--card) 84%, transparent);
     border: 1px solid var(--border-subtle);
-    backdrop-filter: blur(6px);
     white-space: nowrap;
     transform-origin: 0 50%;
     transition: opacity 0.3s;
@@ -166,7 +168,6 @@
   .label3d.ctx {
     background: none;
     border: 0;
-    backdrop-filter: none;
     font-family: var(--font-mono);
     padding: 0;
     text-shadow: 0 1px 3px #000;
@@ -209,11 +210,11 @@
     display: block;
   }
   .label3d.owc.field {
-    background: rgba(10, 30, 50, 0.72);
+    background: rgba(10, 30, 50, 0.84);
   }
   .label3d.measure {
     border-color: rgba(255, 210, 122, 0.6);
-    background: rgba(20, 16, 8, 0.8);
+    background: rgba(20, 16, 8, 0.88);
   }
   .label3d.measure b {
     font-size: 12.5px;

@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { App } from '../ui/app';
 import { Note, SelectField, SliderField } from '../ui/controls';
 import { ProvBadge } from '../ui/prov';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
 import type { FeatureModule } from './registry';
 
@@ -15,7 +15,7 @@ import type { FeatureModule } from './registry';
  */
 export class CurtainFeature implements FeatureModule {
   readonly id = 'curtain' as const;
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   curve = 'GR';
   width = 45;
   private group = new THREE.Group();

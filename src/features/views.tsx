@@ -14,7 +14,7 @@ import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import { SortableList } from '../ui/sortable';
 import type { FeatureModule } from './registry';
 
@@ -40,7 +40,7 @@ export class ViewsFeature implements FeatureModule {
   readonly id = 'views' as const;
   views: SavedView[] = [];
   /** bump when the list of views changes (Features panel settings) */
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private presenting = false;
   private idx = 0;

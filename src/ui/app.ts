@@ -11,7 +11,7 @@ import type { GuidedView, NavMode } from '../scene/cameraRig';
 import type { PropertyMode } from '../scene/wellbore';
 import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
-import { onAnyChange, Rev, Signal } from './signal';
+import { onAnyChange, Rev, SCENE, Signal } from './signal';
 import { Workspace } from './workspace/layout';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
@@ -125,13 +125,13 @@ export class App {
   /** the engine exists and the first well is loaded */
   readonly ready = new Signal(false);
   /** active well, its data or its interpretation changed */
-  readonly wellRev = new Rev();
+  readonly wellRev = new Rev(SCENE);
   /** bumped while an interpretation parameter is being dragged (the live results only) */
-  readonly interpRev = new Rev();
+  readonly interpRev = new Rev(SCENE);
   /** geology layers, section box or scene display options changed */
-  readonly sceneRev = new Rev();
+  readonly sceneRev = new Rev(SCENE);
   /** navigation mode, camera view, property mode or colour map changed */
-  readonly viewRev = new Rev();
+  readonly viewRev = new Rev(SCENE);
   /** the same position, updated at most ~15 times a second: for text read-outs that need not follow every frame */
   readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
   private poseTextAt = 0;
@@ -201,11 +201,14 @@ export class App {
     const e = engine;
     this.flags = new FeatureFlags(e.quality === 'low');
     this.display.postFx = e.quality !== 'low';
-    // the 3D view draws on demand: any state change the chrome shows is a reason to redraw
-    onAnyChange.hook = () => e.requestRender(300);
+    // the 3D view draws on demand: only signals marked SCENE redraw it (chrome state such as
+    // drags, layout and read-outs never does); the engine's setters request their own frames
+    onAnyChange.hook = () => e.requestRender(100);
     // personal settings that reach into the scene
     const personal = () => {
       e.rig.instantMoves = prefs.value.reduceMotion;
+      // the labels are placed again (panel opacity or blur scrubs leave the view alone)
+      if (e.labelDensity !== prefs.value.labelDensity) e.requestRender();
       e.labelDensity = prefs.value.labelDensity;
     };
     personal();
@@ -219,9 +222,9 @@ export class App {
       this.wellRev.bump();
     });
     this.logs.onPick = (md) => this.travelTo(md);
+    // the engine redraws when the hover depth changes (a pointer crossing the tracks costs nothing)
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
-      e.requestRender(200);
     };
     this.logs.onScroll = (md) => {
       this.followingBit = false;
@@ -251,6 +254,7 @@ export class App {
           try {
             if (on) m.enable();
             else m.disable();
+            e.requestRender();
           } catch (err) {
             console.error(`feature ${m.id}`, err);
             this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');

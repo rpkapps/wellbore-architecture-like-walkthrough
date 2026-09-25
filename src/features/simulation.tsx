@@ -13,7 +13,7 @@ import { Note, SelectField, SliderField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
-import { Rev } from '../ui/signal';
+import { Rev, SCENE } from '../ui/signal';
 import { font, ink } from '../ui/tokens';
 import type { FeatureModule } from './registry';
 import { FOCUS } from '../scene/rockMaterial';
@@ -65,7 +65,7 @@ export class SimulationFeature implements FeatureModule {
   private mat?: THREE.ShaderMaterial;
   private valAttr?: THREE.InstancedBufferAttribute;
   /** bump when the model or its loading state changes (Features panel settings) */
-  readonly rev = new Rev();
+  readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private chart = new PanelCanvas({ draw: (g, W, H) => this.drawChart(g, W, H), visible: () => this.panel.visible });
   private error: string | null = null;

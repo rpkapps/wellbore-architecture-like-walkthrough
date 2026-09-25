@@ -2,8 +2,21 @@ import { createElement, Fragment, useSyncExternalStore, type ReactNode } from 'r
 
 type Listener = () => void;
 
-/** Called after any signal changes (the 3D view uses it to redraw on demand). */
+/** Called after a scene signal changes (the 3D view uses it to redraw on demand). */
 export const onAnyChange: { hook: (() => void) | null } = { hook: null };
+
+export interface SignalOptions {
+  /**
+   * A change can alter what the 3D view draws, so it redraws. Off by default:
+   * chrome state (layout, drags, read-outs, dialogs) must never cost a 3D
+   * frame; scene code that changes the view without a scene signal asks the
+   * engine for a render itself.
+   */
+  scene?: boolean;
+}
+
+/** Options for a signal whose changes the 3D view has to show. */
+export const SCENE: SignalOptions = { scene: true };
 
 /**
  * A value the imperative side (controller, engine, feature modules) owns and
@@ -12,8 +25,14 @@ export const onAnyChange: { hook: (() => void) | null } = { hook: null };
  */
 export class Signal<T> {
   private listeners = new Set<Listener>();
+  private readonly scene: boolean;
 
-  constructor(private v: T) {}
+  constructor(
+    private v: T,
+    opts?: SignalOptions,
+  ) {
+    this.scene = opts?.scene ?? false;
+  }
 
   get value(): T {
     return this.v;
@@ -23,7 +42,7 @@ export class Signal<T> {
     if (Object.is(v, this.v)) return;
     this.v = v;
     for (const l of [...this.listeners]) l();
-    onAnyChange.hook?.();
+    if (this.scene) onAnyChange.hook?.();
   }
 
   update(fn: (v: T) => T) {
@@ -42,8 +61,8 @@ export class Signal<T> {
  * that read the state through `useRev` render again.
  */
 export class Rev extends Signal<number> {
-  constructor() {
-    super(0);
+  constructor(opts?: SignalOptions) {
+    super(0, opts);
   }
 
   bump() {
