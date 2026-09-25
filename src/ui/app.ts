@@ -849,7 +849,6 @@ export class App {
         const wb = this.engine.wellbore;
         if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
         this.logs.hoverMd = md;
-        this.logs.invalidate();
         this.engine.requestRender(200);
       }
       const c = over ? 'pointer' : '';

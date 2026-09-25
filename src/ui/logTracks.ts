@@ -88,7 +88,6 @@ export class LogTracks {
   private micro = false;
   /** the cursor's last move, for which way the strip reaches ahead */
   private step = 0;
-  private hoverJustSet = false;
 
   constructor() {
     this.loadLayout();
@@ -101,8 +100,6 @@ export class LogTracks {
 
   set hoverMd(md: number | null) {
     this.hover = md;
-    this.hoverJustSet = true;
-    queueMicrotask(() => (this.hoverJustSet = false));
     this.schedule();
   }
 
@@ -229,8 +226,7 @@ export class LogTracks {
 
   /** The data, colours or layout changed: redraw the tracks. */
   invalidate() {
-    // the app sets hoverMd and then invalidates; a hover alone needs only the overlay
-    if (!this.hoverJustSet) this.stale = true;
+    this.stale = true;
     this.schedule();
   }
 
