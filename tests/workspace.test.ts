@@ -18,9 +18,9 @@ describe('workspace layout', () => {
     const ws = fresh();
     const s = ws.value.left.stacks[0].id;
     ws.move('interpretation', { kind: 'split', zone: 'left', stack: s, where: 'after' });
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'features'], ['interpretation']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'features'], ['interpretation'], ['properties']]);
     ws.move('interpretation', { kind: 'tab', stack: s, index: 0 });
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['interpretation', 'scene', 'features']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['interpretation', 'scene', 'features'], ['properties']]);
   });
 
   it('floats a panel and docks it back to a column', () => {

@@ -20,6 +20,7 @@ import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
 import { inspect, type InspectorView } from './inspect';
+import { sameSelection, type Selection } from './selection';
 import { DataImporter } from './dataImport';
 import { DataHub } from '../connect/hub';
 import type { ConnectRequest } from './shell/ConnectDialog';
@@ -144,6 +145,21 @@ export class App {
   readonly heading = new FrameValue();
   readonly playing = new Signal(false);
   readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
+  /**
+   * The selected object (a click in the 3D view or the Scene tree, an
+   * action): Properties, the details card and the right-click menus follow it.
+   * Set it with `select`.
+   */
+  readonly selection = new Signal<Selection | null>(null);
+  /** Properties stays on this object (its pin) whatever is selected meanwhile */
+  readonly pinned = new Signal<Selection | null>(null);
+  /** a right-click menu of the selection's actions, open at this point of the window */
+  readonly contextMenu = new Signal<{ x: number; y: number; selection: Selection } | null>(null);
+  /**
+   * The details of the selection, derived from it (and rebuilt when the well
+   * or its interpretation changes): the floating details card shows these.
+   * Read-only for the chrome; change the selection instead.
+   */
   readonly inspector = new Signal<InspectorView | null>(null);
   readonly tools = new Signal<ToolEntry[]>([]);
   readonly huds = new Signal<HudEntry[]>([]);
@@ -185,6 +201,10 @@ export class App {
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
     this.hub = new DataHub(this);
+    // the details follow the selection, and the data they read out
+    const details = () => this.inspector.set(this.selection.value && this.engine ? this.inspectorFor(this.selection.value) : null);
+    this.selection.subscribe(details);
+    this.wellRev.subscribe(() => this.selection.value && details());
     // formation colours the user picked, before the geology is built from them
     try {
       const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
@@ -311,7 +331,9 @@ export class App {
     this.zoneCache = null;
     this.logs.setWell(w);
     this.chapters = buildChapters(w, this.field);
-    this.inspector.set(null);
+    // a point, a pick or an interval of the previous well no longer exists
+    if (this.selection.value?.well && this.selection.value.well !== w.id) this.select(null);
+    if (this.pinned.value?.well && this.pinned.value.well !== w.id) this.pinned.set(null);
     this.notifyFeatures();
     this.wellRev.bump();
     if (fly) {
@@ -762,12 +784,38 @@ export class App {
     this.workspace.open(tab);
   }
 
+  // ------------------------------------------------------------------ selection
+  /** Select an object (null clears the selection); selecting what is already selected changes nothing. */
+  select(sel: Selection | null) {
+    if (sameSelection(sel, this.selection.value)) return;
+    this.selection.set(sel);
+    const md = sel?.md;
+    if (md !== undefined && sel?.well === this.engine?.activeWell.id) this.logs.setCursor(md);
+  }
+
+  /** The details of a selected object: its title, read-outs and quick actions (null when it no longer exists). */
+  inspectorFor(sel: Selection): InspectorView | null {
+    try {
+      return inspect.view(this, sel);
+    } catch (err) {
+      console.error('inspect', err);
+      return null;
+    }
+  }
+
+  /** Open the right-click menu of an object at a point of the window, selecting it. */
+  openContextMenu(sel: Selection, x: number, y: number) {
+    this.select(sel);
+    this.contextMenu.set({ x, y, selection: this.selection.value! });
+  }
+
   inspectFormation(id: string) {
-    this.inspector.set(inspect.formation(this, id));
+    this.select({ kind: 'formation', id });
   }
 
   inspectAt(md: number) {
-    this.inspector.set(inspect.wellAt(this, md));
+    const id = this.engine.activeWell.id;
+    this.select({ kind: 'well', id, well: id, md });
   }
 
   // ------------------------------------------------------------------ tour
@@ -814,7 +862,8 @@ export class App {
   private bindPicking() {
     const cv = this.engine.renderer.domElement;
     let down: { x: number; y: number; t: number } | null = null;
-    cv.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, t: performance.now() }));
+    // a click selects (the right button opens the menu below instead)
+    cv.addEventListener('pointerdown', (e) => (down = e.button === 2 ? null : { x: e.clientX, y: e.clientY, t: performance.now() }));
     cv.addEventListener('pointerup', (e) => {
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -824,13 +873,27 @@ export class App {
           down = null;
           return;
         }
-        if (p) {
-          this.inspector.set(inspect.pick(this, p));
-          if (p.md !== undefined) this.logs.setCursor(p.md);
-        } else this.inspector.set(null);
+        this.select(p ? inspect.selectionOf(this, p) : null);
+        if (p?.md !== undefined) this.logs.setCursor(p.md);
       }
       down = null;
     });
+    // right click without dragging (a right drag pans the view): the picked object's menu of actions.
+    // It opens on release, as some systems send `contextmenu` when the button goes down.
+    let rdown: { x: number; y: number } | null = null;
+    cv.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) rdown = { x: e.clientX, y: e.clientY };
+    });
+    cv.addEventListener('pointerup', (e) => {
+      const r = rdown;
+      if (e.button !== 2 || !r) return;
+      rdown = null;
+      if (Math.hypot(e.clientX - r.x, e.clientY - r.y) > 5) return;
+      const p = this.engine.pick(e.clientX, e.clientY);
+      const sel = p && inspect.selectionOf(this, p);
+      if (sel) this.openContextMenu(sel, e.clientX, e.clientY);
+    });
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('dblclick', (e) => {
       const p = this.engine.pick(e.clientX, e.clientY);
       if (!p) return;
@@ -917,7 +980,7 @@ export class App {
         const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.optionalModes.value.has('rop') ? (['rop'] as PropertyMode[]) : [])];
         act('view.color_by', { mode: order[(order.indexOf(this.engine.mode) + 1) % order.length] });
       } else if (e.key === '?') act('help.open');
-      else if (e.key === 'Escape') this.inspector.set(null);
+      else if (e.key === 'Escape') this.select(null);
     });
   }
 

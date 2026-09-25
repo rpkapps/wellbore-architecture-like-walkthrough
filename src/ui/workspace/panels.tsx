@@ -13,6 +13,7 @@ import {
   RulerIcon,
   ScissorsIcon,
   SlidersHorizontalIcon,
+  SquareMousePointerIcon,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import type { App } from '../app';
@@ -23,6 +24,7 @@ import { FeaturesPanel } from '../shell/FeaturesPanel';
 import { InterpretationPanel } from '../shell/InterpretationPanel';
 import { LogsActions, LogsBody } from '../shell/LogsPanel';
 import { ScenePanel } from '../shell/ScenePanel';
+import { PropertiesPanel } from '../shell/PropertiesPanel';
 import { LiveActions, LiveBody } from '../shell/LivePanel';
 import { SourcesActions, SourcesBody } from '../shell/SourcesPanel';
 
@@ -64,6 +66,16 @@ export function builtinPanels(app: App): PanelDef[] {
       body: () => (
         <Scroll>
           <ScenePanel app={app} />
+        </Scroll>
+      ),
+    },
+    {
+      id: 'properties',
+      title: 'Properties',
+      icon: <SquareMousePointerIcon />,
+      body: () => (
+        <Scroll>
+          <PropertiesPanel app={app} />
         </Scroll>
       ),
     },
