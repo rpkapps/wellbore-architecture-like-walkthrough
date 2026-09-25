@@ -244,9 +244,10 @@ export class App {
     };
     personal();
     prefs.subscribe(personal);
-    // a new theme: every canvas redraws with its colours
+    // a new theme, accent or density: every canvas redraws with its colours and text sizes
     themeRev.subscribe(() => {
       this.logs.invalidate();
+      this.paintRev.bump();
       this.notifyFeatures();
       this.viewRev.bump();
       this.sceneRev.bump();

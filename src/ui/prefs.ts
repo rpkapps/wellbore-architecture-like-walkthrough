@@ -1,4 +1,4 @@
-import { Signal } from './signal';
+import { Signal, useSignalPart } from './signal';
 import { clearCssVarCache } from './tokens';
 
 /**
@@ -39,6 +39,15 @@ export const DEFAULT_PREFS: Prefs = {
 
 export const DENSITY_ROOT: Record<Density, number> = { compact: 14, default: 15, comfortable: 17 };
 
+/**
+ * The density's text scale for SVG text and the lengths around it in React
+ * (1 at Compact; canvases use `textScale` in tokens.ts). Re-renders only when
+ * the density changes, not on every opacity or blur scrub.
+ */
+export function useTextScale(): number {
+  return DENSITY_ROOT[useSignalPart(prefs, (p) => p.density)] / 14;
+}
+
 /** Palette step of each accent family that reads well on the dark theme. */
 export const ACCENTS: { id: Accent; label: string; step: string }[] = [
   { id: 'orchid', label: 'Violet', step: 'orchid-460' },
@@ -73,9 +82,12 @@ export function resolvedTheme(p: Prefs = prefs.value): 'dark' | 'light' {
   return p.theme === 'system' ? (systemDark?.matches === false ? 'light' : 'dark') : p.theme;
 }
 
-/** Bumped when the resolved theme changes: canvases and the 3D labels redraw. */
+/**
+ * Bumped when the resolved theme, the accent or the density changes: canvases
+ * redraw with the new colours and text sizes, and the 3D labels are placed again.
+ */
 export const themeRev = new Signal(0);
-let lastTheme: 'dark' | 'light' | null = null;
+let lastLook: string | null = null;
 
 /** Write the settings to the document (called on load and on every change). */
 export function applyPrefs(p: Prefs = prefs.value) {
@@ -94,9 +106,10 @@ export function applyPrefs(p: Prefs = prefs.value) {
   r.toggleAttribute('data-panel-blur', p.panelBlur > 0);
   r.toggleAttribute('data-reduce-motion', p.reduceMotion);
   clearCssVarCache();
-  if (theme !== lastTheme) {
-    const first = lastTheme === null;
-    lastTheme = theme;
+  const look = `${theme} ${p.accent} ${p.density}`;
+  if (look !== lastLook) {
+    const first = lastLook === null;
+    lastLook = look;
     if (!first) themeRev.set(themeRev.value + 1);
   }
 }

@@ -141,12 +141,13 @@
     cursor: crosshair !important;
   }
 
+  /* sizes in rem (written for the 14 px Compact root) so the labels grow with the density setting */
   .label3d {
     pointer-events: none;
-    font-size: 10.5px;
+    font-size: 0.75rem;
     line-height: 1.25;
     color: var(--foreground);
-    padding: 3px 7px;
+    padding: 0.2rem 0.5rem;
     border-radius: 6px;
     /* no backdrop blur: over a canvas that redraws, every label would be re-blurred by the compositor each frame */
     background: color-mix(in oklab, var(--card) 84%, transparent);
@@ -157,12 +158,12 @@
   }
   .label3d b {
     font-weight: 500;
-    margin-right: 5px;
+    margin-right: 0.35rem;
   }
   .label3d span {
     font-family: var(--font-mono);
     color: var(--muted-foreground);
-    font-size: 9.5px;
+    font-size: 0.68rem;
   }
   .label3d.tick,
   .label3d.ctx {
@@ -174,11 +175,11 @@
   }
   .label3d.tick {
     color: color-mix(in oklab, var(--foreground) 75%, transparent);
-    font-size: 10px;
+    font-size: 0.72rem;
   }
   .label3d.ctx {
     color: var(--muted-foreground);
-    font-size: 9.5px;
+    font-size: 0.68rem;
   }
   /* borders pick up the colour of the 3D object the label names */
   .label3d.shoe {
@@ -217,7 +218,7 @@
     background: rgba(20, 16, 8, 0.88);
   }
   .label3d.measure b {
-    font-size: 12.5px;
+    font-size: 0.9rem;
     color: #ffd27a;
   }
 }

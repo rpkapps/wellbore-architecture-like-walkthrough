@@ -4,7 +4,7 @@ import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
-import { font, ink } from '../ui/tokens';
+import { font, ink, textLen } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
 import { niceStep, type GeosteerFeature } from './geosteer';
@@ -227,10 +227,11 @@ export class SectionFeature implements FeatureModule {
   }
 
   private draw(g: CanvasRenderingContext2D, W: number, H: number) {
-    const PL = 48;
+    // the margins and offsets that hold text grow with the density
+    const PL = textLen(48);
     const PR = 10;
     const PT = 8;
-    const PB = 20;
+    const PB = textLen(20);
     const { s0, s1, d0, d1 } = this.extent(W, H);
     const X = (s: number) => PL + ((s - s0) / (s1 - s0)) * (W - PL - PR);
     const Y = (d: number) => PT + ((d - d0) / (d1 - d0)) * (H - PT - PB);
@@ -273,9 +274,9 @@ export class SectionFeature implements FeatureModule {
       const c = cols[2];
       const top = c.d[k];
       const bot = k + 1 < f.horizons.length ? c.d[k + 1] : base;
-      if (Y(bot) - Y(top) < 11 || Y(top) > H - PB || Y(bot) < PT) return;
+      if (Y(bot) - Y(top) < textLen(11) || Y(top) > H - PB || Y(bot) < PT) return;
       g.fillStyle = 'rgba(255,255,255,0.75)';
-      g.fillText(FORMATION_BY_ID.get(hz.id)?.name ?? hz.id, X(c.s) + 4, Math.max(PT + 10, Y(top) + 11));
+      g.fillText(FORMATION_BY_ID.get(hz.id)?.name ?? hz.id, X(c.s) + 4, Math.max(PT + textLen(10), Y(top) + textLen(11)));
     });
     // cross-feature overlays
     const gs = this.app.flags.on('geosteer') ? this.app.feature<GeosteerFeature>('geosteer')?.profile : null;
@@ -401,16 +402,25 @@ export class SectionFeature implements FeatureModule {
     g.font = font.mono(10);
     g.fillStyle = ink.muted;
     g.textAlign = 'right';
-    const sy = niceStep((d1 - d0) / 6);
-    for (let d = Math.ceil(d0 / sy) * sy; d <= d1; d += sy) g.fillText(d.toFixed(0), PL - 5, Y(d) + 3);
+    const sy = niceStep(Math.max((d1 - d0) / 6, ((d1 - d0) * textLen(20)) / (H - PT - PB)));
+    for (let d = Math.ceil(d0 / sy) * sy; d <= d1; d += sy) g.fillText(d.toFixed(0), PL - 5, Y(d) + textLen(3.5));
     g.textAlign = 'center';
     const sx = niceStep((s1 - s0) / 8);
-    for (let s = Math.ceil(s0 / sx) * sx; s <= s1; s += sx) g.fillText(`${s.toFixed(0)}`, X(s), H - 6);
+    for (let s = Math.ceil(s0 / sx) * sx; s <= s1; s += sx) g.fillText(`${s.toFixed(0)}`, X(s), H - textLen(6));
     g.textAlign = 'left';
-    g.fillText('TVDSS', 4, 12);
+    g.fillText('TVDSS', 4, textLen(12));
     const ve = ((s1 - s0) / (W - PL - PR)) / ((d1 - d0) / (H - PT - PB));
     g.textAlign = 'right';
-    g.fillText(`along-path distance m · VE ×${ve.toFixed(ve < 2 ? 1 : 0)}${def && data ? ` · ${def.label} (${def.range})` : ''}`, W - PR, H - 6 - 12);
+    const note = `along-path distance m · VE ×${ve.toFixed(ve < 2 ? 1 : 0)}${def && data ? ` · ${def.label} (${def.range})` : ''}`;
+    // on a card, so the lines under it do not run through it
+    const nw = g.measureText(note).width;
+    const nh = textLen(14);
+    g.fillStyle = ink.card;
+    g.globalAlpha = 0.8;
+    g.fillRect(W - PR - nw - 4, H - textLen(18) - nh + textLen(4), nw + 8, nh);
+    g.globalAlpha = 1;
+    g.fillStyle = ink.muted;
+    g.fillText(note, W - PR, H - textLen(18));
   }
 
   private drawCursor(g: CanvasRenderingContext2D) {
