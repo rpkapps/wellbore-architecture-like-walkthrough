@@ -191,7 +191,9 @@ export function WorkspaceFrame({
   const geoRef = useRef(geo);
   geoRef.current = geo;
 
-  // a panel undocked for the first time keeps its docked size, nudged in from its edge
+  // a panel undocked for the first time keeps its docked size, nudged in from its edge, but no more
+  // than half the stage wide and 60% of it high: a full-height sidebar group would otherwise
+  // come out as a window covering the whole height of the 3D view
   useEffect(() => {
     undockRect.of = (id) => {
       const g = groupOf(ws, id);
@@ -201,7 +203,7 @@ export function WorkspaceFrame({
       const a = reg.el.getBoundingClientRect();
       const s = st.getBoundingClientRect();
       const nudge = 28;
-      const r = { x: a.left - s.left + (reg.zone === 'right' ? -nudge : nudge), y: a.top - s.top + (reg.zone === 'bottom' ? -nudge : nudge), w: a.width, h: a.height };
+      const r = { x: a.left - s.left + (reg.zone === 'right' ? -nudge : nudge), y: a.top - s.top + (reg.zone === 'bottom' ? -nudge : nudge), w: Math.min(a.width, Math.max(320, Math.round(s.width * 0.5))), h: Math.min(a.height, Math.max(280, Math.round(s.height * 0.6))) };
       return clampRect(r, geoRef.current.full);
     };
     return () => {
