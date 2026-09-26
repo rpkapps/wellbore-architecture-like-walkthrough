@@ -10,7 +10,7 @@ import { Live, Rev, Signal } from '../ui/signal';
 import { font, ink, textLen, wash } from '../ui/tokens';
 import { CURVES, CURVE_BY_KEY } from './curves';
 import { niceStep } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 interface Column {
   well: Well;
@@ -61,7 +61,7 @@ export class CorrelationFeature implements FeatureModule {
       id: 'correlation',
       title: 'Well correlation',
       badge: 'measured',
-      onClose: () => app.flags.set('correlation', false),
+      onClose: () => windowClosed(app.flags, 'correlation', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect

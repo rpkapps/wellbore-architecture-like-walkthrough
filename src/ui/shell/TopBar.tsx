@@ -1,13 +1,14 @@
 import { Button } from '@tecton/react/components/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@tecton/react/components/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@tecton/react/components/select';
 import { Separator } from '@tecton/react/components/separator';
 import { AppShellBrand, AppShellHeader, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { Overflow, OverflowDivider, OverflowItem, OverflowLabel, OverflowSpacer } from '@tecton/react/tecton/overflow';
 import { WellIcon } from '@tecton/react/icons';
-import { MaximizeIcon, SearchIcon } from 'lucide-react';
+import { ListMinusIcon, ListPlusIcon, MaximizeIcon, SearchIcon } from 'lucide-react';
 import { memo, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { App } from '../app';
+import { useFlags } from '../flags';
 import { IconButton } from '../icon-button';
 import { Logo } from '../logo';
 import { useNameDialog, WorkspaceSubmenu, WorkspaceTabs } from '../workspace/menus';
@@ -108,15 +109,27 @@ function Opens({ s, children }: { s: Signal<boolean>; children: (isOpen: boolean
   return children(useSignal(s), s.set.bind(s));
 }
 
+/** The well picker's footer entry: it shows or hides the further Volve wells (the `extraWells` feature). */
+const MORE_WELLS = '__more-wells';
+const EXTRA_WELLS = ['extraWells'] as const;
+
+/**
+ * The active wellbore. Its footer entry, "Show more Volve wells" (or "Show
+ * fewer wells"), adds the further public Volve wellbores with logs to the list
+ * and to the 3D view.
+ */
 function WellSelect({ app }: { app: App }) {
   useRev(app.wellRev);
+  const [more] = useFlags(app.flags, EXTRA_WELLS);
   const e = app.engine;
+  const extra = app.field.wells.filter((w) => w.extra).length;
   return (
     <Select
       aria-label="Active wellbore"
       selectedKey={e.activeWell.id}
       onSelectionChange={(k: Key | null) => {
-        if (k !== null && k !== e.activeWell.id) app.selectWell(String(k));
+        if (k === MORE_WELLS) app.flags.set('extraWells', !more);
+        else if (k !== null && k !== e.activeWell.id) app.selectWell(String(k));
       }}
       // shrinks before anything leaves the row, down to a readable name
       className="w-48 min-w-28 shrink"
@@ -127,18 +140,33 @@ function WellSelect({ app }: { app: App }) {
         <SelectValue className="min-w-0">{({ selectedText }) => <span className="truncate">{selectedText}</span>}</SelectValue>
       </SelectTrigger>
       <SelectContent className="w-max min-w-64">
-        {app.selectableWells().map((w) => (
-          <SelectItem key={w.id} id={w.id} textValue={w.name}>
-            {w.name}
-            {w.liveSource ? (
-              <span className="text-success">live</span>
-            ) : w.userAdded ? (
-              <span className="text-muted-foreground">uploaded</span>
-            ) : (
-              !w.lasFile && <span className="text-muted-foreground">survey + production</span>
-            )}
-          </SelectItem>
-        ))}
+        <SelectGroup aria-label="Wellbores">
+          {app.selectableWells().map((w) => (
+            <SelectItem key={w.id} id={w.id} textValue={w.name}>
+              {w.name}
+              {w.liveSource ? (
+                <span className="text-success">live</span>
+              ) : w.userAdded ? (
+                <span className="text-muted-foreground">uploaded</span>
+              ) : (
+                !w.lasFile && <span className="text-muted-foreground">survey + production</span>
+              )}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+        {extra > 0 && (
+          <>
+            <SelectSeparator />
+            <SelectGroup aria-label="More wells">
+              <SelectItem id={MORE_WELLS} textValue={more ? 'Show fewer wells' : 'Show more Volve wells'}>
+                <span className="flex items-center gap-2 text-fg-2">
+                  {more ? <ListMinusIcon className="size-4" /> : <ListPlusIcon className="size-4" />}
+                  {more ? 'Show fewer wells' : `Show ${extra} more Volve wells`}
+                </span>
+              </SelectItem>
+            </SelectGroup>
+          </>
+        )}
       </SelectContent>
     </Select>
   );

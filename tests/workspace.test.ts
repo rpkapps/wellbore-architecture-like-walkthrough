@@ -32,7 +32,7 @@ const fresh = () => {
 describe('workspace layout', () => {
   it('starts from the walkthrough preset', () => {
     const ws = fresh();
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation']);
     expect(ws.value.right.stacks[0].panels).toEqual(['logs']);
   });
 
@@ -40,9 +40,9 @@ describe('workspace layout', () => {
     const ws = fresh();
     const s = ws.value.left.stacks[0].id;
     ws.move('interpretation', { kind: 'split', zone: 'left', stack: s, where: 'after' });
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'features'], ['interpretation'], ['properties']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene'], ['interpretation'], ['properties']]);
     ws.move('interpretation', { kind: 'tab', stack: s, index: 0 });
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['interpretation', 'scene', 'features'], ['properties']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['interpretation', 'scene'], ['properties']]);
   });
 
   it('floats a panel and docks it back to a column', () => {
@@ -57,18 +57,18 @@ describe('workspace layout', () => {
 
   it('reopens a closed panel where it was', () => {
     const ws = fresh();
-    ws.move('features', { kind: 'zone', zone: 'bottom' });
-    ws.close('features');
-    expect(openPanels(ws.value)).not.toContain('features');
-    ws.open('features');
-    expect(locate(ws.value, 'features')).toMatchObject({ kind: 'dock', zone: 'bottom' });
+    ws.move('interpretation', { kind: 'zone', zone: 'bottom' });
+    ws.close('interpretation');
+    expect(openPanels(ws.value)).not.toContain('interpretation');
+    ws.open('interpretation');
+    expect(locate(ws.value, 'interpretation')).toMatchObject({ kind: 'dock', zone: 'bottom' });
   });
 
   it('reorders tabs within a group', () => {
     const ws = fresh();
     const s = ws.value.left.stacks[0].id;
     ws.move('scene', { kind: 'tab', stack: s, index: 3 });
-    expect(ws.value.left.stacks[0].panels).toEqual(['interpretation', 'features', 'scene']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['interpretation', 'scene']);
   });
 
   it('clamps column sizes and folds columns', () => {
@@ -228,7 +228,7 @@ describe('workspaces', () => {
     store.set('bw.workspaces.v2', '"nope"');
     let ws = new Workspace();
     expect(ws.current.value).toBe('walkthrough');
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation']);
     expect(ws.saved.value).toEqual([]);
 
     // an unknown active workspace and broken layouts

@@ -15,7 +15,7 @@ describe('panel operations (rail, group menus, actions)', () => {
     expect(locate(ws.value, 'interpretation')).toMatchObject({ kind: 'dock', zone: 'right' });
     expect(atDefault(ws, 'interpretation')).toBe(false);
     place(ws, { id: 'interpretation' }, 'default');
-    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'features', 'interpretation'], ['properties']]);
+    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
     expect(atDefault(ws, 'interpretation')).toBe(true);
   });
 
@@ -41,10 +41,10 @@ describe('panel operations (rail, group menus, actions)', () => {
     const ws = fresh();
     ws.setCollapsed('left', true);
     ws.hidden.set(true);
-    reveal(ws, { id: 'features' });
+    reveal(ws, { id: 'interpretation' });
     expect(ws.hidden.value).toBe(false);
     expect(ws.value.left.collapsed).toBe(false);
-    expect(ws.isShown('features')).toBe(true);
+    expect(ws.isShown('interpretation')).toBe(true);
   });
 
   it('opens a tool window through its feature, never straight into the layout', () => {

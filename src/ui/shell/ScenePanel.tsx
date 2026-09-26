@@ -7,8 +7,10 @@ import { LayersIcon } from 'lucide-react';
 import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
+import { featuresAt, labelOf, type FeatureId } from '../../features/registry';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
 import { SliderField, SwitchField } from '../controls';
+import { useFlags } from '../flags';
 import { ProvBadge } from '../prov';
 import { PanelAccordion, PanelSection } from '../section';
 import { ScrubChip } from '../scrub';
@@ -20,24 +22,33 @@ import { ColormapPicker } from '../viz/ColormapPicker';
 import { Tip } from '../icon-button';
 
 /** Folder rows: they open and close, and are never the selection. */
-const FOLDERS = ['formations', 'wells', 'wellbore', 'scene'];
+const FOLDERS = ['formations', 'wells', 'wellbore', 'overlays', 'scene'];
 /** Layer rows that are scene options, selected as overlays (their Properties is a visibility switch and a note). */
 const LAYERS = new Set(['casing', 'fractures', 'markers', 'labels', 'otherWells', 'sea', 'contours']);
+/**
+ * The Overlays folder: optional features drawn in 3D (log curtain, oil–water
+ * contact, uncertainty cones, the geosteering band). The eye switches the
+ * feature, so a hidden overlay computes nothing; selected, its settings show
+ * in Properties (`FeatureModule.settings`).
+ */
+const OVERLAYS: FeatureId[] = featuresAt('overlay').map((f) => f.id);
+const OVERLAY_SET = new Set<string>(OVERLAYS);
 
-/** The selection a tree row stands for (its key: a formation id, `well:<id>` or a layer id). */
+/** The selection a tree row stands for (its key: a formation id, `well:<id>`, a layer or an overlay feature id). */
 function selectionOfKey(key: string): Selection | null {
   if (FORMATION_BY_ID.has(key)) return { kind: 'formation', id: key };
   if (key.startsWith('well:')) return { kind: 'well', id: key.slice(5) };
-  if (LAYERS.has(key)) return { kind: 'overlay', id: key };
+  if (LAYERS.has(key) || OVERLAY_SET.has(key)) return { kind: 'overlay', id: key };
   return null;
 }
 
-/** The row a selection highlights (a point on a well highlights the well). */
+/** The row a selection highlights (a point on a well highlights the well, the contact plane its overlay). */
 function keyOfSelection(sel: Selection | null): string | null {
   if (!sel) return null;
   if (sel.kind === 'formation') return sel.id;
   if (sel.kind === 'well') return `well:${sel.id}`;
   if (sel.kind === 'overlay' && LAYERS.has(sel.id)) return sel.id;
+  if ((sel.kind === 'overlay' || sel.kind === 'contact') && OVERLAY_SET.has(sel.id)) return sel.id;
   return null;
 }
 
@@ -87,6 +98,7 @@ function Layers({ app }: { app: App }) {
   const selected = keyOfSelection(useSignal(app.selection));
   // the wells folder follows which well is open
   const activeWell = useSignalPart(app.wellRev, () => app.engine.activeWell.id);
+  const overlays = useFlags(app.flags, OVERLAYS);
   const geo = app.engine.geology;
   const wb = app.wellbore;
   const d = app.display;
@@ -106,7 +118,7 @@ function Layers({ app }: { app: App }) {
     );
   };
   const leaf = (id: string, label: string, visible: boolean, onChange: (v: boolean) => void, suffix?: ReactNode) => (
-    <TreeViewItem id={id} textValue={label} isHidden={!visible} data-sel-key={id}>
+    <TreeViewItem key={id} id={id} textValue={label} isHidden={!visible} data-sel-key={id}>
       <TreeViewItemContent suffix={suffix} endAdornment={toggle(label, visible, onChange)}>
         {label}
       </TreeViewItemContent>
@@ -115,7 +127,7 @@ function Layers({ app }: { app: App }) {
   return (
     <TreeView
       aria-label="Scene layers"
-      defaultExpandedKeys={['formations']}
+      defaultExpandedKeys={['formations', 'overlays']}
       className="p-1"
       selectionMode="single"
       selectionBehavior="replace"
@@ -190,6 +202,12 @@ function Layers({ app }: { app: App }) {
         {leaf('casing', 'Casing & cement', wb.casing, (v) => app.setWellboreDisplay({ casing: v }))}
         {leaf('fractures', 'Natural fractures', wb.fractures, (v) => app.setWellboreDisplay({ fractures: v }), <ProvBadge prov="schematic" />)}
         {leaf('markers', 'Tops & depth marks', wb.markers, (v) => app.setWellboreDisplay({ markers: v }))}
+      </TreeViewItem>
+      <TreeViewItem id="overlays" textValue="Overlays">
+        <TreeViewItemContent kind="folder" endAdornment={groupToggle('every overlay', overlays, (v) => OVERLAYS.forEach((id) => app.flags.set(id, v)))}>
+          Overlays
+        </TreeViewItemContent>
+        {OVERLAYS.map((id, i) => leaf(id, labelOf(id), overlays[i], (v) => app.flags.set(id, v)))}
       </TreeViewItem>
       <TreeViewItem id="scene" textValue="Scene">
         <TreeViewItemContent
@@ -339,7 +357,7 @@ function WellboreControls({ app }: { app: App }) {
 function DisplayControls({ app }: { app: App }) {
   useRev(app.sceneRev, app.viewRev);
   const [textures, setTextures] = useState(() => app.flags.on('textures'));
-  // mirrors Features → Realistic textures so it can be flipped right next to the view
+  // mirrors Settings › Graphics › Textures so it can be flipped right next to the view
   useEffect(() => app.flags.watch('textures', setTextures), [app]);
   const s: SceneDisplay = app.display;
   return (

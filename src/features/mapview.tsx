@@ -17,7 +17,7 @@ import { Live, Signal } from '../ui/signal';
 import { font, ink, textLen } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { niceStep } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 type BubbleMode = 'cum' | 'rate' | 'none';
 
@@ -85,7 +85,7 @@ export class MapViewFeature implements FeatureModule {
       id: 'mapview',
       title: 'Map',
       badge: 'interpreted',
-      onClose: () => app.flags.set('mapview', false),
+      onClose: () => windowClosed(app.flags, 'mapview', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect

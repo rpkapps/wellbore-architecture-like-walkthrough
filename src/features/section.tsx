@@ -8,7 +8,7 @@ import { font, ink, textLen } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
 import { niceStep, type GeosteerFeature } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
 
 /** select key for "no log" */
@@ -49,7 +49,7 @@ export class SectionFeature implements FeatureModule {
       id: 'section',
       title: 'Section along the well',
       badge: 'interpreted',
-      onClose: () => app.flags.set('section', false),
+      onClose: () => windowClosed(app.flags, 'section', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect
