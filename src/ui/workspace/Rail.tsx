@@ -58,7 +58,6 @@ export const Rail = memo(function Rail({
     <nav
       aria-label="Panels"
       data-rail
-      data-intro="rail"
       className={`absolute z-10 flex flex-col items-stretch gap-0.5 overflow-x-hidden overflow-y-auto p-1 ${SURFACE}`}
       style={{ left: x, top: y, width: w, height: h }}
     >

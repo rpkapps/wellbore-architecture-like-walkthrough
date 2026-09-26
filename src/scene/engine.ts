@@ -657,6 +657,19 @@ export class Engine {
     if (!this.gpu && this.drewLastTick && now - this.lastDrawAt < 100) this.noteFrameMs(now - this.lastDrawAt);
     this.drewLastTick = true;
     this.lastDrawAt = now;
+    if (this.drawWaiters.length) {
+      const due = this.drawWaiters.filter((w) => --w.n <= 0);
+      this.drawWaiters = this.drawWaiters.filter((w) => w.n > 0);
+      for (const w of due) w.resolve();
+    }
+  }
+
+  private drawWaiters: { n: number; resolve: () => void }[] = [];
+
+  /** Resolves once the view has drawn `n` more frames (it draws on demand: this asks for them). */
+  whenDrawn(n = 1): Promise<void> {
+    this.requestRender(500);
+    return new Promise((resolve) => this.drawWaiters.push({ n, resolve }));
   }
 
   /** Per-frame scene state that depends on the camera, the cursor and the time: only when a frame is drawn. */

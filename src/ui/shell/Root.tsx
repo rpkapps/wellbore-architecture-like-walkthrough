@@ -1,7 +1,7 @@
 import { Toaster } from '@tecton/react/components/sonner';
 import { useEffect, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { loadVolve } from '../../data/dataset';
+import { loadRealisticTextures } from '../../scene/textures';
 import { appActions } from '../../actions/appActions';
 import { App } from '../app';
 import { prefs, resolvedTheme } from '../prefs';
@@ -11,6 +11,8 @@ import { Workspace } from './Workspace';
 
 /** The loader stays at least this long before it starts to leave, so a fast load never flashes it. */
 const LOADER_MIN_MS = 2000;
+/** How long the loader takes to fade away over the workspace (the CSS of .loader[data-leaving] and .app-reveal). */
+const LOADER_FADE_MS = 1600;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** After the next frame is painted. */
@@ -57,29 +59,30 @@ export function Root() {
           e.camera.lookAt(o.target);
           e.rig.orbit.target.copy(o.target);
           e.start();
+          // the loader goes once the view has drawn, with its photo textures (8 s at most), so
+          // nothing pops in under the fade
+          setProgress({ msg: 'Drawing the first frames', f: 0.97 });
+          await Promise.race([
+            (async () => {
+              await e.whenDrawn(2);
+              if (app.flags.on('textures')) {
+                await loadRealisticTextures();
+                await e.whenDrawn(2);
+              }
+            })(),
+            wait(8000),
+          ]);
           setProgress({ msg: 'Ready', f: 1 });
           // the line fills, and the loader has been up for at least LOADER_MIN_MS
           await wait(Math.max(700, LOADER_MIN_MS - (performance.now() - shownAt)));
-          // the words lift away and the particles burst
+          // then the loader fades away over the finished workspace as it fades up, the particles
+          // burst and the camera sweeps down from the establishing shot to the field
           setLoader('leaving');
-          await wait(650);
-          // then the loader opens from the middle onto the scene (a view transition started by
-          // hand, once, before any of React's own: the loader and the logo carry transition
-          // names only meanwhile), the logo flies into the top bar, the camera sweeps down,
-          // and the workspace settles in around it
-          const html = document.documentElement;
-          const done = () =>
-            flushSync(() => {
-              html.setAttribute('data-intro', '');
-              setLoader('gone');
-            });
-          const vt = (document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } }).startViewTransition;
-          if (vt && !html.hasAttribute('data-reduce-motion')) {
-            html.setAttribute('data-vt-loader', '');
-            vt.call(document, done).finished.finally(() => html.removeAttribute('data-vt-loader'));
-          } else done();
           e.rig.flyTo(o.pos, o.target, 5);
-          setTimeout(() => html.removeAttribute('data-intro'), 2600);
+          await wait(LOADER_FADE_MS);
+          setLoader('gone');
+          // messages held back while the loader showed
+          app.releaseToasts();
         });
         setBoot({ stage: 'running', app });
       })
@@ -94,7 +97,12 @@ export function Root() {
 
   return (
     <>
-      {boot.stage === 'running' && <Workspace app={boot.app} brand={loader === 'gone'} />}
+      {boot.stage === 'running' && (
+        // hidden under the loader while it builds, then faded up as the loader fades away
+        <div className="app-reveal h-svh w-full" data-veiled={loader === 'shown' || undefined}>
+          <Workspace app={boot.app} />
+        </div>
+      )}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
       <Toasts />
     </>

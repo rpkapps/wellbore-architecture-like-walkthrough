@@ -45,19 +45,14 @@ function GroupDivider() {
  * narrows, labels collapse to icons, then controls move into the More menu
  * at the end, least used first, down to the well, search and More on a phone.
  */
-export function TopBar({ app, brand = true }: { app: App; brand?: boolean }) {
+export function TopBar({ app }: { app: App }) {
   const ready = useSignal(app.ready);
   return (
-    <AppShellHeader data-intro="top" className="gap-2 px-2 sm:px-3">
+    <AppShellHeader className="gap-2 px-2 sm:px-3">
       <AppShellBrand className="shrink-0">
-        {/* mounts as the loader leaves, so the loader's logo flies here */}
-        {brand ? (
-          <span className="brand-logo flex">
-            <Logo />
-          </span>
-        ) : (
-          <span className="size-6" />
-        )}
+        <span className="flex">
+          <Logo />
+        </span>
         <span className="hidden lg:inline">BoreWalk</span>
       </AppShellBrand>
       {ready && <Controls app={app} />}

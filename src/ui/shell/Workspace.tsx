@@ -25,7 +25,7 @@ const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sourc
  * The application: the top bar, then the workspace, where the 3D view fills
  * the stage and the panels, the overlays and the timeline float over it.
  */
-export const Workspace = memo(function Workspace({ app, brand = true }: { app: App; brand?: boolean }) {
+export const Workspace = memo(function Workspace({ app }: { app: App }) {
   const ready = useSignal(app.ready);
   const presenting = useSignal(app.presentation) !== null;
   const panels = usePanels(app);
@@ -37,7 +37,7 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
   const rail = useMemo(() => ({ extra: <DataEntry app={app} />, footer: <RailFooter app={app} /> }), [app]);
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
-      {!presenting && <TopBar app={app} brand={brand} />}
+      {!presenting && <TopBar app={app} />}
       <WorkspaceFrame
         ws={app.workspace}
         panels={panels}

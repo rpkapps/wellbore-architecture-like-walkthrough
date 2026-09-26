@@ -299,94 +299,27 @@
 ::view-transition-new(root) {
   animation: none;
 }
-/* the loader leaves once, in a transition started by hand before React's own
-   (the names exist only while html[data-vt-loader] is set) */
-html[data-vt-loader] .loader {
-  view-transition-name: loader;
+/* the loader fades away over the finished workspace (it lifts a little and
+   softens as it goes) while the workspace fades up from just under full size;
+   LOADER_FADE_MS in Root.tsx waits for the longest of these */
+.loader[data-leaving] {
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(1.03);
+  filter: blur(6px);
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 200ms,
+    transform 1500ms cubic-bezier(0.2, 0.6, 0.2, 1),
+    filter 1300ms ease-in 200ms;
 }
-html[data-vt-loader] .brand-logo {
-  view-transition-name: brand-logo;
+.app-reveal {
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 250ms,
+    transform 1500ms cubic-bezier(0.2, 0.8, 0.2, 1) 100ms;
 }
-::view-transition-new(loader) {
-  animation: none;
-}
-/* the loader opens from the middle onto the live scene: a soft-edged hole grows
-   out of where the particles burst, while the camera sweeps down behind it */
-@property --loader-hole {
-  syntax: '<percentage>';
-  inherits: false;
-  initial-value: 0%;
-}
-::view-transition-old(loader) {
-  mask-image: radial-gradient(circle at 50% 44%, transparent var(--loader-hole), #000 calc(var(--loader-hole) + 22%));
-  animation: loader-out 1800ms cubic-bezier(0.55, 0, 0.2, 1) both;
-}
-@keyframes loader-out {
-  0% {
-    --loader-hole: 0%;
-    transform: scale(1);
-  }
-  80% {
-    opacity: 1;
-  }
-  100% {
-    --loader-hole: 130%;
-    opacity: 0;
-    transform: scale(1.08);
-  }
-}
-/* then the workspace settles in around the scene: the top bar drops in, the
-   sidebars and the rail slide in from their edges, the timeline rises, the
-   view's overlays fade up (only while html[data-intro] is set) */
-html[data-intro] [data-intro='top'] {
-  animation: intro-top 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 700ms both;
-}
-html[data-intro] [data-intro='rail'],
-html[data-intro] [data-col='left'] {
-  animation: intro-left 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) 850ms both;
-}
-html[data-intro] [data-col='right'] {
-  animation: intro-right 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) 950ms both;
-}
-html[data-intro] [data-col='bottom'],
-html[data-intro] [data-intro='timeline'] {
-  animation: intro-up 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) 1050ms both;
-}
-html[data-intro] [data-intro='overlays'] {
-  animation: intro-fade 1100ms ease-out 1300ms both;
-}
-@keyframes intro-top {
-  from {
-    opacity: 0;
-    transform: translateY(-100%);
-  }
-}
-@keyframes intro-left {
-  from {
-    opacity: 0;
-    transform: translateX(-32px);
-  }
-}
-@keyframes intro-right {
-  from {
-    opacity: 0;
-    transform: translateX(32px);
-  }
-}
-@keyframes intro-up {
-  from {
-    opacity: 0;
-    transform: translateY(32px);
-  }
-}
-@keyframes intro-fade {
-  from {
-    opacity: 0;
-  }
-}
-::view-transition-group(brand-logo) {
-  animation-duration: 1500ms;
-  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+.app-reveal[data-veiled] {
+  opacity: 0;
+  transform: scale(0.985);
 }
 
 /* Panels and overlays are translucent glass. A view-transition snapshot

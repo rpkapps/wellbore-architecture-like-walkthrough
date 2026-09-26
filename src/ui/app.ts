@@ -338,7 +338,18 @@ export class App {
    * Show a message. `opts.id` replaces an earlier toast with the same id
    * instead of stacking another; `opts.action` adds a button (Undo).
    */
+  /** Toasts made while the page loader shows wait for it to go (`releaseToasts`); null once released. */
+  private heldToasts: (() => void)[] | null = [];
+
+  /** The loader has gone: show the toasts it held back, and every later one at once. */
+  releaseToasts() {
+    const held = this.heldToasts ?? [];
+    this.heldToasts = null;
+    for (const t of held) t();
+  }
+
   toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }, since = performance.now()) {
+    if (this.heldToasts) return void this.heldToasts.push(() => this.toast(msg, kind, opts));
     // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
     const wait = transitionBusyFor();
     if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, opts, since), wait);
@@ -390,9 +401,11 @@ export class App {
       this.engine.rig.setMd(0);
       this.overview();
     }
-    this.toast(
-      `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
-    );
+    // (the first well opens behind the loader: nothing to announce)
+    if (this.ready.value)
+      this.toast(
+        `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
+      );
   }
 
   selectWell(id: string) {

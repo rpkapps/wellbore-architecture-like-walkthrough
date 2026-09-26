@@ -126,7 +126,7 @@ export function Loader({ progress, failed, leaving }: { progress: { msg: string;
       </div>
       <div className="relative -mt-4 flex w-[min(90vw,420px)] flex-col items-center gap-3 text-center">
         <div className="loader-in flex items-center gap-3 [animation-delay:120ms]">
-          <span className="brand-logo flex">
+          <span className="flex">
             <Logo className="size-8" />
           </span>
           <h1 className="text-[2rem] leading-none font-light tracking-[-0.02em] text-fg-1">
