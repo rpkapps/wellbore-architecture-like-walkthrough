@@ -552,6 +552,13 @@ export class DataHub {
     if (this.followBit.value && Number.isFinite(l.lastDepth)) app.followDepth(Math.min(l.lastDepth, w.tdMD));
   }
 
+  /** The deepest reading of a well being drilled (null when no live depth data has come for it). */
+  bitDepth(wellId: string): number | null {
+    const l = this.live.get(wellId);
+    const w = this.app.field.wells.find((x) => x.id === wellId);
+    return l && Number.isFinite(l.lastDepth) ? Math.min(l.lastDepth, w?.tdMD ?? l.lastDepth) : null;
+  }
+
   /** For the Live panel: the series of a well, if it has any. */
   series(wellId: string): TimeSeries | undefined {
     return this.live.get(wellId)?.series;

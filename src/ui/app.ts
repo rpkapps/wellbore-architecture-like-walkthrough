@@ -267,7 +267,7 @@ export class App {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
     };
     this.logs.onScroll = (md) => {
-      this.followingBit = false;
+      this.stopFollowing();
       e.rig.playing = false;
       e.rig.targetMd = null;
       e.rig.setMd(md);
@@ -275,8 +275,10 @@ export class App {
     e.rig.onUserInput = () => {
       this.stopTour();
       // orbiting the view in Explore keeps following (the camera moves with the bit); travelling along the well stops it
-      if (e.rig.mode !== 'explore') this.followingBit = false;
+      if (e.rig.mode !== 'explore') this.stopFollowing();
     };
+    // the Follow the bit toggle is the one switch: on goes to the bit now, off stops where the view is
+    this.hub.followBit.subscribe(() => (this.hub.followBit.value ? this.goToBit() : this.letGoOfBit()));
     e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
@@ -460,45 +462,75 @@ export class App {
     if (id) this.hub.focus.set(id);
   }
 
-  /** following the bit of a well being drilled (until the user moves the view) */
+  /**
+   * Following the bit of a well being drilled. The Follow the bit toggle
+   * (`hub.followBit`) is the one switch, and it always tells the truth: on,
+   * the view goes to the bit and stays with it; off, it stops where it is;
+   * and taking the view over (scrolling the logs, travelling along the well)
+   * turns the toggle off. Following never changes Guided / Explore: Guided
+   * travels along the well to the bit, Explore moves the free camera with it.
+   */
   private followingBit = false;
+  /** the travel target that following set, so letting go stops that travel and nothing else */
+  private followTarget: number | null = null;
+  private followPos: THREE.Vector3 | null = null;
 
   /** Start keeping the view at the bit (the hub calls this when it opens a well being drilled). */
   startFollowing() {
     this.followingBit = true;
     this.followPos = null;
+    if (!this.hub.followBit.value) this.hub.followBit.set(true);
   }
 
-  /**
-   * Keep the view at the bit of a well being drilled. It starts following
-   * once the view is near the bottom, and lets go when the user moves.
-   */
+  /** The user took the view over: stop following, and show it on the toggle. */
+  stopFollowing() {
+    if (this.hub.followBit.value) this.hub.followBit.set(false);
+    else this.letGoOfBit();
+  }
+
+  /** The toggle went on: follow from wherever the view is, going to the bit now. */
+  private goToBit() {
+    this.startFollowing();
+    const md = this.hub.bitDepth(this.engine.activeWell.id);
+    if (md !== null) this.followDepth(md);
+  }
+
+  /** The toggle went off: stop where the view is (a travel that following started stops too). */
+  private letGoOfBit() {
+    this.followingBit = false;
+    this.followPos = null;
+    const rig = this.engine.rig;
+    if (this.followTarget !== null && rig.targetMd === this.followTarget) rig.targetMd = null;
+    this.followTarget = null;
+  }
+
+  /** Keep the view at the bit of a well being drilled, while following. */
   followDepth(md: number) {
     const rig = this.engine.rig;
-    if (rig.playing || this.chapter.value?.touring) return;
-    if (!this.followingBit) {
-      if (Math.abs(rig.md - md) > 60) return;
-      this.followingBit = true;
-    }
+    if (!this.followingBit || rig.playing || this.chapter.value?.touring) return;
+    const at = Math.min(md, rig.mdMax);
     if (rig.mode === 'explore') {
       // the free camera keeps its angle and distance, and moves with the bit
-      const p = this.engine.wellbore?.frameAt(Math.min(md, rig.mdMax)).pos;
+      const p = this.engine.wellbore?.frameAt(at).pos;
       if (!p) return;
       if (this.followPos) {
         const d = p.clone().sub(this.followPos);
         rig.camera.position.add(d);
         rig.orbit.target.add(d);
+      } else if (Math.abs(rig.md - at) > 60) {
+        // the camera is elsewhere: bring it beside the bit first, then move with it
+        this.travelTo(at);
       }
       this.followPos = p.clone();
-      rig.md = Math.min(md, rig.mdMax);
+      rig.md = at;
       this.engine.requestRender(300);
       return;
     }
     this.followPos = null;
-    if (Math.abs(rig.md - md) < 0.05) return;
-    rig.targetMd = Math.min(md, rig.mdMax);
+    if (Math.abs(rig.md - at) < 0.05) return;
+    rig.targetMd = at;
+    this.followTarget = at;
   }
-  private followPos: THREE.Vector3 | null = null;
 
   reinterpret() {
     const w = this.engine.activeWell;
