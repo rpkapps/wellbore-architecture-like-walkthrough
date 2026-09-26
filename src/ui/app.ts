@@ -16,7 +16,7 @@ import { DOCK_PANELS, Workspace, type WorkspaceContext } from './workspace/layou
 import { openWindows } from './toolWindow';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
-import { noteSyncUpdate, transitionBusyFor, withTransition } from './transition';
+import { withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
@@ -355,12 +355,8 @@ export class App {
     for (const t of held) t();
   }
 
-  toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }, since = performance.now()) {
+  toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }) {
     if (this.heldToasts) return void this.heldToasts.push(() => this.toast(msg, kind, opts));
-    // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
-    const wait = transitionBusyFor();
-    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, opts, since), wait);
-    noteSyncUpdate();
     if (kind === 'error') toast.error(msg, opts);
     else toast(msg, opts);
   }

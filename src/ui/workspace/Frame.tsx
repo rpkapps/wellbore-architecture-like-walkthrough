@@ -21,7 +21,7 @@ import {
   RotateCcwIcon,
   XIcon,
 } from 'lucide-react';
-import { Activity, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, ViewTransition, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Activity, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { IconButton } from '../icon-button';
 import { animate, useAnimatedSignal, withTransition } from '../transition';
 import { SURFACE } from '../shell/overlay';
@@ -126,8 +126,7 @@ export function WorkspaceFrame({
   rail?: RailSlots;
   onFree: (f: Free) => void;
 }) {
-  // layout changes made in `withTransition` render as a Transition, so the
-  // <ViewTransition> around each group animates them
+  // layout changes made in `withTransition` morph the groups (data-morph) from where they were
   const L = useAnimatedSignal(ws.layout);
   const hidden = useAnimatedSignal(ws.hidden) || !!chromeless;
   const railOn = !!slots && !chromeless;
@@ -181,7 +180,7 @@ export function WorkspaceFrame({
       const a = document.activeElement;
       if (a && a !== document.body && a.tagName !== 'CANVAS') return;
       e.preventDefault();
-      withTransition(() => ws.hidden.set(!ws.hidden.value));
+      withTransition(() => ws.hidden.set(!ws.hidden.value), { grow: false });
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
@@ -296,11 +295,9 @@ export function WorkspaceFrame({
         <Rail ws={ws} panels={panels} x={geo.rail.x} y={geo.rail.y} w={geo.rail.w} h={geo.rail.h} flyout={flyout} setFlyout={setFlyout} extra={slots?.extra} footer={slots?.footer} />
       )}
       <Activity mode={hidden ? 'hidden' : 'visible'}>
-        <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
-          <div data-chrome className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
-            {timeline}
-          </div>
-        </ViewTransition>
+        <div data-chrome data-morph="timeline" className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
+          {timeline}
+        </div>
       </Activity>
       <DragLayer api={ghost} />
     </div>
@@ -448,9 +445,7 @@ function DockColumn({
   const maxHere = !!maximised && col.stacks.some((s) => s.id === maximised);
   if (col.collapsed && !maxHere)
     return (
-      <ViewTransition key="strip" default="none" enter="ws-enter" exit="ws-exit">
-        <IconStrip ws={ws} zone={zone} col={col} rect={rect} strip={strip} panels={panels} flyout={flyout} setFlyout={setFlyout} dnd={dnd} registry={registry} />
-      </ViewTransition>
+      <IconStrip ws={ws} zone={zone} col={col} rect={rect} strip={strip} panels={panels} flyout={flyout} setFlyout={setFlyout} dnd={dnd} registry={registry} />
     );
   const at = maxHere ? full : rect;
   // another group is maximised: this column stays mounted (its panels keep their state) but is not shown
@@ -486,7 +481,7 @@ function DockColumn({
   };
 
   return (
-    <ViewTransition key="column" default="none" enter="ws-enter" exit="ws-exit">
+    <>
       {/* sized from outside: contained, so what changes inside a group lays out only that group */}
       <div
         ref={box}
@@ -495,10 +490,14 @@ function DockColumn({
         style={{ left: at.x, top: at.y, width: at.w, height: at.h, gap: G }}
       >
         {col.stacks.map((s, i) => (
-          <div key={s.id} data-stack className={`relative flex min-h-0 min-w-0 [contain:size_layout_style] ${maxHere && s.id !== maximised ? 'hidden' : ''}`} style={{ flex: `${s.weight} 1 0` }}>
-            <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
-              <StackView ws={ws} group={s} zone={zone} panels={panels} dnd={dnd} registry={registry} maxed={s.id === maximised} />
-            </ViewTransition>
+          <div
+            key={s.id}
+            data-stack
+            data-morph={`p:${s.active} g:${s.id}`}
+            className={`relative flex min-h-0 min-w-0 [contain:size_layout_style] ${maxHere && s.id !== maximised ? 'hidden' : ''}`}
+            style={{ flex: `${s.weight} 1 0` }}
+          >
+            <StackView ws={ws} group={s} zone={zone} panels={panels} dnd={dnd} registry={registry} maxed={s.id === maximised} />
             {i < col.stacks.length - 1 && !maxHere && (
               <div
                 aria-hidden
@@ -514,7 +513,7 @@ function DockColumn({
         ))}
       </div>
       {!maximised && <EdgeHandle zone={zone} rect={rect} size={col.size} max={max} onLive={onLive} onCommit={(v) => ws.change(null, () => ws.setSize(zone, v))} />}
-    </ViewTransition>
+    </>
   );
 }
 
@@ -634,6 +633,7 @@ function IconStrip({
                 return (
                   <IconButton
                     key={p}
+                    data-morph={`p:${p}`}
                     label={d.title}
                     size="icon-sm"
                     variant={on ? 'secondary' : 'ghost'}
@@ -651,11 +651,9 @@ function IconStrip({
         </div>
       )}
       {fly && flyout && (
-        <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
-          <div ref={flyRef} className="absolute z-20 flex" style={{ left: flyRect.x, top: flyRect.y, width: flyRect.w, height: flyRect.h }}>
-            <StackView ws={ws} group={fly} zone={zone} panels={panels} dnd={dnd} registry={registry} active={flyout.panel} onActivate={(p) => setFlyout({ zone, stack: fly.id, panel: p })} />
-          </div>
-        </ViewTransition>
+        <div ref={flyRef} data-morph={`p:${flyout.panel}`} className="absolute z-20 flex" style={{ left: flyRect.x, top: flyRect.y, width: flyRect.w, height: flyRect.h }}>
+          <StackView ws={ws} group={fly} zone={zone} panels={panels} dnd={dnd} registry={registry} active={flyout.panel} onActivate={(p) => setFlyout({ zone, stack: fly.id, panel: p })} />
+        </div>
       )}
     </>
   );
@@ -1107,31 +1105,30 @@ function FloatWindow({
   const at = maxed ? full : rect;
   const title = panels.get(win.active)?.title ?? win.active;
   return (
-    <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
-      <div
-        ref={el}
-        data-float={win.id}
-        className={`pointer-events-auto absolute flex [contain:size_layout_style] ${maximised && !maxed ? 'invisible' : ''}`}
-        style={{ left: at.x, top: at.y, width: at.w, height: at.h, zIndex: maxed ? 100 : z }}
-        onPointerDownCapture={() => ws.raise(win.id)}
-      >
-        <StackView
-          ws={ws}
-          group={win}
-          zone={null}
-          panels={panels}
-          dnd={dnd}
-          registry={registry}
-          maxed={maxed}
-          onHeaderDown={(e) => {
-            if (e.button === 0 && !maxed) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }), true);
-          }}
-          onDockBack={() => withTransition(() => dockBackWindow(ws, win.id, win.panels.length > 1 ? `${title} and ${win.panels.length - 1} more` : title))}
-        />
-        {!maxed &&
-          edges.map(([k, cls, f]) => <div key={k} aria-hidden className={`absolute touch-none ${cls}`} onPointerDown={(e) => e.button === 0 && track(e, f)} />)}
-      </div>
-    </ViewTransition>
+    <div
+      ref={el}
+      data-float={win.id}
+      data-morph={`p:${win.active} g:${win.id}`}
+      className={`pointer-events-auto absolute flex [contain:size_layout_style] ${maximised && !maxed ? 'invisible' : ''}`}
+      style={{ left: at.x, top: at.y, width: at.w, height: at.h, zIndex: maxed ? 100 : z }}
+      onPointerDownCapture={() => ws.raise(win.id)}
+    >
+      <StackView
+        ws={ws}
+        group={win}
+        zone={null}
+        panels={panels}
+        dnd={dnd}
+        registry={registry}
+        maxed={maxed}
+        onHeaderDown={(e) => {
+          if (e.button === 0 && !maxed) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }), true);
+        }}
+        onDockBack={() => withTransition(() => dockBackWindow(ws, win.id, win.panels.length > 1 ? `${title} and ${win.panels.length - 1} more` : title))}
+      />
+      {!maxed &&
+        edges.map(([k, cls, f]) => <div key={k} aria-hidden className={`absolute touch-none ${cls}`} onPointerDown={(e) => e.button === 0 && track(e, f)} />)}
+    </div>
   );
 }
 

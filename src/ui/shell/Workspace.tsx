@@ -133,7 +133,7 @@ function Overlays({ app }: { app: App }) {
     <>
       <div className="absolute top-2 right-2 bottom-14 flex max-w-[calc(100%-1rem)] flex-col items-end @2xl:max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto flex min-h-0 flex-col">
-          <Morph anchor="tr">{inspecting ? inspector : legend}</Morph>
+          <Morph name="inspector" anchor="tr">{inspecting ? inspector : legend}</Morph>
         </div>
       </div>
       <div className="absolute inset-x-2 bottom-2 flex flex-col items-center gap-2">

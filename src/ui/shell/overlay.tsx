@@ -1,9 +1,9 @@
 import { Panel } from '@tecton/react/tecton/panel';
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
-import { startTransition, useEffect, useState, ViewTransition, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { overlayBroadcast, overlayState, prefs } from '../prefs';
 import { useSignal } from '../signal';
-import { reducedMotion } from '../transition';
+import { animate } from '../transition';
 import { IconButton } from '../icon-button';
 
 /**
@@ -29,16 +29,14 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
       return prefs.value.overlaysCollapsed;
     }
   });
-  // "collapse / expand all" in the personalisation dialog: applied at once,
-  // since a view transition would paint the overlays above the open dialog
+  // "collapse / expand all" in the personalisation dialog: applied at once
   const broadcast = useSignal(overlayBroadcast);
   useEffect(() => {
     if (broadcast) setV(overlayState.collapsed);
   }, [broadcast]);
   const set = (on: boolean) => {
-    // the panel and its chip morph into each other (view transition)
-    if (reducedMotion()) setV(on);
-    else startTransition(() => setV(on));
+    // the panel and its chip morph into each other (see `Morph`)
+    animate(() => setV(on));
     try {
       localStorage.setItem(key, on ? '1' : '0');
     } catch {
@@ -50,14 +48,14 @@ export function useCollapsed(id: string): [boolean, (v: boolean) => void] {
 
 /**
  * Wraps an overlay so its full and collapsed forms morph into each other,
- * growing from the corner it is anchored to. Only its own collapse animates:
- * other transitions (panels docking) leave it alone.
+ * growing from the corner it is anchored to (and it glides along when the
+ * panels around the 3D view move). `name` keys it across the change.
  */
-export function Morph({ anchor, children }: { anchor: 'tl' | 'tr' | 'bl' | 'br'; children: ReactNode }) {
+export function Morph({ name, anchor, children }: { name: string; anchor: 'tl' | 'tr' | 'bl' | 'br'; children: ReactNode }) {
   return (
-    <ViewTransition default="none" update={`ov-${anchor}`}>
+    <div data-morph={`ov:${name}`} data-morph-anchor={anchor} className="flex min-h-0 max-w-full flex-col">
       {children}
-    </ViewTransition>
+    </div>
   );
 }
 

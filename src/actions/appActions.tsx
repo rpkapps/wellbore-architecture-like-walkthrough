@@ -824,7 +824,7 @@ export function appActions(): AnyAction<App>[] {
       category: 'Panels',
       where: 'Rail',
       shortcut: 'Tab',
-      run: (app) => withTransition(() => app.workspace.hidden.set(!app.workspace.hidden.value)),
+      run: (app) => withTransition(() => app.workspace.hidden.set(!app.workspace.hidden.value), { grow: false }),
     }),
     A({
       id: 'panels.overlays',

@@ -116,6 +116,7 @@ function RailButton({
   ...props
 }: { short: string; title: string; icon: ReactNode; state: State; badge?: ReactNode; /** opens a menu: the dot alone shows state */ menu?: boolean } & Omit<ComponentProps<typeof AriaButton>, 'children' | 'className'> & {
     'data-rail-panel'?: boolean;
+    'data-morph'?: string;
   }) {
   const button = (
     <AriaButton
@@ -191,7 +192,7 @@ function PanelEntry({ ws, def, short, peek, setFlyout }: { ws: Workspace; def: P
   const state: State = peek ? 'shown' : hidden && layout !== 'closed' ? 'open' : layout;
   return (
     <ContextMenuTrigger>
-      <RailButton data-rail-panel short={short} title={def.title} icon={def.icon} state={state} aria-pressed={state === 'shown'} onPress={() => press(ws, def, peek, setFlyout)} />
+      <RailButton data-rail-panel data-morph={`p:${def.id}`} short={short} title={def.title} icon={def.icon} state={state} aria-pressed={state === 'shown'} onPress={() => press(ws, def, peek, setFlyout)} />
       <ContextMenu
         className="w-max min-w-44"
         onAction={(k) => {
@@ -287,7 +288,7 @@ function HideToggle({ ws }: { ws: Workspace }) {
   const hidden = useSignal(ws.hidden);
   return (
     <div className="flex justify-center pt-0.5">
-      <IconButton label={hidden ? 'Show panels (Tab)' : 'Hide panels (Tab)'} size="icon-sm" placement="right" aria-pressed={hidden} variant={hidden ? 'secondary' : 'ghost'} onPress={() => withTransition(() => ws.hidden.set(!ws.hidden.value))}>
+      <IconButton label={hidden ? 'Show panels (Tab)' : 'Hide panels (Tab)'} size="icon-sm" placement="right" aria-pressed={hidden} variant={hidden ? 'secondary' : 'ghost'} onPress={() => withTransition(() => ws.hidden.set(!ws.hidden.value), { grow: false })}>
         {hidden ? <EyeIcon /> : <EyeOffIcon />}
       </IconButton>
     </div>

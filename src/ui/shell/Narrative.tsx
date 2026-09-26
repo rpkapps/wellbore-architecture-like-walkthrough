@@ -31,7 +31,7 @@ export function Narrative({ app }: { app: App }) {
     <div ref={place.area} className="pointer-events-none relative h-0 w-full">
       {place.tether && <div aria-hidden className="absolute top-0 w-0.5 -translate-x-1/2 rounded-full bg-ui-accent/80" style={{ left: place.tether.x, height: place.tether.h }} />}
       <div ref={place.card} className="pointer-events-auto absolute bottom-0 max-w-full" style={{ left: place.left }}>
-        <Morph anchor="bl">
+        <Morph name="narrative" anchor="bl">
           <Card app={app} index={ch.index} touring={ch.touring} collapsed={collapsed} setCollapsed={setCollapsed} />
         </Morph>
       </div>
