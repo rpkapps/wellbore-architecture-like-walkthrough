@@ -311,7 +311,7 @@ export interface AcOptions {
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** Lower bound of the distance from a point to an axis-aligned box. */
-function boxDist(p: [number, number, number], b: AcWell['box']): number {
+export function boxDist(p: [number, number, number], b: AcWell['box']): number {
   let s = 0;
   for (let k = 0; k < 3; k++) {
     const d = p[k] < b.min[k] ? b.min[k] - p[k] : p[k] > b.max[k] ? p[k] - b.max[k] : 0;
