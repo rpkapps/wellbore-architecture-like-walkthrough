@@ -317,6 +317,12 @@ export class CameraRig {
     this.camera.lookAt(this.smoothedLook);
   }
 
+  /** How far away what the view is looking at is: the well's point in Guided, the point zoomed or turned about in Explore. */
+  lookDistance(): number {
+    if (this.mode === 'explore' && this.exploreView === 'orbit') return this.nav.lookDistance();
+    return this.camera.position.distanceTo(this.orbit.target);
+  }
+
   /** The marker of the point Explore's view turns around (the engine puts it in the scene and redraws for it). */
   pivotMarker(requestRender: () => void): THREE.Object3D {
     this.nav.requestRender = requestRender;

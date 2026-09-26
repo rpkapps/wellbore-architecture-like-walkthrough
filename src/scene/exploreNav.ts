@@ -52,6 +52,8 @@ export class ExploreNav {
   private moveVel = { yaw: 0, pitch: 0 };
   private zoom = { pending: 0, anchor: new THREE.Vector3(), toward: false };
   private raycaster = new THREE.Raycaster();
+  /** The last point zoomed toward or turned / dragged about: what is being looked at. */
+  private focus: THREE.Vector3 | null = null;
 
   constructor(
     private camera: THREE.PerspectiveCamera,
@@ -72,7 +74,18 @@ export class ExploreNav {
     this.drag = null;
     this.glide.yaw = this.glide.pitch = 0;
     this.zoom.pending = 0;
+    this.focus = null;
     this.showMarker(null);
+  }
+
+  /** How far away what is being looked at is: the point last zoomed to or turned about while it is ahead, else the view's centre. */
+  lookDistance(): number {
+    const cam = this.camera.position;
+    if (this.focus) {
+      const ahead = this.focus.clone().sub(cam).dot(this.camera.getWorldDirection(new THREE.Vector3()));
+      if (ahead > 0) return this.focus.distanceTo(cam);
+    }
+    return this.target.distanceTo(cam);
   }
 
   // ------------------------------------------------------------------ input
@@ -86,6 +99,7 @@ export class ExploreNav {
     const fwd = this.camera.getWorldDirection(new THREE.Vector3());
     // rotate around what is under the pointer, or the view's centre; pan the grabbed point
     // (over empty space: the point on the plane through the view's centre)
+    if (hit) this.focus = hit.clone();
     const pivot = hit ?? (pan ? this.onPlane(e, new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, this.target)) : null) ?? this.target.clone();
     this.drag = { kind: pan ? 'pan' : 'rotate', id: e.pointerId, x: e.clientX, y: e.clientY, pivot, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, pivot), t: performance.now() };
     this.moveVel.yaw = this.moveVel.pitch = 0;
@@ -144,7 +158,9 @@ export class ExploreNav {
     const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
     const step = Math.max(-0.5, Math.min(0.5, px * 0.0012));
     const zoomIn = step < 0;
-    const hit = zoomIn ? (this.pickPoint?.(e.clientX, e.clientY) ?? this.intoBounds(e)) : null;
+    const picked = zoomIn ? (this.pickPoint?.(e.clientX, e.clientY) ?? null) : null;
+    const hit = zoomIn ? (picked ?? this.intoBounds(e)) : null;
+    if (zoomIn) this.focus = picked;
     // a new direction or a new place: start from here
     if (Math.sign(step) !== Math.sign(this.zoom.pending)) this.zoom.pending = 0;
     this.zoom.toward = !!hit;

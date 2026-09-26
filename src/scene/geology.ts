@@ -182,22 +182,46 @@ export class GeologyModel {
   /** called after visibility / opacity changes (e.g. to refresh the static shadow map) */
   onStateChange?: () => void;
 
+  /** Where `globalOpacity` is heading: `stepOpacity` eases it there rather than jump. */
+  private opacityGoal = 1;
+
   setGuided(on: boolean) {
-    if (this.forceTransparent === on) return;
-    this.forceTransparent = on;
-    this.globalOpacity = on ? 0.7 : 1;
-    this.applyState();
+    const goal = on ? 0.7 : 1;
+    if (goal === this.opacityGoal) return;
+    this.opacityGoal = goal;
+    // see-through from the start of the fade in; solid again only once it has faded back
+    if (on && !this.forceTransparent) {
+      this.forceTransparent = true;
+      this.applyState();
+    }
+  }
+
+  /** Ease the model's opacity toward its goal (0.3 of opacity in half a second); true while it is still moving. */
+  stepOpacity(dt: number): boolean {
+    const goal = this.opacityGoal;
+    if (this.globalOpacity === goal) return false;
+    const step = dt * 0.6;
+    this.globalOpacity = Math.abs(goal - this.globalOpacity) <= step ? goal : this.globalOpacity + Math.sign(goal - this.globalOpacity) * step;
+    if (this.globalOpacity === goal) {
+      this.forceTransparent = goal < 1;
+      this.applyState();
+      return false;
+    }
+    for (const [id, m] of this.meshes) (m.material as THREE.MeshStandardMaterial).opacity = this.opacityOf(id);
+    return true;
+  }
+
+  private opacityOf(id: string): number {
+    const op = this.state.get(id)!.opacity * this.globalOpacity;
+    return this.isolated && this.isolated !== id ? Math.min(op, 0.06) : op;
   }
 
   applyState() {
     for (const [id, m] of this.meshes) {
       const s = this.state.get(id)!;
       const mat = m.material as THREE.MeshStandardMaterial;
-      let op = s.opacity * this.globalOpacity;
+      const op = this.opacityOf(id);
       let vis = s.visible;
-      if (this.isolated && this.isolated !== id) {
-        op = Math.min(op, 0.06);
-      }
       if (op <= 0.01) vis = false;
       m.visible = vis;
       const transparent = op < 0.995 || this.forceTransparent;

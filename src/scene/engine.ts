@@ -103,6 +103,9 @@ function supportsReversedDepth(): boolean {
   }
 }
 
+/** Seconds over which the near-rock fade's reach blends from one mode or view to the next. */
+const FADE_BLEND_S = 0.6;
+
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly labelRenderer: LabelRenderer;
@@ -684,6 +687,10 @@ export class Engine {
   }
 
   /** Per-frame scene state that depends on the camera, the cursor and the time: only when a frame is drawn. */
+  /** The near-rock fade: the view it was set for, the reach it blends from, and how far the blend is (0–1). */
+  private fade: { view: string; from: number; k: number } = { view: '', from: 0, k: 1 };
+  private fadeAt = 0;
+
   private updateScene(t: number, inside: boolean, tfx: boolean) {
     const cam = this.camera.position;
     this.geology.sortForCamera(cam.y);
@@ -697,18 +704,25 @@ export class Engine {
       wb.uniforms.uCut.value = inside ? 0 : 1;
       this.headlight.intensity = inside ? 7 : cam.distanceTo(f.pos) < 300 ? 4 : 0;
       this.headlight.distance = inside ? 140 : 400;
-      // proximity bubble in the regional model around the point of interest
       const guided = this.rig.mode === 'guided';
       this.geology.setGuided(guided || (cam.y < -this.field.meta.waterDepth && this.rig.exploreView === 'fly'));
-      if (guided) {
-        FOCUS.uFocus.value.copy(f.pos).lerp(cam, 0.35);
-        FOCUS.uFocusR.value = Math.max(150, cam.distanceTo(f.pos) * 2.4);
-        FOCUS.uFocusOn.value = 1;
-      } else if (cam.y < -this.field.meta.waterDepth) {
-        FOCUS.uFocus.value.copy(cam);
-        FOCUS.uFocusR.value = 220;
-        FOCUS.uFocusOn.value = 1;
-      } else FOCUS.uFocusOn.value = 0;
+      const dt = Math.min(0.2, Math.max(0, t - this.fadeAt));
+      this.fadeAt = t;
+      if (this.geology.stepOpacity(dt)) this.requestRender();
+      // Rock close to the camera fades, out to just short of what is being looked at (Guided: a
+      // little past the well, so the rock around it thins too), so it thins steadily while zooming
+      // rather than switch. A change of mode or view blends the reach over FADE_BLEND_S.
+      const view = guided ? 'guided' : this.rig.exploreView;
+      const reach = guided ? cam.distanceTo(f.pos) * 1.3 + 20 : view === 'fly' ? 250 : Math.min(0.9 * this.rig.lookDistance(), 800);
+      if (view !== this.fade.view) this.fade = { view, from: FOCUS.uFocusR.value, k: this.fade.view ? 0 : 1 };
+      if (this.fade.k < 1) {
+        this.fade.k = Math.min(1, this.fade.k + dt / FADE_BLEND_S);
+        this.requestRender();
+      }
+      const e = this.fade.k * this.fade.k * (3 - 2 * this.fade.k);
+      FOCUS.uFocus.value.copy(cam);
+      FOCUS.uFocusR.value = this.fade.from + (reach - this.fade.from) * e;
+      FOCUS.uFocusOn.value = 1;
     }
     this.paths.update(this.camera, this.contextVisible && this.labelsVisible);
     this.paths.group.visible = this.contextVisible;
@@ -798,8 +812,8 @@ export class Engine {
       // a hidden part is not the thing drawn
       if (!h.object.visible) continue;
       const kind = o.userData.kind as string;
-      // rock dissolved around the camera (inside the model) is not there to click or zoom into
-      if (kind === 'formation' && FOCUS.uFocusOn.value > 0.5 && h.point.distanceTo(FOCUS.uFocus.value) < FOCUS.uFocusR.value * 0.8) continue;
+      // rock faded away near the camera is not there to click or zoom into
+      if (kind === 'formation' && FOCUS.uFocusOn.value > 0.5 && h.point.distanceTo(FOCUS.uFocus.value) < FOCUS.uFocusR.value * 0.65) continue;
       const glass = kind === 'formation' && ((h.object as THREE.Mesh).material as THREE.Material).opacity < 0.7;
       if (!soft && (glass || o.userData.soft)) {
         soft = { hit: { kind, point: h.point.clone(), object: o }, glass };
