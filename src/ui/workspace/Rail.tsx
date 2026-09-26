@@ -1,6 +1,6 @@
 import { ContextMenu, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@tecton/react/components/context-menu';
 import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
-import { ChartColumnIcon, ChevronsLeftRightIcon, CircleHelpIcon, DatabaseIcon, EyeIcon, EyeOffIcon, LayoutGridIcon, RadioTowerIcon, RotateCcwIcon, SettingsIcon, UploadIcon, XIcon } from 'lucide-react';
+import { ArrowDownLeftIcon, ArrowUpRightIcon, ChartColumnIcon, ChevronsLeftRightIcon, CircleHelpIcon, DatabaseIcon, EyeIcon, EyeOffIcon, LayoutGridIcon, RadioTowerIcon, RotateCcwIcon, SettingsIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useMemo, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import { Button as AriaButton } from 'react-aria-components';
 import type { App } from '../app';
@@ -10,7 +10,7 @@ import { useSignal, type Signal } from '../signal';
 import { animate, withTransition } from '../transition';
 import type { Flyout } from './Frame';
 import { locate, type Layout, type Workspace } from './layout';
-import { atDefault, closePanel, groupOf, maximised, place, reveal, type Placement } from './ops';
+import { atDefault, closePanel, groupOf, maximised, place, placementLabel, placements, reveal, type Placement } from './ops';
 import { RAIL_ENTRIES, viewGroups, type PanelDef } from './panels';
 
 /**
@@ -176,12 +176,12 @@ function press(ws: Workspace, d: PanelDef, peek: boolean, setFlyout: (f: Flyout 
   if (at.kind === 'float') {
     if (at.win.active !== d.id) withTransition(() => reveal(ws, d));
     else if (at.index !== L.floating.length - 1) ws.raise(at.win.id);
-    else withTransition(() => closePanel(ws, d));
+    else withTransition(() => closePanel(ws, d, false));
     return;
   }
   if (at.stack.active !== d.id) withTransition(() => reveal(ws, d));
   else if (L[at.zone].stacks.length === 1 && at.stack.panels.length === 1) withTransition(() => ws.setCollapsed(at.zone, true));
-  else withTransition(() => closePanel(ws, d));
+  else withTransition(() => closePanel(ws, d, false));
 }
 
 /** A panel's entry; right click (or long press, Shift F10) moves it. */
@@ -205,25 +205,22 @@ function PanelEntry({ ws, def, short, peek, setFlyout }: { ws: Workspace; def: P
   );
 }
 
-/** Where a panel can go; read as the menu opens, so the current place is disabled. */
+/**
+ * Where a panel can go from where it is (the same list as its ⋯ menu: the
+ * other slot of its sidebar, the other regions, undock or dock back); read as
+ * the menu opens.
+ */
 function PlaceItems({ ws, id }: { ws: Workspace; id: string }) {
   const at = locate(ws.value, id);
-  const zone = at?.kind === 'dock' ? at.zone : null;
   return (
     <>
       <ContextMenuGroup>
-        <ContextMenuItem id="left" isDisabled={zone === 'left'}>
-          Move to left
-        </ContextMenuItem>
-        <ContextMenuItem id="right" isDisabled={zone === 'right'}>
-          Move to right
-        </ContextMenuItem>
-        <ContextMenuItem id="bottom" isDisabled={zone === 'bottom'}>
-          Move to bottom
-        </ContextMenuItem>
-        <ContextMenuItem id="float" isDisabled={at?.kind === 'float'}>
-          Undock
-        </ContextMenuItem>
+        {placements(ws, id, true).map((p) => (
+          <ContextMenuItem key={p} id={p} textValue={placementLabel(ws, id, p)}>
+            {p === 'float' ? <ArrowUpRightIcon /> : p === 'dock' ? <ArrowDownLeftIcon /> : null}
+            {placementLabel(ws, id, p)}
+          </ContextMenuItem>
+        ))}
       </ContextMenuGroup>
       <ContextMenuSeparator />
       <ContextMenuItem id="default" isDisabled={!!at && atDefault(ws, id)}>
@@ -266,7 +263,7 @@ function ViewsEntry({ ws, panels }: { ws: Workspace; panels: Map<string, PanelDe
 function ViewsItems({ ws, groups }: { ws: Workspace; groups: ReturnType<typeof viewGroups> }) {
   useSignal(ws.layout);
   const choose = (d: PanelDef) => {
-    if (ws.isShown(d.id) && !ws.hidden.value) withTransition(() => closePanel(ws, d));
+    if (ws.isShown(d.id) && !ws.hidden.value) withTransition(() => closePanel(ws, d, false));
     else withTransition(() => reveal(ws, d));
   };
   return (
@@ -332,7 +329,7 @@ export function DataEntry({ app }: { app: App }) {
   );
 }
 
-/** Settings (the Personalise dialog) and help, at the foot of the rail. */
+/** Settings (appearance, graphics, motion) and help, at the foot of the rail. */
 export function RailFooter({ app }: { app: App }) {
   return (
     <>

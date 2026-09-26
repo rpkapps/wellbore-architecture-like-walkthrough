@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
 import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
-import { FEATURES, type FeatureId } from '../features/registry';
+import { FEATURES, graphicsQuality, labelOf, setGraphicsQuality, type FeatureDef, type FeatureId, type GraphicsQuality } from '../features/registry';
 import { CorrelationFeature } from '../features/correlation';
 import type { CrossplotFeature } from '../features/crossplot';
 import type { GeosteerFeature } from '../features/geosteer';
@@ -16,8 +16,8 @@ import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, ty
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
-import { locate, PRESETS } from '../ui/workspace/layout';
-import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
+import { openPanels, PRESETS } from '../ui/workspace/layout';
+import { atDefault, groupOf, maximised, place, placementLabel, placements, PLACEMENTS, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
 import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema, type Selection } from '../ui/selection';
@@ -37,7 +37,7 @@ import { defineAction, type Action, type AnyAction } from './registry';
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -61,10 +61,29 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
   views: { title: 'Saved views', keywords: ['bookmarks', 'presentation', 'camera'] },
 };
 
+/** How each home names a feature in the palette. */
+const HOME_WORD: Record<FeatureDef['home'], string> = { view: 'view', overlay: 'overlay', colour: 'colour by', wells: 'wells', graphics: 'graphics', tool: 'tool' };
+
+/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells". */
+function featureChoice(f: FeatureDef, on: boolean): string {
+  switch (f.home) {
+    case 'overlay':
+      return `${on ? 'Hide' : 'Show'} ${labelOf(f.id)}`;
+    case 'view':
+      return `${on ? 'Close' : 'Open'} ${FEATURE_WINDOWS[f.id]?.title ?? f.name}`;
+    case 'wells':
+      return on ? 'Show fewer wells' : 'Show more Volve wells';
+    case 'graphics':
+      return `${on ? 'Turn off' : 'Turn on'} ${labelOf(f.id)} (graphics)`;
+    default:
+      return `${on ? 'Turn off' : 'Turn on'} ${f.name}`;
+  }
+}
+
 type PanelPlace = { id: string; title: string; location: string; about?: string; keywords?: string[] };
 
 /**
- * Every panel there is, with where it is now in words ("Left column · tab 2",
+ * Every panel there is, with where it is now in words ("Left sidebar · top · tab 2",
  * "Hidden"), including the windows of features that are off: the palette's
  * "where is it?" answer, and what `panels.reveal` can bring into view.
  */
@@ -88,9 +107,31 @@ function panelPlaces(app: App): PanelPlace[] {
 /** A panel to open or move: a feature's tool window (opened through its feature) or a built-in panel. */
 function panelRef(app: App, panel: string): PanelRef {
   const tool = toolWindows.value.find((w) => w.opts.id === panel);
-  if (tool) return { id: panel, tool, open: () => showTool(app, tool) };
-  if (panel in BUILTIN_PANELS) return { id: panel };
+  if (tool) return { id: panel, title: tool.opts.title, tool, open: () => showTool(app, tool) };
+  if (panel in BUILTIN_PANELS) return { id: panel, title: BUILTIN_PANELS[panel as keyof typeof BUILTIN_PANELS] };
   throw new Error(`No panel "${panel}".`);
+}
+
+/**
+ * Undo the last layout change (or, given its `n`, the change a toast reports
+ * and those after it). A feature's window follows its feature, so a window the
+ * restored layout shows turns its feature back on, and one it no longer shows
+ * closes. Returns false when there was nothing to undo.
+ */
+export function undoLayout(app: App, n?: number): boolean {
+  const ws = app.workspace;
+  let ok = false;
+  withTransition(() => {
+    ok = ws.undo(n);
+    if (!ok) return;
+    const open = new Set(openPanels(ws.value));
+    for (const w of toolWindows.value) {
+      const id = w.opts.id;
+      if (open.has(id) && !w.visible) showTool(app, w);
+      else if (!open.has(id) && w.visible) w.close();
+    }
+  });
+  return ok;
 }
 
 /** Every panel that can be shown now: the built-in ones and the open features' tool windows. */
@@ -318,7 +359,7 @@ export function appActions(): AnyAction<App>[] {
       choices: (app) =>
         PROPERTY_MODES.filter((m) => m !== 'rop' || app.optionalModes.value.has('rop')).map((mode) => ({ label: MODE_LABEL[mode], input: { mode }, current: app.engine.mode === mode })),
       run: (app, { mode }) => {
-        if (mode === 'rop' && !app.optionalModes.value.has('rop')) throw new Error('Turn on the “Drilling speed (ROP) mode” feature first.');
+        if (mode === 'rop' && !app.optionalModes.value.has('rop')) throw new Error(app.flags.on('rop') ? 'The active well has no ROP log.' : 'The ROP colouring is off: turn the “rop” feature on first.');
         app.setProperty(mode);
       },
     }),
@@ -631,7 +672,7 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'panels.reveal',
       title: 'Go to panel',
-      description: 'Says where a panel is (its column and tab, floating, or hidden) and brings it into view: unfolds its column, brings its tab to the front, and turns its feature on if needed.',
+      description: 'Says where a panel is (its sidebar or the bottom panel, slot and tab, floating, or hidden) and brings it into view: unfolds its sidebar, brings its tab to the front, and turns its feature on if needed.',
       category: 'Panels',
       where: 'Rail',
       keywords: ['where', 'find', 'locate', 'reveal', 'panel', 'window', 'tab'],
@@ -657,7 +698,10 @@ export function appActions(): AnyAction<App>[] {
           if (tool) tool.show();
           else if (panel in BUILTIN_PANELS) app.workspace.open(panel);
         });
-        if (feature) app.flags.set(panel as FeatureId, true);
+        if (feature) {
+          if (tool) showTool(app, tool);
+          else app.flags.set(panel as FeatureId, true);
+        }
         return { panel, was: place.location, now: describeLocation(app.workspace.layout.value, panel) };
       },
     }),
@@ -696,21 +740,41 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'panels.place',
       title: 'Move panel',
-      description: 'Moves a panel to the left, right or bottom column, undocks it into a floating window, or resets it to where it opens by default (opening it first if it is closed).',
+      description:
+        'Moves a panel to the top or bottom of the left or right sidebar or to the bottom panel, undocks it into a floating window, docks a floating one back where it came from, or resets it to where the workspace puts it (opening it first if it is closed). The toast that follows offers Undo.',
       category: 'Panels',
-      input: z.object({ panel: z.string(), to: z.enum(['left', 'right', 'bottom', 'float', 'default']) }),
-      choices: (app) => {
-        const where = { left: 'move to left', right: 'move to right', bottom: 'move to bottom', float: 'undock', default: 'reset location' } as const;
-        return Object.entries(panelIds())
+      where: 'Panel menu ⋯ · rail right-click',
+      keywords: ['dock', 'undock', 'float', 'sidebar', 'split'],
+      input: z.object({ panel: z.string(), to: z.enum(PLACEMENTS as [Placement, ...Placement[]]) }),
+      choices: (app) =>
+        Object.entries(panelIds())
           .filter(([id]) => app.workspace.isOpen(id))
-          .flatMap(([panel, label]) => {
-            const at = locate(app.workspace.value, panel);
-            return (Object.keys(where) as (keyof typeof where)[])
-              .filter((to) => (to === 'float' ? at?.kind !== 'float' : to === 'default' ? !atDefault(app.workspace, panel) : !(at?.kind === 'dock' && at.zone === to)))
-              .map((to) => ({ label: `${label}: ${where[to]}`, input: { panel, to } }));
-          });
+          .flatMap(([panel, label]) =>
+            [...placements(app.workspace, panel), ...(atDefault(app.workspace, panel) ? [] : (['default'] as const))].map((to) => ({
+              label: `${label}: ${placementLabel(app.workspace, panel, to).toLowerCase()}`,
+              input: { panel, to },
+            })),
+          ),
+      run: (app, { panel, to }) => {
+        withTransition(() => place(app.workspace, panelRef(app, panel), to));
+        return { panel, now: describeLocation(app.workspace.layout.value, panel) };
       },
-      run: (app, { panel, to }) => withTransition(() => place(app.workspace, panelRef(app, panel), to as Placement)),
+    }),
+    A({
+      id: 'panels.undo_layout',
+      title: 'Undo layout change',
+      description: 'Takes back the last change to the panel layout: a move, undock, dock back, close or reset location (the toast after each offers the same), or a resize or reorder.',
+      category: 'Panels',
+      shortcut: 'Ctrl Z',
+      keywords: ['undo', 'layout', 'panel', 'dock', 'revert'],
+      // a toast's Undo names its change: that one (and any made after it) is taken back
+      input: z.object({ change: z.number().int().optional().meta({ description: 'The change a toast reported; the last one when left out' }) }).optional(),
+      run: (app, input) => {
+        if (!undoLayout(app, input?.change)) throw new Error('No layout change to undo.');
+        // (in place of the change's own toast, so its Undo is not pressed twice)
+        app.toast('Layout change undone.', 'info', { id: 'layout-change' });
+        return { layout: 'restored' };
+      },
     }),
     A({
       id: 'panels.maximise',
@@ -746,7 +810,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Overlays',
       description: 'Collapses the cards over the 3D view (colour key, chapter card) to one-line chips, or expands them.',
       category: 'Panels',
-      where: 'Personalise › Overlays',
+      where: 'Settings › Overlays',
       input: z.object({ collapsed: z.boolean() }),
       choices: () => [
         { label: 'Collapse all', input: { collapsed: true } },
@@ -863,15 +927,56 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'features.set',
       title: 'Feature',
-      description: 'Turns an optional feature (geosteering, cross-section, crossplots, simulation…) on or off.',
+      description:
+        'Turns an optional feature on or off: an overlay in 3D (log curtain, oil–water contact, uncertainty cones, geosteering band), a view (cross-section, correlation, crossplots, map, simulation: on opens its window), a graphics effect, the further Volve wells, the ROP colouring or a toolbar tool.',
       category: 'Features',
-      where: 'Features',
+      where: 'Scene › Overlays · Rail › Views · Settings › Graphics · Well picker',
       input: z.object({ feature: z.enum(FEATURE_IDS), on: z.boolean() }),
-      choices: (app) => FEATURES.map((f) => ({ label: `${app.flags.on(f.id) ? 'Turn off' : 'Turn on'} ${f.name}`, input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group], description: f.desc })),
+      choices: (app) => FEATURES.map((f) => ({ label: featureChoice(f, app.flags.on(f.id)), input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group, f.name, HOME_WORD[f.home]], description: f.desc })),
       // an overlay or a contact drawn by a feature: switching the feature shows or hides it
       appliesTo: ['overlay', 'contact'],
-      onSelection: (sel, app) => (isFeature(sel.id) ? { input: { feature: sel.id, on: !app.flags.on(sel.id) }, label: app.flags.on(sel.id) ? 'Turn off' : 'Turn on' } : null),
-      run: (app, { feature, on }) => app.flags.set(feature, on),
+      onSelection: (sel, app) => (isFeature(sel.id) ? { input: { feature: sel.id, on: !app.flags.on(sel.id) }, label: app.flags.on(sel.id) ? 'Hide' : 'Show' } : null),
+      run: (app, { feature, on }) => {
+        // opening a view shows its window even when the feature does not open it by itself (nothing loaded yet)
+        const tool = on && FEATURES.find((f) => f.id === feature)?.home === 'view' ? toolWindows.value.find((w) => w.opts.id === feature) : undefined;
+        if (tool) withTransition(() => showTool(app, tool));
+        else app.flags.set(feature, on);
+      },
+    }),
+    A({
+      id: 'features.all',
+      title: 'Every optional feature',
+      description: 'Turns every optional feature (overlays, views, graphics effects, the further Volve wells, tools) on or off at once.',
+      category: 'Features',
+      keywords: ['all on', 'all off', 'features'],
+      input: z.object({ on: z.boolean() }),
+      choices: () => [
+        { label: 'All on', input: { on: true } },
+        { label: 'All off', input: { on: false } },
+      ],
+      run: (app, { on }) => FEATURES.forEach((f) => app.flags.set(f.id, on)),
+    }),
+    A({
+      id: 'features.reset',
+      title: 'Reset optional features to defaults',
+      description: 'Puts every optional feature back as it starts: the overlays, views, graphics quality, wells and tools.',
+      category: 'Features',
+      keywords: ['defaults', 'features', 'restore'],
+      run: (app) => app.flags.resetDefaults(app.engine.quality === 'low'),
+    }),
+    A({
+      id: 'graphics.quality',
+      title: 'Graphics quality',
+      description: 'Low, Medium or High: sets the GPU-heavy effects (photo textures, shadows and ambient occlusion, inside-the-hole effects, sea surface detail) at once. Low suits integrated GPUs, remote desktops and VMs.',
+      category: 'Preferences',
+      where: 'Settings › Graphics',
+      keywords: ['performance', 'slow', 'gpu', 'textures', 'shadows'],
+      input: z.object({ quality: z.enum(['low', 'medium', 'high']) }),
+      choices: (app) => {
+        const q = graphicsQuality((id) => app.flags.on(id));
+        return (['low', 'medium', 'high'] as GraphicsQuality[]).map((quality) => ({ label: quality[0].toUpperCase() + quality.slice(1), input: { quality }, current: q === quality }));
+      },
+      run: (app, { quality }) => setGraphicsQuality(app.flags, quality),
     }),
     A({
       id: 'tools.run',
@@ -1116,7 +1221,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Theme',
       description: 'Dark, light, or follow the system setting.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       keywords: ['dark mode', 'light mode', 'appearance'],
       input: z.object({ theme: z.enum(['dark', 'light', 'system']) }),
       choices: () => (['dark', 'light', 'system'] as Theme[]).map((theme) => ({ label: theme[0].toUpperCase() + theme.slice(1), input: { theme }, current: prefs.value.theme === theme })),
@@ -1127,7 +1232,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Density',
       description: 'The size of text and controls.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       input: z.object({ density: z.enum(['compact', 'default', 'comfortable']) }),
       choices: () =>
         (['compact', 'default', 'comfortable'] as Density[]).map((density) => ({ label: density[0].toUpperCase() + density.slice(1), input: { density }, current: prefs.value.density === density })),
@@ -1138,7 +1243,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Accent colour',
       description: 'The colour of the cursor, playhead and selections.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       input: z.object({ accent: z.enum(ACCENTS.map((a) => a.id) as [Accent, ...Accent[]]) }),
       choices: () => ACCENTS.map((a) => ({ label: a.label, input: { accent: a.id }, current: prefs.value.accent === a.id })),
       run: (_app, { accent }) => setPrefs({ accent }),
@@ -1148,7 +1253,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Task bar for the selection',
       description: 'Shows or hides the small bar of likely next steps that appears next to the selected object in the 3D view.',
       category: 'Preferences',
-      where: 'Personalise › 3D view',
+      where: 'Settings › 3D view',
       keywords: ['contextual', 'next step', 'selection', 'toolbar'],
       input: z.object({ on: z.boolean() }),
       choices: () => [
@@ -1159,11 +1264,24 @@ export function appActions(): AnyAction<App>[] {
     }),
     A({
       id: 'prefs.open',
-      title: 'Personalise…',
-      description: 'Opens the personalisation dialog (theme, density, accent, panel glass, labels, motion).',
+      title: 'Settings…',
+      description: 'Opens Settings: theme, density, accent, panel glass, labels, graphics quality, motion.',
+      keywords: ['personalise', 'preferences', 'graphics', 'quality'],
       category: 'Preferences',
       where: 'Rail › Settings',
       run: (app) => app.personaliseOpen.set(true),
+    }),
+    A({
+      id: 'logs.tracks',
+      title: 'Edit log tracks',
+      description: 'Opens the track editor of the Well logs panel: show, hide, reorder and add tracks, and set their scales and colours.',
+      category: 'Panels',
+      where: 'Well logs › Tracks',
+      keywords: ['tracks', 'curves', 'scales', 'log layout', 'template'],
+      run: (app) => {
+        withTransition(() => app.workspace.open('logs'));
+        app.tracksOpen.set(true);
+      },
     }),
     A({
       id: 'help.open',

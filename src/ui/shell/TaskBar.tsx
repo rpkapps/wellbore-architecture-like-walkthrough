@@ -30,7 +30,7 @@ const SETTLE_MS = 260;
  * It sits just above the selected point on screen, offset so it never covers
  * it, or docks above the viewport toolbar when the object has no place on
  * screen. It fades out while the camera moves or the walk plays, and comes
- * back where the object then is. Personalise can turn it off.
+ * back where the object then is. Settings can turn it off.
  */
 export const TaskBar = memo(function TaskBar({ app }: { app: App }) {
   const sel = useSignal(app.selection);
@@ -88,7 +88,7 @@ function Bar({ app, sel }: { app: App; sel: Selection }) {
                 id="hide-task-bar"
                 onAction={() => {
                   setPrefs({ taskBar: false });
-                  app.toast('Task bar hidden. Personalise brings it back.');
+                  app.toast('Task bar hidden. Settings brings it back.');
                 }}
               >
                 Hide the task bar

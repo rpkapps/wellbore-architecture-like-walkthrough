@@ -14,10 +14,10 @@ import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
 import { Live, Signal } from '../ui/signal';
-import { font, ink } from '../ui/tokens';
+import { font, ink, textLen } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { niceStep } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 type BubbleMode = 'cum' | 'rate' | 'none';
 
@@ -78,12 +78,14 @@ export class MapViewFeature implements FeatureModule {
   private hoverPt: { x: number; y: number } | null = null;
 
   constructor(private app: App) {
+    // cached drawing: redraw when a colour or the text size it uses changes
+    app.paintRev.subscribe(() => this.map.invalidate());
     const horizons = app.field.horizons.filter((g) => g.id !== 'nordland').map((g) => ({ id: g.id, label: `Top ${FORMATION_BY_ID.get(g.id)?.name ?? g.name}` }));
     this.panel = new ToolWindow({
       id: 'mapview',
       title: 'Map',
       badge: 'interpreted',
-      onClose: () => app.flags.set('mapview', false),
+      onClose: () => windowClosed(app.flags, 'mapview', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect
@@ -665,13 +667,14 @@ export class MapViewFeature implements FeatureModule {
 
   private drawLegend(g: CanvasRenderingContext2D, W: number, H: number, owc: number | null) {
     // depth colour bar
+    // the room for its labels grows with the density's text
     const bw = 12;
     const bh = Math.min(140, H - 60);
-    const bx = W - bw - 42;
+    const bx = W - bw - textLen(42);
     const by = 12;
     g.fillStyle = ink.card;
     g.globalAlpha = 0.75;
-    g.fillRect(bx - 8, by - 6, bw + 48, bh + 30);
+    g.fillRect(bx - 8, by - 6, bw + textLen(48), bh + textLen(30));
     g.globalAlpha = 1;
     for (let i = 0; i < bh; i++) {
       g.fillStyle = toCss(colormap('viridis', 1 - i / bh));
@@ -680,22 +683,22 @@ export class MapViewFeature implements FeatureModule {
     g.font = font.mono(9.5);
     g.fillStyle = ink.text;
     g.textAlign = 'left';
-    g.fillText(fmt.n(this.range.min, 0), bx + bw + 4, by + 8);
+    g.fillText(fmt.n(this.range.min, 0), bx + bw + 4, by + textLen(8));
     g.fillText(fmt.n(this.range.max, 0), bx + bw + 4, by + bh);
     if (owc) {
       const oy = by + ((owc - this.range.min) / (this.range.max - this.range.min)) * bh;
       g.fillStyle = '#4fb3ff';
       g.fillRect(bx - 3, oy - 1, bw + 6, 2);
-      g.fillText('OWC', bx + bw + 4, oy + 3);
+      g.fillText('OWC', bx + bw + 4, oy + textLen(3.5));
     }
     g.fillStyle = ink.muted;
-    g.fillText('m TVDSS', bx - 4, by + bh + 16);
+    g.fillText('m TVDSS', bx - 4, by + bh + textLen(16));
     // scale bar
     const s = this.view!.s;
     const len = niceStep(120 / s);
     const px = len * s;
     const sx = 12;
-    const sy = H - 14;
+    const sy = H - textLen(14);
     g.strokeStyle = ink.text;
     g.lineWidth = 2;
     g.beginPath();
@@ -715,7 +718,9 @@ export class MapViewFeature implements FeatureModule {
     g.lineTo(nx - 6, ny + 4);
     g.closePath();
     g.fill();
-    g.fillText('N', nx - 3.5, ny + 16);
+    g.textAlign = 'center';
+    g.fillText('N', nx, ny + textLen(16));
+    g.textAlign = 'left';
     if (this.bubbles !== 'none' && this.span) {
       g.textAlign = 'right';
       g.fillStyle = ink.text;

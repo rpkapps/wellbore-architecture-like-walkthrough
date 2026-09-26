@@ -7,17 +7,25 @@ import type { Curve } from '../data/types';
 import { fmt } from './dom';
 import { Rev, Signal } from './signal';
 import { fitStore } from './toolWindow';
-import { cssVar, font, ink, wash } from './tokens';
+import { cssVar, fixedFont, font, ink, textLen, textPx, textScale, wash } from './tokens';
 
 const LAYOUT_KEY = 'vwt.logtracks.v1';
 
-/** header: a title row, then one scale row per curve of the fullest track */
-const TITLE_H = 21;
-const ROW_H = 25;
-const DEPTH_W = 46;
-const ZONE_W = 9;
-const HOLE_W = 9;
-const PAY_W = 7;
+/**
+ * Sizes of the fixed parts, at the current density (the text in them grows with
+ * it): the header is a title row, then one scale row per curve of the fullest
+ * track; the depth column fits its widest label. `k` scales offsets inside a row.
+ */
+function metrics(g: CanvasRenderingContext2D | null) {
+  const k = textScale();
+  let depthW = textLen(46);
+  if (g) {
+    g.font = font.mono(9.5, 600);
+    // the depth labels and the cursor's tag ("4,770.0") over the column
+    depthW = Math.max(depthW, Math.ceil(g.measureText('0,000.0').width + 10));
+  }
+  return { k, TITLE_H: textLen(21), ROW_H: textLen(25), DEPTH_W: depthW, ZONE_W: textLen(9), HOLE_W: textLen(9), PAY_W: textLen(7) };
+}
 
 export interface ReadoutRow {
   k: string;
@@ -52,6 +60,8 @@ export class LogTracks {
   private hover: number | null = null;
   window = 160;
   private headH = 86;
+  /** the fixed parts' sizes, measured when the tracks are built */
+  private m = metrics(null);
   colormap: ColormapName = 'resistivity';
   onPick?: (md: number) => void;
   onHover?: (md: number | null) => void;
@@ -426,6 +436,8 @@ export class LogTracks {
       return;
     }
     const shown = visibleTracks(this.tracks, w, this.hideEmpty);
+    this.m = metrics(this.ctx);
+    const { TITLE_H, ROW_H, DEPTH_W, ZONE_W, HOLE_W, PAY_W } = this.m;
     this.headH = TITLE_H + Math.max(1, ...shown.map((t) => t.curves.length)) * ROW_H + 4;
     const bodyH = Math.max(1, H - this.headH);
 
@@ -480,6 +492,7 @@ export class LogTracks {
     const top = s0;
     const bot = s0 + H / scale;
     const yOf = (md: number) => (md - s0) * scale;
+    const { k, DEPTH_W, ZONE_W, HOLE_W, PAY_W } = this.m;
     g.font = font.mono(9.5);
     g.textBaseline = 'middle';
     // depth track
@@ -496,10 +509,10 @@ export class LogTracks {
       if (d < 0 || d > w.tdMD) continue;
       g.fillStyle = ink.muted;
       g.textAlign = 'right';
-      g.fillText(d.toFixed(step < 1 ? 1 : 0), DEPTH_W - 2, y - 5);
+      g.fillText(d.toFixed(step < 1 ? 1 : 0), DEPTH_W - 2, y - 5 * k);
       const tv = w.trajectory.at(Math.min(d, w.trajectory.mdEnd)).tvd;
       g.fillStyle = ink.faint;
-      g.fillText(tv.toFixed(0), DEPTH_W - 2, y + 6);
+      g.fillText(tv.toFixed(0), DEPTH_W - 2, y + 6 * k);
     }
     // minor grid
     const minor = step / 5;
@@ -585,6 +598,7 @@ export class LogTracks {
     const zl = this.layout[1];
     const hl = this.layout[2];
     const pl = this.layout[this.layout.length - 1];
+    const { k, DEPTH_W, ZONE_W, HOLE_W } = this.m;
     const mid = this.headH / 2;
     const vlabel = (text: string, cx: number) => {
       g.save();
@@ -602,10 +616,10 @@ export class LogTracks {
     vlabel('HOLE', hl.x + HOLE_W / 2 + 1);
     g.font = font.mono(9.5, 600);
     g.fillStyle = ink.muted;
-    g.fillText('MD', 2 + DEPTH_W / 2, this.headH - 20);
+    g.fillText('MD', 2 + DEPTH_W / 2, this.headH - 20 * k);
     g.font = font.mono(9.5);
     g.fillStyle = ink.faint;
-    g.fillText('TVD', 2 + DEPTH_W / 2, this.headH - 8);
+    g.fillText('TVD', 2 + DEPTH_W / 2, this.headH - 8 * k);
     g.strokeStyle = ink.grid;
     g.beginPath();
     g.moveTo(0, this.headH + 0.5);
@@ -680,10 +694,11 @@ export class LogTracks {
       g.restore();
       const tag = fmt.n(this.cursorMd, 1);
       g.font = font.mono(9.5, 600);
-      const tw = Math.min(DEPTH_W, g.measureText(tag).width + 8);
+      const tw = Math.min(this.m.DEPTH_W, g.measureText(tag).width + 8);
+      const th = Math.round(14 * this.m.k);
       g.fillStyle = accent;
       g.beginPath();
-      g.roundRect(2, yc - 7, tw, 14, 3);
+      g.roundRect(2, yc - th / 2, tw, th, 3);
       g.fill();
       g.fillStyle = ink.card;
       g.textAlign = 'center';
@@ -892,32 +907,40 @@ export class LogTracks {
     g.fillRect(x + 2, 3, w - 4, 2);
     const hx = x + 5;
     const hw = w - 10;
+    const { k, TITLE_H, ROW_H } = this.m;
     g.textBaseline = 'middle';
     g.textAlign = 'center';
     g.font = font.sans(10, 600);
     g.fillStyle = ink.text;
-    g.fillText(fitTitle(g, t.title, hw), x + w / 2, 13);
+    g.fillText(fitTitle(g, t.title, hw), x + w / 2, 13 * k);
     let hy = TITLE_H;
     t.curves.forEach((spec) => {
       g.globalAlpha = this.curveFor(spec) ? 1 : 0.35;
       g.font = font.sans(9.5, 600);
       g.fillStyle = spec.color;
       g.textAlign = 'center';
-      g.fillText(fit(g, spec.label, hw), x + w / 2, hy + 5);
+      g.fillText(fit(g, spec.label, hw), x + w / 2, hy + 5 * k);
       g.strokeStyle = spec.color;
       g.lineWidth = 1.6;
       g.setLineDash(spec.dash ?? []);
       g.beginPath();
-      g.moveTo(hx, hy + 12.5);
-      g.lineTo(hx + hw, hy + 12.5);
+      const ly = Math.round(hy + 12 * k) + 0.5;
+      g.moveTo(hx, ly);
+      g.lineTo(hx + hw, ly);
       g.stroke();
       g.setLineDash([]);
-      g.font = font.mono(8.5);
+      // the scale ends: a narrow track shrinks them (down to 8 px) rather than letting them meet
+      const lo = fmtNum(spec.scale.min);
+      const hi = fmtNum(spec.scale.max);
+      const px = textPx(8.5);
+      g.font = fixedFont.mono(px);
+      const both = g.measureText(lo).width + g.measureText(hi).width + 6;
+      if (both > hw) g.font = fixedFont.mono(Math.max(8, Math.floor((px * hw * 10) / both) / 10));
       g.fillStyle = ink.muted;
       g.textAlign = 'left';
-      g.fillText(fmtNum(spec.scale.min), hx, hy + 19);
+      g.fillText(lo, hx, hy + 19 * k);
       g.textAlign = 'right';
-      g.fillText(fmtNum(spec.scale.max), hx + hw, hy + 19);
+      g.fillText(hi, hx + hw, hy + 19 * k);
       g.globalAlpha = 1;
       hy += ROW_H;
     });

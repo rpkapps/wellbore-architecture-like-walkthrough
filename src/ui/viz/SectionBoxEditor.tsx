@@ -308,7 +308,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
               className={`outline-none focus-visible:stroke-ring focus-visible:stroke-2 ${hot !== 'move' && hot?.includes(e) ? 'fill-primary' : 'fill-foreground'}`}
             />
           ))}
-          <g className="pointer-events-none fill-muted-foreground" fontSize={9} fontWeight={600}>
+          <g className="pointer-events-none fill-muted-foreground" fontSize="0.68rem" fontWeight={600}>
             {/* pinned to the right and bottom edges by nested viewports, so they need no layout */}
             <svg x="100%" overflow="visible">
               <text x={-9} y={14} textAnchor="middle">
@@ -329,7 +329,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
         </svg>
         {shown && <DepthGauge app={app} layout={gauge} value={box.stripTo} onChange={(v) => edit({ stripTo: v })} />}
       </div>
-      <p className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
+      <p className="font-mono text-[0.75rem] text-muted-foreground tabular-nums">
         W {km(box.xMin)} · E {km(box.xMax)} · S {km(box.nMin)} · N {km(box.nMax)} km · strip {fmt.n(box.stripTo, 0)} m
       </p>
     </div>
@@ -481,7 +481,7 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
         </svg>
         <rect ref={hatch} x={bx} y={top} width={bw} fill="url(#sb-hatch)" />
       </g>
-      <g ref={ticks} className="fill-muted-foreground font-mono" fontSize={8.5}>
+      <g ref={ticks} className="fill-muted-foreground font-mono" fontSize="0.68rem">
         {[0, 1000, 2000, 3000].map((d) => (
           <g key={d}>
             <rect x={bx + bw + 1} y={-0.5} width={3} height={1} />

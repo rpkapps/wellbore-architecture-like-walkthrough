@@ -39,7 +39,7 @@ const KEY = 'vwt.views.v1';
 export class ViewsFeature implements FeatureModule {
   readonly id = 'views' as const;
   views: SavedView[] = [];
-  /** bump when the list of views changes (Features panel settings) */
+  /** bump when the list of views changes (its settings) */
   readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private presenting = false;

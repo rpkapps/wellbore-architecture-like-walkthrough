@@ -10,10 +10,10 @@ import { CompactSelect, Note, SelectField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Rev, Signal } from '../ui/signal';
-import { font, ink, wash } from '../ui/tokens';
+import { font, ink, textLen, wash } from '../ui/tokens';
 import { CURVES, CURVE_BY_KEY } from './curves';
 import { niceStep } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 interface Column {
   well: Well;
@@ -66,7 +66,7 @@ export class CorrelationFeature implements FeatureModule {
       id: 'correlation',
       title: 'Well correlation',
       badge: 'measured',
-      onClose: () => app.flags.set('correlation', false),
+      onClose: () => windowClosed(app.flags, 'correlation', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect
@@ -411,10 +411,11 @@ export class CorrelationFeature implements FeatureModule {
       g.fillText('No logged wells selected.', W / 2, H / 2);
       return;
     }
-    const PL = 50;
+    // the margins that hold text grow with the density
+    const PL = textLen(50);
     const PR = 8;
-    const PT = 38;
-    const PB = 18;
+    const PT = textLen(38);
+    const PB = textLen(18);
     const n = this.cols.length;
     const cw = (W - PL - PR) / n;
     const tw = Math.max(24, cw * 0.62);
@@ -520,11 +521,11 @@ export class CorrelationFeature implements FeatureModule {
       const x = left(i) + tw / 2;
       g.font = font.sans(11, c.well === active ? 600 : 500);
       g.fillStyle = c.well === active ? '#7fe3ff' : ink.text;
-      g.fillText(c.well.name.replace(/^15\/9-/, ''), x, 14);
+      g.fillText(c.well.name.replace(/^15\/9-/, ''), x, textLen(14));
       g.font = font.sans(9.5, 400);
       g.fillStyle = ink.faint;
       const sub = this.datumId && c.datum === null ? 'top not reached' : !c.tracks.get(this.curve) ? `no ${def?.key ?? 'curve'}` : this.datumId ? `${fmt.n(c.datum!, 0)} m` : '';
-      g.fillText(sub, x, 28);
+      g.fillText(sub, x, textLen(28));
     });
     // depth axis
     g.fillStyle = ink.card;
@@ -534,8 +535,9 @@ export class CorrelationFeature implements FeatureModule {
     g.font = font.mono(10);
     g.fillStyle = ink.muted;
     g.textAlign = 'right';
-    const st = niceStep((d1 - d0) / 8);
-    for (let d = Math.ceil(d0 / st) * st; d <= d1; d += st) g.fillText(d.toFixed(0), PL - 8, Y(d) + 3);
+    // at least a label and a gap apart
+    const st = niceStep(Math.max((d1 - d0) / 8, ((d1 - d0) * textLen(20)) / (H - PT - PB)));
+    for (let d = Math.ceil(d0 / st) * st; d <= d1; d += st) g.fillText(d.toFixed(0), PL - 8, Y(d) + textLen(3.5));
     g.textAlign = 'left';
     g.fillText(this.datumId ? 'rel.' : this.mode === 'tvdss' ? 'TVDSS' : 'MD', 4, PT - 6);
     // scale note
@@ -545,7 +547,7 @@ export class CorrelationFeature implements FeatureModule {
     g.fillText(`${flat} · ${def ? `${def.label} ${def.range}` : ''}${odef ? ` · + ${odef.label}` : ''}`, W - PR, H - 4);
     if (odef) {
       g.fillStyle = OVERLAY_COLOR;
-      g.fillRect(PL, H - 11, 14, 2);
+      g.fillRect(PL, H - textLen(11), 14, 2);
     }
   }
 

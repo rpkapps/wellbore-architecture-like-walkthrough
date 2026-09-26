@@ -171,7 +171,10 @@ export class ContactsFeature implements FeatureModule {
     for (const c of [...this.group.children]) {
       this.group.remove(c);
       (c as THREE.Mesh).geometry?.dispose();
-      if (c instanceof CSS2DObject) c.element.remove();
+      // the field plane carries its label as a child: its element would stay on screen
+      c.traverse((o) => {
+        if (o instanceof CSS2DObject) o.element.remove();
+      });
     }
     this.plane = undefined;
   }

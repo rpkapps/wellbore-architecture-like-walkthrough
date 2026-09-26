@@ -184,6 +184,8 @@ export class App {
   readonly productionOpen = new Signal(false);
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
+  /** the Well logs track editor: a popover on the logs header, so the tracks redraw beside it as they change */
+  readonly tracksOpen = new Signal(false);
   readonly personaliseOpen = new Signal(false);
   readonly paletteOpen = new Signal(false);
   /** every operation as a typed action: the command palette runs these, and an assistant can (actions/tanstack.ts) */
@@ -195,7 +197,7 @@ export class App {
    * the 3D view fills the window and this caption sits over it.
    */
   readonly presentation = new Signal<ReactNode>(null);
-  /** property modes switched on by features (ROP) */
+  /** property modes features offer (ROP, when the well has the log) */
   readonly optionalModes = new Signal<ReadonlySet<PropertyMode>>(new Set());
 
   readonly wellbore: WellboreDisplay = { casingOpacity: 0.42, wallOpacity: 1, shellOpacity: 1, casing: true, fractures: true, markers: true };
@@ -217,6 +219,12 @@ export class App {
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
     this.hub = new DataHub(this);
+    // a layout change made from a panel's menu or buttons is announced, with Undo (one toast at a time)
+    this.workspace.changes.subscribe(() => {
+      const c = this.workspace.changes.value;
+      // (it stays a little longer than a plain message: time to reach Undo)
+      if (c) this.toast(`${c.label}.`, 'info', { id: 'layout-change', duration: 8000, action: { label: 'Undo', onClick: () => void this.actions.run('panels.undo_layout', { change: c.n }) } });
+    });
     // the details follow the selection, and the data they read out
     const details = () => this.inspector.set(this.selection.value && this.engine ? this.inspectorFor(this.selection.value) : null);
     this.selection.subscribe(details);
@@ -251,9 +259,10 @@ export class App {
     };
     personal();
     prefs.subscribe(personal);
-    // a new theme: every canvas redraws with its colours
+    // a new theme, accent or density: every canvas redraws with its colours and text sizes
     themeRev.subscribe(() => {
       this.logs.invalidate();
+      this.paintRev.bump();
       this.notifyFeatures();
       this.viewRev.bump();
       this.sceneRev.bump();
@@ -304,13 +313,17 @@ export class App {
     });
   }
 
-  toast(msg: string, kind: 'info' | 'error' = 'info', since = performance.now()) {
+  /**
+   * Show a message. `opts.id` replaces an earlier toast with the same id
+   * instead of stacking another; `opts.action` adds a button (Undo).
+   */
+  toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }, since = performance.now()) {
     // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
     const wait = transitionBusyFor();
-    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, since), wait);
+    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, opts, since), wait);
     noteSyncUpdate();
-    if (kind === 'error') toast.error(msg);
-    else toast(msg);
+    if (kind === 'error') toast.error(msg, opts);
+    else toast(msg, opts);
   }
 
   // ------------------------------------------------------------------ viewport toolbar and HUD slots
@@ -549,7 +562,7 @@ export class App {
     this.viewRev.bump();
   }
 
-  /** Offer or withdraw an optional property mode (ROP, from the Features panel). */
+  /** Offer or withdraw an optional property mode (ROP, while the active well has an ROP log). */
   setPropertyAvailable(m: PropertyMode, on: boolean) {
     const next = new Set(this.optionalModes.value);
     if (on) next.add(m);
@@ -1026,6 +1039,15 @@ export class App {
       },
       true,
     );
+    // Ctrl Z (outside text fields, menus and dialogs) takes back the last layout change
+    window.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement;
+      if (t.closest?.('input, select, textarea, [contenteditable="true"], [role="dialog"], [role="menu"], [role="listbox"]')) return;
+      if (!this.workspace.canUndo()) return;
+      e.preventDefault();
+      void this.actions.run('panels.undo_layout');
+    });
     window.addEventListener('keydown', (e) => {
       const t = e.target as HTMLElement;
       // keys belong to form controls, and to anything inside a dialog or popover

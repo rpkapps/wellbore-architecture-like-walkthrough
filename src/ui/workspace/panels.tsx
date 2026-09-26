@@ -1,3 +1,4 @@
+import { Popover, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
 import {
   ActivityIcon,
@@ -12,17 +13,17 @@ import {
   RadioTowerIcon,
   RulerIcon,
   ScissorsIcon,
-  SlidersHorizontalIcon,
+  Settings2Icon,
   SquareMousePointerIcon,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
-import { FEATURES, type FeatureId } from '../../features/registry';
+import { FEATURE_BY_ID, FEATURES, type FeatureId, type FeatureModule } from '../../features/registry';
 import type { App } from '../app';
+import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
 import { LinkChip } from './LinkChip';
-import { useRev, useSignal } from '../signal';
+import { Rev, useRev, useSignal } from '../signal';
 import { toolWindows, type ToolWindow } from '../toolWindow';
-import { FeaturesPanel } from '../shell/FeaturesPanel';
 import { InterpretationPanel } from '../shell/InterpretationPanel';
 import { LogsActions, LogsBody } from '../shell/LogsPanel';
 import { ScenePanel } from '../shell/ScenePanel';
@@ -60,13 +61,12 @@ export const RAIL_ENTRIES: { id: string; short: string }[] = [
   { id: 'properties', short: 'Props.' },
   { id: 'interpretation', short: 'Interp.' },
   { id: 'logs', short: 'Logs' },
-  { id: 'features', short: 'Features' },
 ];
 
 /** The analysis and tool windows by workflow phase; a panel named nowhere here or on the rail goes under Other. */
 export const VIEW_PHASES: { phase: ViewPhase; ids: string[] }[] = [
   { phase: 'Explore', ids: ['mapview', 'section'] },
-  { phase: 'Interpret', ids: ['correlation', 'crossplot', 'log-tracks'] },
+  { phase: 'Interpret', ids: ['correlation', 'crossplot'] },
   { phase: 'Steer', ids: ['geosteer'] },
   { phase: 'Model', ids: ['simulation'] },
   { phase: 'Monitor', ids: ['live', 'sources'] },
@@ -91,7 +91,6 @@ const TOOL_ICONS: Record<string, ReactNode> = {
   mapview: <MapIcon />,
   simulation: <BoxesIcon />,
   views: <BookmarkIcon />,
-  'log-tracks': <SlidersHorizontalIcon />,
   measure: <RulerIcon />,
 };
 
@@ -133,16 +132,6 @@ export function builtinPanels(app: App): PanelDef[] {
         </Scroll>
       ),
     },
-    {
-      id: 'features',
-      title: 'Features',
-      icon: <SlidersHorizontalIcon />,
-      body: () => (
-        <Scroll>
-          <FeaturesPanel app={app} />
-        </Scroll>
-      ),
-    },
     { id: 'logs', title: 'Well logs', icon: <LogCurveIcon />, actions: () => <LogsActions app={app} />, body: () => <LogsBody app={app} /> },
     { id: 'sources', title: 'Live data', icon: <RadioTowerIcon />, actions: () => <SourcesActions app={app} />, body: () => <SourcesBody app={app} /> },
     { id: 'live', title: 'Live charts', icon: <ActivityIcon />, actions: () => <LiveActions app={app} />, body: () => <LiveBody app={app} /> },
@@ -151,15 +140,70 @@ export function builtinPanels(app: App): PanelDef[] {
 
 const isFeature = (id: string): id is FeatureId => FEATURES.some((f) => f.id === id);
 
-/** Show a tool window; a feature's window turns its feature on (which shows it). */
+/**
+ * Show a tool window; a feature's window turns its feature on first (which
+ * usually shows it). It is shown either way: a window its feature does not
+ * open by itself (the simulation with nothing loaded) shows its empty state.
+ */
 export function showTool(app: App, w: ToolWindow) {
   const id = w.opts.id;
   if (isFeature(id) && !app.flags.on(id)) app.flags.set(id, true);
-  else w.show();
+  w.show();
+}
+
+/**
+ * The feature whose settings a window's header offers: a view's, or the
+ * geosteering band's, whose window is its view. Not the toolbar tools' (their
+ * window is all they have), nor the simulation's, whose window already says
+ * what is loaded.
+ */
+function settingsOf(app: App, id: string): FeatureModule | undefined {
+  const f = isFeature(id) ? FEATURE_BY_ID.get(id) : undefined;
+  if (!f || (f.home !== 'view' && f.home !== 'overlay') || id === 'simulation') return undefined;
+  const m = app.modules.get(f.id);
+  return m?.settings ? m : undefined;
 }
 
 function toolPanel(app: App, w: ToolWindow): PanelDef {
-  return { id: w.opts.id, title: w.opts.title, icon: TOOL_ICONS[w.opts.id] ?? <PanelTopIcon />, tool: w, open: () => showTool(app, w), body: () => <ToolBody win={w} /> };
+  const m = settingsOf(app, w.opts.id);
+  return {
+    id: w.opts.id,
+    title: w.opts.title,
+    icon: TOOL_ICONS[w.opts.id] ?? <PanelTopIcon />,
+    tool: w,
+    open: () => showTool(app, w),
+    actions: m ? () => <ViewSettings m={m} title={w.opts.title} /> : undefined,
+    body: () => <ToolBody win={w} />,
+  };
+}
+
+const noRev = new Rev();
+
+/**
+ * A view's own settings (well order, which wells to show, notes on how to read
+ * it), behind a button in its group header: what the Features panel used to
+ * unfold under the view's switch.
+ */
+function ViewSettings({ m, title }: { m: FeatureModule; title: string }) {
+  return (
+    <PopoverTrigger>
+      <IconButton label={`${title} settings`} size="icon-xs">
+        <Settings2Icon />
+      </IconButton>
+      <Popover placement="bottom end" className="w-72">
+        <PopoverHeader>
+          <PopoverTitle>{title}</PopoverTitle>
+        </PopoverHeader>
+        <ViewSettingsBody m={m} />
+      </Popover>
+    </PopoverTrigger>
+  );
+}
+
+/** Re-renders when the feature bumps its revision. */
+function ViewSettingsBody({ m }: { m: FeatureModule }) {
+  useRev(m.rev ?? noRev);
+  return <div className="flex max-h-[60vh] flex-col gap-1.5 overflow-y-auto">{m.settings!()}</div>;
 }
 
 /** Every panel the workspace can show right now: the built-in ones and the feature tool windows. */
