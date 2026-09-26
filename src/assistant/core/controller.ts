@@ -64,6 +64,9 @@ export interface AssistantEngine extends AssistantController {
   dispose: () => void;
 }
 
+/** The format of saved settings (`AssistantSettings.version`). 2: the OpenAI preset speaks the Responses API. */
+export const SETTINGS_VERSION = 2;
+
 export const DEFAULT_SETTINGS: AssistantSettings = {
   providers: [],
   activeProviderId: null,
@@ -71,6 +74,7 @@ export const DEFAULT_SETTINGS: AssistantSettings = {
   rememberKeys: false,
   maxSteps: 12,
   showReasoning: true,
+  version: SETTINGS_VERSION,
 };
 
 const TEST_TIMEOUT_MS = 20_000;
@@ -90,6 +94,9 @@ const emptyThread = (): Thread => {
 function normaliseSettings(s: Partial<AssistantSettings> | null): AssistantSettings {
   const out: AssistantSettings = { ...DEFAULT_SETTINGS, ...(s ?? {}) };
   out.providers = Array.isArray(out.providers) ? out.providers.filter((p) => p && typeof p.id === 'string') : [];
+  // saved before version 2: OpenAI connections move from Chat Completions to the Responses API (a later explicit choice is kept)
+  if (s && (s.version ?? 1) < 2) out.providers = out.providers.map((p) => (p.presetId === 'openai' && p.kind === 'openai' ? { ...p, kind: 'openai-responses' } : p));
+  out.version = SETTINGS_VERSION;
   if (!['read', 'ask', 'auto'].includes(out.autonomy)) out.autonomy = 'ask';
   out.maxSteps = Math.min(50, Math.max(1, Math.round(Number(out.maxSteps) || DEFAULT_SETTINGS.maxSteps)));
   if (out.activeProviderId && !out.providers.some((p) => p.id === out.activeProviderId)) out.activeProviderId = out.providers[0]?.id ?? null;

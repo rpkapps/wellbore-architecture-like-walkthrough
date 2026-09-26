@@ -39,7 +39,8 @@ const tool = (name: string, description: string, patch: Partial<AssistantTool> =
 });
 
 const PROVIDERS: Record<'openai' | 'anthropic' | 'gemini', Partial<ProviderConfig>> = {
-  openai: { baseUrl: 'https://mock.test/v1', model: 'gpt-mock' },
+  // Chat Completions: these tests read the requests' `messages`
+  openai: { baseUrl: 'https://mock.test/v1', model: 'gpt-mock', kind: 'openai' },
   anthropic: { baseUrl: 'https://mock.test', model: 'claude-sonnet-5' },
   gemini: { baseUrl: 'https://mock.test/v1beta', model: 'gemini-3.5-flash' },
 };

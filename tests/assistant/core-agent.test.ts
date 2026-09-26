@@ -83,8 +83,10 @@ function makeHost(ran: Ran, extra: Partial<AssistantHost> = {}): AssistantHost {
   };
 }
 
-const PROVIDERS: Record<'openai' | 'anthropic' | 'gemini', Partial<ProviderConfig>> = {
+const PROVIDERS: Record<'openai' | 'custom' | 'anthropic' | 'gemini', Partial<ProviderConfig>> = {
+  // the OpenAI preset speaks the Responses API, a custom OpenAI-compatible server Chat Completions
   openai: { baseUrl: 'https://mock.test/v1', model: 'gpt-mock' },
+  custom: { baseUrl: 'https://mock.test/v1', model: 'local-mock', contextWindow: 128_000 },
   anthropic: { baseUrl: 'https://mock.test', model: 'claude-sonnet-5' },
   gemini: { baseUrl: 'https://mock.test/v1beta', model: 'gemini-3.5-flash' },
 };
@@ -128,7 +130,7 @@ const settled = (e: Engine) => waitFor(e, (s) => (s.status === 'ready' || s.stat
 const lastMsg = (s: AssistantSnapshot) => s.thread.messages[s.thread.messages.length - 1];
 const calls = (s: AssistantSnapshot) => lastMsg(s).parts.filter((p): p is ToolCallPart => p.type === 'tool-call');
 
-describe.each(['openai', 'anthropic', 'gemini'] as const)('agent loop over %s', (preset) => {
+describe.each(['openai', 'custom', 'anthropic', 'gemini'] as const)('agent loop over %s', (preset) => {
   it('streams a text answer', async () => {
     const { engine } = setup(() => ({ reasoning: 'Easy one.', text: 'Hello from the mock — “ok”.' }), { preset });
     engine.send({ text: 'Say hello to the whole team please' });
@@ -466,11 +468,12 @@ describe('stable system prompt', () => {
     await settled(engine);
     engine.send({ text: 'second' });
     await settled(engine);
-    const bodies = fetch.calls.map((c) => c.body as { messages: { role: string; content: unknown }[] });
-    const system = (b: { messages: { role: string; content: unknown }[] }) => JSON.stringify(b.messages.find((m) => m.role === 'system'));
+    // the OpenAI preset speaks the Responses API: the system prompt is `instructions`, the transcript `input`
+    const bodies = fetch.calls.map((c) => c.body as { instructions: string; input: unknown[] });
     expect(bodies).toHaveLength(2);
-    expect(system(bodies[0])).toBe(system(bodies[1]));
-    const sent = JSON.stringify(bodies[1].messages);
+    expect(bodies[0].instructions).toBeTruthy();
+    expect(bodies[0].instructions).toBe(bodies[1].instructions);
+    const sent = JSON.stringify(bodies[1].input);
     expect(sent).toContain('<app_state>');
     expect(sent).toContain(String.raw`{\"md\":100}`);
     expect(sent).toContain(String.raw`{\"md\":200}`);

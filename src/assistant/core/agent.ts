@@ -426,6 +426,15 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
             } else setParts([...msg.parts, { type: 'reasoning', text: '', signature: ev.signature, durationMs: 0 }]);
             return;
           }
+          case 'reasoning-meta': {
+            openText = -1;
+            if (openReasoning >= 0) {
+              const r = msg.parts[openReasoning] as ReasoningPart;
+              replacePart(openReasoning, { ...r, providerMeta: { ...(r.providerMeta ?? {}), ...ev.providerMeta } });
+              closeReasoning();
+            } else setParts([...msg.parts, { type: 'reasoning', text: '', providerMeta: ev.providerMeta, durationMs: 0 }]);
+            return;
+          }
           case 'reasoning-redacted': {
             openText = -1;
             closeReasoning();

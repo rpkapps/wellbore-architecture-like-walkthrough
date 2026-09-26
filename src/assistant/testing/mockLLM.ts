@@ -1,13 +1,14 @@
 /*
  * A scripted language model for tests and end-to-end demos. It answers
  * requests in each provider's exact streaming wire format (OpenAI Chat
- * Completions, Anthropic Messages, Gemini streamGenerateContent), so the
+ * Completions, OpenAI Responses, Anthropic Messages, Gemini
+ * streamGenerateContent), so the
  * real adapters and the whole agent loop run against it. Use
  * `createMockFetch` in place of `fetch`, or `mockServerHandler` behind a
  * Node HTTP server.
  */
 
-export type MockProtocol = 'openai' | 'anthropic' | 'gemini';
+export type MockProtocol = 'openai' | 'openai-responses' | 'anthropic' | 'gemini';
 
 /** What the script is told about a request. */
 export interface MockRequest {
@@ -91,6 +92,7 @@ const rid = () => Math.random().toString(36).slice(2, 10);
 
 function protocolOf(url: string): MockProtocol | null {
   if (/\/chat\/completions(\?|$)/.test(url)) return 'openai';
+  if (/\/responses(\?|$)/.test(url)) return 'openai-responses';
   if (/\/v1\/messages(\?|$)/.test(url)) return 'anthropic';
   if (/:streamGenerateContent/.test(url)) return 'gemini';
   return null;
@@ -136,6 +138,25 @@ export function describeRequest(protocol: MockProtocol, url: string, body: Recor
     for (let i = msgs.length - 1; i >= 0 && msgs[i].role === 'tool'; i--) {
       const id = msgs[i].tool_call_id as string;
       req.toolResults.unshift({ id, name: names.get(id), content: tryJson(msgs[i].content) });
+    }
+  } else if (protocol === 'openai-responses') {
+    const items = (body.input as Record<string, unknown>[]) ?? [];
+    req.system = typeof body.instructions === 'string' ? body.instructions : '';
+    req.toolNames = ((body.tools as { name?: string }[]) ?? []).flatMap((t) => (t.name ? [t.name] : []));
+    const names = new Map<string, string>();
+    // one model response = a run of reasoning, assistant message and function_call items
+    const modelItem = (it: Record<string, unknown>) => it.role === 'assistant' || it.type === 'function_call' || it.type === 'reasoning';
+    let lastUser = -1;
+    items.forEach((it, i) => {
+      if (it.role === 'user') lastUser = i;
+      if (it.type === 'function_call') names.set(it.call_id as string, it.name as string);
+      if (modelItem(it) && !(i > 0 && modelItem(items[i - 1]))) req.turnIndex++;
+    });
+    req.lastUserText = lastUser >= 0 ? textOf(items[lastUser].content) : '';
+    req.stepIndex = items.slice(lastUser + 1).filter((it, i, rest) => modelItem(it) && !(i > 0 && modelItem(rest[i - 1]))).length;
+    for (let i = items.length - 1; i >= 0 && items[i].type === 'function_call_output'; i--) {
+      const id = items[i].call_id as string;
+      req.toolResults.unshift({ id, name: names.get(id), content: tryJson(items[i].output) });
     }
   } else if (protocol === 'anthropic') {
     const msgs = (body.messages as { role: string; content: Record<string, unknown>[] | string }[]) ?? [];
@@ -231,6 +252,61 @@ function openaiChunks(turn: MockTurn, model: string, size: number): string[] {
   return out;
 }
 
+function responsesChunks(turn: MockTurn, model: string, size: number): string[] {
+  const out: string[] = [];
+  let seq = 0;
+  const ev = (type: string, data: Record<string, unknown>) => out.push(sse({ type, sequence_number: seq++, ...data }, type));
+  const resp = { id: `resp_${rid()}`, object: 'response', created_at: Math.floor(Date.now() / 1000), model, store: false };
+  ev('response.created', { response: { ...resp, status: 'in_progress', output: [], usage: null } });
+  const output: Record<string, unknown>[] = [];
+  let index = 0;
+  if (turn.reasoning) {
+    const id = `rs_${rid()}`;
+    ev('response.output_item.added', { output_index: index, item: { id, type: 'reasoning', summary: [] } });
+    ev('response.reasoning_summary_part.added', { item_id: id, output_index: index, summary_index: 0, part: { type: 'summary_text', text: '' } });
+    for (const p of split(turn.reasoning, size)) ev('response.reasoning_summary_text.delta', { item_id: id, output_index: index, summary_index: 0, delta: p });
+    ev('response.reasoning_summary_text.done', { item_id: id, output_index: index, summary_index: 0, text: turn.reasoning });
+    ev('response.reasoning_summary_part.done', { item_id: id, output_index: index, summary_index: 0, part: { type: 'summary_text', text: turn.reasoning } });
+    const item = { id, type: 'reasoning', summary: [{ type: 'summary_text', text: turn.reasoning }], encrypted_content: `enc_${rid()}` };
+    ev('response.output_item.done', { output_index: index, item });
+    output.push(item);
+    index++;
+  }
+  if (turn.text) {
+    const id = `msg_${rid()}`;
+    ev('response.output_item.added', { output_index: index, item: { id, type: 'message', status: 'in_progress', role: 'assistant', content: [] } });
+    ev('response.content_part.added', { item_id: id, output_index: index, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+    for (const p of split(turn.text, size)) ev('response.output_text.delta', { item_id: id, output_index: index, content_index: 0, delta: p, logprobs: [] });
+    ev('response.output_text.done', { item_id: id, output_index: index, content_index: 0, text: turn.text, logprobs: [] });
+    ev('response.content_part.done', { item_id: id, output_index: index, content_index: 0, part: { type: 'output_text', text: turn.text, annotations: [] } });
+    const item = { id, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: turn.text, annotations: [] }] };
+    ev('response.output_item.done', { output_index: index, item });
+    output.push(item);
+    index++;
+  }
+  for (const c of turn.toolCalls ?? []) {
+    const id = `fc_${rid()}`;
+    const callId = c.id ?? `call_${rid()}`;
+    const args = JSON.stringify(c.args ?? {});
+    ev('response.output_item.added', { output_index: index, item: { id, type: 'function_call', status: 'in_progress', call_id: callId, name: c.name, arguments: '' } });
+    for (const p of split(args, size + 2)) ev('response.function_call_arguments.delta', { item_id: id, output_index: index, delta: p });
+    ev('response.function_call_arguments.done', { item_id: id, output_index: index, name: c.name, arguments: args });
+    const item = { id, type: 'function_call', status: 'completed', call_id: callId, name: c.name, arguments: args };
+    ev('response.output_item.done', { output_index: index, item });
+    output.push(item);
+    index++;
+  }
+  const input = turn.usage?.input ?? 100;
+  const outputTokens = turn.usage?.output ?? 20;
+  const usage = { input_tokens: input, input_tokens_details: { cached_tokens: 0 }, output_tokens: outputTokens, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: input + outputTokens };
+  if (turn.finish === 'length' || turn.finish === 'content-filter')
+    ev('response.incomplete', {
+      response: { ...resp, status: 'incomplete', incomplete_details: { reason: turn.finish === 'length' ? 'max_output_tokens' : 'content_filter' }, output, usage },
+    });
+  else ev('response.completed', { response: { ...resp, status: 'completed', incomplete_details: null, output, usage } });
+  return out;
+}
+
 function anthropicChunks(turn: MockTurn, model: string, size: number): string[] {
   const out: string[] = [];
   const ev = (type: string, data: Record<string, unknown>) => out.push(sse({ type, ...data }, type));
@@ -315,7 +391,14 @@ export function mockServerHandler(script: MockScript, opts: MockOptions = {}): (
       return { status: turn.error.status, headers: { ...CORS, 'content-type': 'application/json', ...(turn.error.headers ?? {}) }, chunks: [typeof b === 'string' ? b : JSON.stringify(b)] };
     }
     const model = typeof body.model === 'string' ? body.model : (/models\/([^:]+):/.exec(url)?.[1] ?? 'mock-model');
-    const chunks = protocol === 'openai' ? openaiChunks(turn, model, size) : protocol === 'anthropic' ? anthropicChunks(turn, model, size) : geminiChunks(turn, size);
+    const chunks =
+      protocol === 'openai'
+        ? openaiChunks(turn, model, size)
+        : protocol === 'openai-responses'
+          ? responsesChunks(turn, model, size)
+          : protocol === 'anthropic'
+            ? anthropicChunks(turn, model, size)
+            : geminiChunks(turn, size);
     return { status: 200, headers: { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }, chunks };
   };
 }

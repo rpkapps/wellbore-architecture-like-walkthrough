@@ -85,11 +85,20 @@ Ollama and LM Studio (both local), and Custom (any OpenAI-compatible
 endpoint). The model lists are only suggestions. *Fetch models* reads the
 provider's own list, and any model id can be typed.
 
-Three wire protocols cover all of them: OpenAI Chat Completions, Anthropic
-Messages and Gemini `streamGenerateContent`. They handle streaming, parallel
-tool calls, reasoning (DeepSeek `reasoning_content`, Claude adaptive thinking
-with signatures, Gemini thoughts and thought signatures), usage and errors in
-plain language.
+Four wire protocols cover all of them: OpenAI Chat Completions, the OpenAI
+Responses API, Anthropic Messages and Gemini `streamGenerateContent`. They
+handle streaming, parallel tool calls, reasoning (DeepSeek
+`reasoning_content`, OpenAI reasoning summaries with encrypted reasoning
+replayed across tool calls, Claude adaptive thinking with signatures, Gemini
+thoughts and thought signatures), usage and errors in plain language.
+
+The OpenAI preset uses the Responses API (`POST /responses`, stateless with
+`store: false`): OpenAI's newest reasoning models take function tools with
+reasoning only there. Its connection form, and Custom's, offer *API:
+Responses / Chat Completions*; OpenAI connections saved before are moved to
+Responses when the settings load. On Chat Completions, a model that refuses
+tools with reasoning is asked again with `reasoning_effort: 'none'`, and that
+is remembered for the base URL and model.
 
 A few things matter when the browser calls providers directly:
 

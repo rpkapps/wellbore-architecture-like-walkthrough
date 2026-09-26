@@ -8,7 +8,8 @@
  *
  * Then in the Assistant: model menu › Manage providers › Add connection:
  *   Custom (OpenAI-compatible), base URL http://localhost:8787/v1, any key
- *   (or Anthropic with base URL http://localhost:8787, or Gemini with
+ *   (or OpenAI with the same base URL, which speaks the Responses API, or
+ *   Anthropic with base URL http://localhost:8787, or Gemini with
  *   http://localhost:8787/v1beta). It understands a few requests: "What am I
  *   looking at?", "Plot the logs of this well", "Colour the well by
  *   hydrocarbons", "Chart the monthly oil production for all wells", "Where is

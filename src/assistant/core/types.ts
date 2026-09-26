@@ -341,8 +341,12 @@ export interface AssistantHost {
 
 // ------------------------------------------------------------------ providers
 
-/** The three wire protocols; every other provider speaks one of them. */
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
+/**
+ * The wire protocols; every other provider speaks one of them. `openai` is
+ * Chat Completions (OpenAI-compatible servers), `openai-responses` OpenAI's
+ * Responses API (the OpenAI preset: reasoning models take tools only there).
+ */
+export type ProviderKind = 'openai' | 'openai-responses' | 'anthropic' | 'gemini';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
 
@@ -437,6 +441,8 @@ export type StreamEvent =
   /** Anthropic: the thinking block's signature, at its end */
   | { type: 'reasoning-signature'; signature: string }
   | { type: 'reasoning-redacted'; data: string }
+  /** the reasoning block ended with provider data to replay with it (the Responses API's encrypted reasoning), stored in `ReasoningPart.providerMeta` */
+  | { type: 'reasoning-meta'; providerMeta: Record<string, unknown> }
   | { type: 'tool-call-start'; id: string; name: string; providerMeta?: Record<string, unknown> }
   | { type: 'tool-call-delta'; id: string; argsText: string }
   /** the call is complete; `args` parsed (`{}` for empty), or `argsError` when the JSON was invalid */
@@ -536,6 +542,8 @@ export interface AssistantSettings {
   maxSteps: number;
   /** show the model's reasoning in the transcript */
   showReasoning: boolean;
+  /** the settings' format: older saved settings are migrated when read (missing: the first format) */
+  version?: number;
 }
 
 /** What the person sends. */

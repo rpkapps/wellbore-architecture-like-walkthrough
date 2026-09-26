@@ -14,11 +14,19 @@ import { Switch } from '@tecton/react/components/switch';
 import { ToggleGroup, ToggleGroupItem } from '@tecton/react/components/toggle-group';
 import { Tooltip, TooltipTrigger } from '@tecton/react/components/tooltip';
 import { Link } from '@tecton/react/tecton/link';
-import type { ProviderConfig, ProviderPreset, ReasoningEffort } from '../../core/types';
+import type { ProviderConfig, ProviderKind, ProviderPreset, ReasoningEffort } from '../../core/types';
 import { usePanel } from '../context';
 import { resolveContextWindow } from '../../core/context';
 
-const EFFORTS: ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
+/** The reasoning choices; `default` leaves it to the model (no setting sent). */
+const EFFORTS: (ReasoningEffort | 'default')[] = ['default', 'off', 'low', 'medium', 'high'];
+
+/** Presets whose server may speak either OpenAI protocol: the form offers the choice. */
+const API_CHOICE = new Set(['openai', 'custom']);
+const APIS: { id: ProviderKind; label: string }[] = [
+  { id: 'openai-responses', label: 'Responses' },
+  { id: 'openai', label: 'Chat Completions' },
+];
 
 /** URL checks for the form: absolute http(s), no trailing slash needed. */
 type ConnectionField = 'label' | 'baseUrl' | 'model' | 'apiKey' | 'corsProxy' | 'maxOutputTokens' | 'contextWindow';
@@ -199,6 +207,35 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
           <FieldError errors={err('baseUrl')} />
         </Field>
 
+        {API_CHOICE.has(draft.presetId) && (
+          <FieldSet>
+            <FieldLegend variant="label">API</FieldLegend>
+            <ToggleGroup
+              variant="outline"
+              size="sm"
+              selectionMode="single"
+              disallowEmptySelection
+              selectedKeys={[draft.kind === 'openai-responses' ? 'openai-responses' : 'openai']}
+              onSelectionChange={(keys) => {
+                const [k] = [...keys];
+                if (k) set('kind', String(k) as ProviderKind);
+              }}
+              aria-label="API"
+            >
+              {APIS.map((a) => (
+                <ToggleGroupItem key={a.id} id={a.id}>
+                  {a.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <FieldDescription>
+              {draft.kind === 'openai-responses'
+                ? 'POST /responses: OpenAI’s reasoning models call tools while they think.'
+                : 'POST /chat/completions: what most OpenAI-compatible servers implement.'}
+            </FieldDescription>
+          </FieldSet>
+        )}
+
         <Field>
           <FieldLabel htmlFor={id('model')}>Model</FieldLabel>
           <div className="flex items-start gap-2">
@@ -309,10 +346,10 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
             size="sm"
             selectionMode="single"
             disallowEmptySelection
-            selectedKeys={[draft.reasoning ?? 'off']}
+            selectedKeys={[draft.reasoning ?? 'default']}
             onSelectionChange={(keys) => {
               const [k] = [...keys];
-              if (k) set('reasoning', String(k) as ReasoningEffort);
+              if (k) set('reasoning', k === 'default' ? undefined : (String(k) as ReasoningEffort));
             }}
             aria-label="Reasoning effort"
           >
@@ -322,7 +359,7 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          <FieldDescription>For models that think before answering. Higher is slower and costs more.</FieldDescription>
+          <FieldDescription>For models that think before answering: Default leaves it to the model. Higher is slower and costs more.</FieldDescription>
         </FieldSet>
 
         <div className="grid gap-3 sm:grid-cols-2">

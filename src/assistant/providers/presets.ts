@@ -10,7 +10,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'openai',
     label: 'OpenAI',
-    kind: 'openai',
+    kind: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'],
     keyUrl: 'https://platform.openai.com/api-keys',
@@ -147,7 +147,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: '',
     models: [],
     needsKey: false,
-    note: 'Any server that implements POST /chat/completions with streaming and tools (vLLM, llama.cpp, LiteLLM, a company gateway…).',
+    note: 'Any server that implements POST /chat/completions (or the Responses API, POST /responses) with streaming and tools (vLLM, llama.cpp, LiteLLM, a company gateway…).',
   },
 ];
 

@@ -1,5 +1,5 @@
 import type { ChatMessage, ContextPart, FilePart, Part, ProviderConfig, ReasoningPart, TextPart, ToolCallPart, UIEventPart } from '../core/types';
-import { isAbortError, networkError, toProviderError } from './errors';
+import { ProviderError, isAbortError, networkError, toProviderError } from './errors';
 
 /*
  * What the three adapters share: the one HTTP helper (CORS proxy, extra
@@ -53,6 +53,54 @@ export async function request(config: ProviderConfig, url: string, opts: Request
   }
   if (!res.ok) throw await toProviderError(res, config);
   return res;
+}
+
+/**
+ * Request-shape quirks a server taught us with its 400s (an optional field it
+ * rejects, a value it needs), remembered per base URL and model for the
+ * session so later requests are right the first time.
+ */
+export interface QuirkMemory<Q extends string> {
+  get: (config: ProviderConfig) => Set<Q>;
+  set: (config: ProviderConfig, quirks: ReadonlySet<Q>) => void;
+  clear: () => void;
+}
+
+/** A new, empty quirk memory. */
+export function quirkMemory<Q extends string>(): QuirkMemory<Q> {
+  const map = new Map<string, Set<Q>>();
+  const key = (c: ProviderConfig) => `${c.baseUrl}|${c.model}`;
+  return {
+    get: (c) => new Set(map.get(key(c)) ?? []),
+    set: (c, q) => void map.set(key(c), new Set(q)),
+    clear: () => map.clear(),
+  };
+}
+
+/**
+ * Sends a POST built from the remembered quirks; after a 400/422 that `learn`
+ * maps to a new quirk, remembers it and sends again (at most `retries` times).
+ * The shared "drop the optional field the server named" loop of the adapters.
+ */
+export async function requestLearning<Q extends string>(
+  config: ProviderConfig,
+  memory: QuirkMemory<Q>,
+  build: (quirks: ReadonlySet<Q>) => { url: string; body: Record<string, unknown>; headers?: Record<string, string> },
+  learn: (err: ProviderError, body: Record<string, unknown>, quirks: ReadonlySet<Q>) => Q | undefined,
+  opts: { signal?: AbortSignal; fetch?: FetchLike; retries?: number } = {},
+): Promise<Response> {
+  const quirks = memory.get(config);
+  for (let attempt = 0; ; attempt++) {
+    const { url, body, headers } = build(quirks);
+    try {
+      return await request(config, url, { body, signal: opts.signal, fetch: opts.fetch, headers });
+    } catch (err) {
+      const q = err instanceof ProviderError && (err.status === 400 || err.status === 422) && attempt < (opts.retries ?? 2) ? learn(err, body, quirks) : undefined;
+      if (!q || quirks.has(q)) throw err;
+      quirks.add(q);
+      memory.set(config, quirks);
+    }
+  }
 }
 
 /** Joins a base URL and a path without doubling slashes. */

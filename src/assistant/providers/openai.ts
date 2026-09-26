@@ -7,8 +7,10 @@ import {
   currentTurnAssistant,
   joinUrl,
   parseToolArgs,
+  quirkMemory,
   replayArgs,
   request,
+  requestLearning,
   stepText,
   toolResultString,
   userPartText,
@@ -113,11 +115,16 @@ const EFFORT_PRESETS = new Set(['openai', 'groq', 'xai']);
 /** Optional request fields a server may reject: dropped (and remembered) after a 400 that names them. */
 const OPTIONAL_FIELDS = ['stream_options', 'reasoning_effort', 'reasoning', 'max_completion_tokens', 'parallel_tool_calls'] as const;
 type OptionalField = (typeof OPTIONAL_FIELDS)[number];
-const rejected = new Map<string, Set<OptionalField>>();
-const rejectedKey = (c: ProviderConfig) => `${c.baseUrl}|${c.model}`;
+/**
+ * What a server taught us: fields to leave out, and `effort-none`: the model
+ * reasons by default but takes function tools on this endpoint only with
+ * `reasoning_effort: 'none'` (OpenAI's newest models on /chat/completions).
+ */
+export type OpenAIQuirk = OptionalField | 'effort-none';
+const quirks = quirkMemory<OpenAIQuirk>();
 
 /** The request body (exported for tests). */
-export function buildOpenAIBody(req: ModelRequest, drop: ReadonlySet<OptionalField> = new Set()): Record<string, unknown> {
+export function buildOpenAIBody(req: ModelRequest, drop: ReadonlySet<OpenAIQuirk> = new Set()): Record<string, unknown> {
   const { config } = req;
   const body: Record<string, unknown> = { model: config.model, messages: toOpenAIMessages(req), stream: true };
   if (!drop.has('stream_options')) body.stream_options = { include_usage: true };
@@ -131,7 +138,9 @@ export function buildOpenAIBody(req: ModelRequest, drop: ReadonlySet<OptionalFie
     else body.max_tokens = config.maxOutputTokens;
   }
   const effort = config.reasoning;
-  if (effort && effort !== 'off') {
+  if (drop.has('effort-none')) {
+    if (!drop.has('reasoning_effort')) body.reasoning_effort = 'none';
+  } else if (effort && effort !== 'off') {
     if (config.presetId === 'openrouter') {
       if (!drop.has('reasoning')) body.reasoning = { effort };
     } else if (EFFORT_PRESETS.has(config.presetId) && !drop.has('reasoning_effort')) body.reasoning_effort = effort;
@@ -139,7 +148,8 @@ export function buildOpenAIBody(req: ModelRequest, drop: ReadonlySet<OptionalFie
   return body;
 }
 
-function authHeaders(config: ProviderConfig): Record<string, string> {
+/** The bearer key and OpenRouter's referer (also used by the Responses adapter). */
+export function authHeaders(config: ProviderConfig): Record<string, string> {
   const h: Record<string, string> = {};
   if (config.apiKey) h.authorization = `Bearer ${config.apiKey}`;
   if (config.presetId === 'openrouter' && !Object.keys(config.headers ?? {}).some((k) => k.toLowerCase() === 'http-referer') && typeof location !== 'undefined')
@@ -270,21 +280,14 @@ export function createOpenAIAdapter(opts: AdapterOptions = {}): ProviderAdapter 
     kind: 'openai',
     async *stream(req) {
       const { config, signal } = req;
-      const key = rejectedKey(config);
-      const drop = new Set(rejected.get(key) ?? []);
-      let res: Response | undefined;
-      for (let attempt = 0; !res; attempt++) {
-        const body = buildOpenAIBody(req, drop);
-        try {
-          res = await request(config, joinUrl(config.baseUrl, 'chat/completions'), { body, signal, fetch: opts.fetch, headers: { ...authHeaders(config), accept: 'text/event-stream' } });
-        } catch (err) {
-          // a server that rejects an optional field: drop it, remember, and ask again (at most twice)
-          const field = err instanceof ProviderError && (err.status === 400 || err.status === 422) && attempt < 2 ? rejectedField(err, body) : undefined;
-          if (!field) throw err;
-          drop.add(field);
-          rejected.set(key, new Set(drop));
-        }
-      }
+      // a server that rejects an optional field: drop it, remember, and ask again
+      const res = await requestLearning(
+        config,
+        quirks,
+        (q) => ({ url: joinUrl(config.baseUrl, 'chat/completions'), body: buildOpenAIBody(req, q), headers: { ...authHeaders(config), accept: 'text/event-stream' } }),
+        rejectedField,
+        { signal, fetch: opts.fetch, retries: 3 },
+      );
       if (!res.body) throw new ProviderError('The provider sent an empty response.', { retryable: true });
       yield* parseOpenAIStream(res.body, signal, config);
     },
@@ -306,8 +309,10 @@ export function createOpenAIAdapter(opts: AdapterOptions = {}): ProviderAdapter 
   };
 }
 
-function rejectedField(err: ProviderError, body: Record<string, unknown>): OptionalField | undefined {
+function rejectedField(err: ProviderError, body: Record<string, unknown>, known: ReadonlySet<OpenAIQuirk>): OpenAIQuirk | undefined {
   const text = `${err.detail ?? ''} ${err.message}`.toLowerCase();
+  // "Function tools with reasoning_effort are not supported for <model> in /v1/chat/completions … set reasoning_effort to 'none'": ask again without reasoning
+  if (!known.has('effort-none') && body.reasoning_effort !== 'none' && /reasoning_effort/.test(text) && /not supported|none/.test(text)) return 'effort-none';
   for (const f of OPTIONAL_FIELDS) if (f in body && text.includes(f)) return f;
   if ('stream_options' in body && /include_usage|extra (inputs|fields)|unrecognized|unknown (field|parameter)|additional properties/.test(text)) return 'stream_options';
   return undefined;
@@ -315,5 +320,5 @@ function rejectedField(err: ProviderError, body: Record<string, unknown>): Optio
 
 /** Forgets the fields servers rejected (tests). */
 export function resetOpenAIQuirks() {
-  rejected.clear();
+  quirks.clear();
 }

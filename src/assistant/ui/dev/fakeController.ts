@@ -43,7 +43,7 @@ const uid = (p: string) => `${p}_${(++seq).toString(36)}${Math.random().toString
 const PROVIDERS: ProviderConfig[] = [
   { id: 'c_deepseek', presetId: 'deepseek', label: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-demo-deepseek', model: 'deepseek-v4-flash', tools: true, vision: false, reasoning: 'medium' },
   { id: 'c_anthropic', presetId: 'anthropic', label: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'sk-ant-demo', model: 'claude-sonnet-4-5', tools: true, vision: true, reasoning: 'low' },
-  { id: 'c_openai', presetId: 'openai', label: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-demo', model: 'gpt-5-mini', tools: true, vision: true },
+  { id: 'c_openai', presetId: 'openai', label: 'OpenAI', kind: 'openai-responses', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-demo', model: 'gpt-5-mini', tools: true, vision: true },
   { id: 'c_ollama', presetId: 'ollama', label: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', model: 'qwen3:14b', tools: true, vision: false },
 ];
 
@@ -605,10 +605,11 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
       if (config.baseUrl.includes('fail')) throw new Error('Could not list models (CORS).');
       const byKind: Record<string, string[]> = {
         openai: ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1', 'o4-mini', 'deepseek-v4-flash', 'deepseek-reasoner'],
+        'openai-responses': ['gpt-6-sol', 'gpt-6-luna', 'gpt-5', 'gpt-5-mini', 'gpt-4.1'],
         anthropic: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
         gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
       };
-      const windows: Record<string, number> = { openai: 400_000, anthropic: 200_000, gemini: 1_048_576 };
+      const windows: Record<string, number> = { openai: 400_000, 'openai-responses': 400_000, anthropic: 200_000, gemini: 1_048_576 };
       return byKind[config.kind].map((id) => ({ id, contextWindow: id.startsWith('deepseek') ? 128_000 : windows[config.kind] }));
     },
     compact: () => {
