@@ -10,6 +10,7 @@ import { themeRev } from '../prefs';
 import { useSignal } from '../signal';
 import { cssVar, font, ink, textLen, wash } from '../tokens';
 import { fitStore } from '../toolWindow';
+import { binWidth, Envelope, LiveClock } from '../liveEnvelope';
 
 /**
  * Strip charts of the readings a live source delivers by time — the rig's
@@ -133,54 +134,92 @@ function useLiveState(app: App) {
 export function LiveBody({ app }: { app: App }) {
   const { series, shown, windowMs, wellId } = useLiveState(app);
   const cv = useRef<HTMLCanvasElement>(null);
-  const hover = useRef<number | null>(null);
-  const size = useRef({ W: 0, H: 0 });
-  const draw = useRef<() => void>(() => {});
+  const ov = useRef<HTMLCanvasElement>(null);
   const channels = useMemo(() => shown.filter((n) => series?.channels.has(n)), [shown, series, series?.channels.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  draw.current = () => {
-    const c = cv.current;
-    if (!c || !series) return;
-    paint(c, size.current.W, size.current.H, series, channels, windowMs === 'all' ? Infinity : Number(windowMs), hover.current);
-  };
-
-  // redraw when readings arrive, the size changes or the pointer moves; at most once a frame
+  // The chart draws from per-channel min / max bins (see liveEnvelope.ts), so a
+  // frame costs one span per pixel column however many readings there are.
+  // While readings stream in, the time axis moves on every frame, trailing the
+  // newest reading a little, instead of jumping with each batch; the pointer's
+  // line and values are on an overlay canvas, so hovering never redraws the
+  // chart. Nothing is drawn while the chart is out of sight.
   useEffect(() => {
-    let raf = 0;
-    const kick = () => {
-      if (!raf) raf = requestAnimationFrame(() => ((raf = 0), draw.current()));
-    };
-    const off = app.hub.seriesRev.subscribe(kick);
-    // a new theme, accent or density: the colours and text sizes change
-    const offLook = themeRev.subscribe(kick);
     const c = cv.current;
+    const o = ov.current;
+    if (!c || !o || !series) return;
+    const win = windowMs === 'all' ? Infinity : Number(windowMs);
+    const clock = new LiveClock();
+    const envelopes = new Map<string, Envelope>();
+    let size = { W: 0, H: 0 };
+    let hoverX: number | null = null;
+    let view: View | null = null;
+    let visible = true;
+    let raf = 0;
+    let dirty = true;
+    const frame = () => {
+      raf = 0;
+      if (!visible || document.hidden || !size.W || !size.H) return;
+      const now = performance.now();
+      const moving = clock.moving(now);
+      if (dirty || moving) {
+        dirty = false;
+        view = paint(c, size.W, size.H, series, channels, win, clock.edge(now), envelopes);
+      }
+      paintHover(o, size.W, size.H, series, channels, view, hoverX);
+      // keep the strip moving while readings arrive; at rest, draw only on a change
+      if (moving) raf = requestAnimationFrame(frame);
+    };
+    const kick = (redraw = true) => {
+      if (redraw) dirty = true;
+      if (!raf) raf = requestAnimationFrame(frame);
+    };
+    const arrive = () => {
+      clock.arrive(series.last, performance.now());
+      kick();
+    };
+    clock.arrive(series.last, performance.now());
+    const offData = app.hub.seriesRev.subscribe(arrive);
+    // a new theme, accent or density: the colours and text sizes change
+    const offLook = themeRev.subscribe(() => kick());
     // the size comes with the observation, once per frame after layout: draw now, so the chart never shows stretched
     const ro = new ResizeObserver((es) => {
       const r = es[es.length - 1].contentRect;
-      size.current = { W: Math.round(r.width), H: Math.round(r.height) };
-      draw.current();
+      size = { W: Math.round(r.width), H: Math.round(r.height) };
+      dirty = true;
+      if (raf) cancelAnimationFrame(raf);
+      frame();
     });
-    if (c?.parentElement) ro.observe(c.parentElement);
+    if (c.parentElement) ro.observe(c.parentElement);
+    // a background tab, a folded column or a hidden panel: no drawing until it shows again
+    const io = new IntersectionObserver((es) => {
+      visible = es[es.length - 1].isIntersecting;
+      if (visible) kick();
+    });
+    io.observe(c);
+    const onVisibility = () => !document.hidden && kick();
+    document.addEventListener('visibilitychange', onVisibility);
     const move = (e: PointerEvent) => {
-      hover.current = e.offsetX;
-      kick();
+      hoverX = e.offsetX;
+      kick(false);
     };
     const leave = () => {
-      hover.current = null;
-      kick();
+      hoverX = null;
+      kick(false);
     };
-    c?.addEventListener('pointermove', move);
-    c?.addEventListener('pointerleave', leave);
+    o.addEventListener('pointermove', move);
+    o.addEventListener('pointerleave', leave);
     kick();
     return () => {
-      off();
+      offData();
       offLook();
       ro.disconnect();
-      c?.removeEventListener('pointermove', move);
-      c?.removeEventListener('pointerleave', leave);
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
+      o.removeEventListener('pointermove', move);
+      o.removeEventListener('pointerleave', leave);
       cancelAnimationFrame(raf);
     };
-  }, [app, wellId, channels, windowMs]);
+  }, [app, series, wellId, channels, windowMs]);
 
   if (!series?.n)
     return (
@@ -195,9 +234,10 @@ export function LiveBody({ app }: { app: App }) {
       </Empty>
     );
   return (
-    // the canvas keeps its backing store's size (grown in steps); this box clips it
+    // the canvases keep their backing store's size (grown in steps); this box clips them
     <div className="relative min-h-0 flex-1 overflow-hidden">
-      <canvas ref={cv} role="img" aria-label={`Live readings: ${channels.join(', ')}`} className="absolute top-0 left-0 block cursor-crosshair" />
+      <canvas ref={cv} role="img" aria-label={`Live readings: ${channels.join(', ')}`} className="absolute top-0 left-0 block" />
+      <canvas ref={ov} aria-hidden className="absolute top-0 left-0 block cursor-crosshair" />
     </div>
   );
 }
@@ -206,46 +246,59 @@ export function LiveBody({ app }: { app: App }) {
 
 const GAP = 4;
 
-function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], windowMs: number, hoverX: number | null) {
+/** What the last chart frame drew: the time mapping and where each track is, for the pointer overlay. */
+interface View {
+  t0: number;
+  span: number;
+  axis: number;
+  tracks: { top: number; th: number; color: string }[];
+}
+
+const xOf = (v: View, W: number, t: number) => ((t - v.t0) / v.span) * (W - 8) + 4;
+
+function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], windowMs: number, t1: number, envelopes: Map<string, Envelope>): View | null {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  if (!W || !H) return;
   fitStore(c, W, H, dpr);
   // the time axis and the label offsets grow with the density's text
   const AXIS = textLen(18);
   const g = c.getContext('2d')!;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, c.width, c.height);
-  if (!names.length) return;
-  const t1 = s.last;
+  if (!names.length || !Number.isFinite(t1)) return null;
   // a fixed window once there is enough data; until then the data fills the width
   const t0 = Number.isFinite(windowMs) ? Math.max(t1 - windowMs, s.first) : s.first;
   const span = Math.max(1, t1 - t0);
-  const x = (t: number) => ((t - t0) / span) * (W - 8) + 4;
-  const i0 = s.indexAt(t0);
+  const view: View = { t0, span, axis: AXIS, tracks: [] };
+  const x = (t: number) => xOf(view, W, t);
+  // the bins stay the same while the window only slides: for "All" the width steps up as the data doubles
+  const bin = binWidth(Number.isFinite(windowMs) ? windowMs : span, W - 8);
   const th = (H - AXIS - GAP * (names.length - 1)) / names.length;
-  const hoverT = hoverX === null ? null : t0 + ((hoverX - 4) / (W - 8)) * span;
-  const hoverI = hoverT === null ? -1 : Math.min(s.n - 1, s.indexAt(hoverT));
 
   names.forEach((name, k) => {
     const ch = s.channels.get(name)!;
     const top = k * (th + GAP);
     const color = cssVar(`--tecton-palette-${COLORS[k % COLORS.length]}-560`, '#7fe3ff');
-    // range of the visible readings
+    view.tracks.push({ top, th, color });
+    let env = envelopes.get(name);
+    if (!env) envelopes.set(name, (env = new Envelope()));
+    env.update(s, ch.v, bin);
+    const [a, b] = env.range(t0, t1);
+    // range of the visible readings, and the newest one shown
     let lo = Infinity;
     let hi = -Infinity;
-    let last = NaN;
-    for (let i = i0; i < s.n; i++) {
-      const v = ch.v[i];
-      if (Number.isNaN(v)) continue;
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-      last = v;
+    for (let i = a; i <= b; i++) {
+      const m = env.mn[i];
+      if (Number.isNaN(m)) continue;
+      if (m < lo) lo = m;
+      if (env.mx[i] > hi) hi = env.mx[i];
     }
+    const last = lastBefore(s, ch.v, t1);
     g.fillStyle = wash(0.03);
     g.fillRect(0, top, W, th);
     if (!Number.isFinite(lo)) {
       g.fillStyle = ink.faint;
       g.font = font.sans(11);
+      g.textBaseline = 'alphabetic';
       g.fillText(`${name} — no readings in this window`, 8, top + textLen(16));
       return;
     }
@@ -257,37 +310,27 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
     lo -= pad;
     hi += pad;
     const y = (v: number) => top + th - 2 - ((v - lo) / (hi - lo)) * (th - 4);
-    // one vertical span per pixel column (min to max of the readings in it), joined
+    // one vertical span per bin (min to max of its readings), joined; clipped to the track's time
+    g.save();
+    g.beginPath();
+    g.rect(4, top, W - 8, th);
+    g.clip();
     g.strokeStyle = color;
     g.lineWidth = 1.25;
     g.beginPath();
-    let col = -1;
-    let cmin = 0;
-    let cmax = 0;
     let started = false;
-    const flush = () => {
-      if (col < 0) return;
+    for (let i = a; i <= b; i++) {
+      const mn = env.mn[i];
+      if (Number.isNaN(mn)) continue;
+      const px = x((env.base + i + 0.5) * env.bin);
       if (!started) {
-        g.moveTo(col, y(cmin));
+        g.moveTo(px, y(mn));
         started = true;
-      } else g.lineTo(col, y(cmin));
-      if (cmax !== cmin) g.lineTo(col, y(cmax));
-    };
-    for (let i = i0; i < s.n; i++) {
-      const v = ch.v[i];
-      if (Number.isNaN(v)) continue;
-      const px = Math.round(x(s.t[i]));
-      if (px !== col) {
-        flush();
-        col = px;
-        cmin = cmax = v;
-      } else {
-        if (v < cmin) cmin = v;
-        if (v > cmax) cmax = v;
-      }
+      } else g.lineTo(px, y(mn));
+      if (env.mx[i] !== mn) g.lineTo(px, y(env.mx[i]));
     }
-    flush();
     g.stroke();
+    g.restore();
     // labels: name and unit on the left, the latest value on the right
     g.font = font.sans(11, 600);
     g.fillStyle = color;
@@ -297,11 +340,10 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
     g.font = font.sans(10);
     g.fillStyle = ink.muted;
     g.fillText(`${ch.unit || ''}  ${fmt(lo + pad)}–${fmt(hi - pad)}`, 14 + nameW, top + textLen(6));
-    const shownV = hoverI >= 0 ? ch.v[hoverI] : last;
     g.font = font.mono(th > 44 ? 16 : 12, 600);
     g.fillStyle = ink.text;
     g.textAlign = 'right';
-    g.fillText(Number.isNaN(shownV) ? '—' : fmt(shownV), W - 8, top + textLen(4));
+    g.fillText(Number.isNaN(last) ? '—' : fmt(last), W - 8, top + textLen(4));
     g.textAlign = 'left';
   });
 
@@ -314,37 +356,78 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
   const step = steps.find((st) => (st / span) * W > 70) ?? steps[steps.length - 1];
   g.strokeStyle = wash(0.08);
   g.lineWidth = 1;
+  g.beginPath();
   for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
     const px = Math.round(x(t)) + 0.5;
-    g.beginPath();
     g.moveTo(px, 0);
     g.lineTo(px, axisTop);
-    g.stroke();
+  }
+  g.stroke();
+  g.textAlign = 'center';
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+    const px = Math.round(x(t)) + 0.5;
     const d = new Date(t);
     const label = step < 6e4 ? d.toISOString().slice(11, 19) : d.toISOString().slice(11, 16);
-    g.textAlign = 'center';
     g.fillText(label, Math.min(W - 24, Math.max(24, px)), axisTop + AXIS / 2);
   }
   g.textAlign = 'left';
-  // the pointer's time
-  if (hoverX !== null && hoverI >= 0) {
-    const px = Math.round(x(s.t[hoverI])) + 0.5;
-    g.strokeStyle = ink.muted;
-    g.setLineDash([3, 3]);
-    g.beginPath();
-    g.moveTo(px, 0);
-    g.lineTo(px, axisTop);
-    g.stroke();
-    g.setLineDash([]);
-    const label = new Date(s.t[hoverI]).toISOString().slice(11, 19);
-    g.font = font.mono(10, 600);
+  return view;
+}
+
+/** The newest reading of a channel at or before `t` (NaN when none is near). */
+function lastBefore(s: TimeSeries, v: Float32Array, t: number): number {
+  const end = Math.min(s.n, s.indexAt(t + 1e-6));
+  for (let i = end - 1, k = 0; i >= 0 && k < 64; i--, k++) if (!Number.isNaN(v[i])) return v[i];
+  return NaN;
+}
+
+/** The pointer's time over the chart: a line, its time, and each track's reading there. */
+function paintHover(o: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names: string[], view: View | null, hoverX: number | null) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  fitStore(o, W, H, dpr);
+  const g = o.getContext('2d')!;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, o.width, o.height);
+  if (hoverX === null || !view || !s.n) return;
+  const t = view.t0 + ((hoverX - 4) / (W - 8)) * view.span;
+  const i = Math.min(s.n - 1, s.indexAt(t));
+  const px = Math.round(xOf(view, W, s.t[i])) + 0.5;
+  const axisTop = H - view.axis;
+  g.strokeStyle = ink.muted;
+  g.lineWidth = 1;
+  g.setLineDash([3, 3]);
+  g.beginPath();
+  g.moveTo(px, 0);
+  g.lineTo(px, axisTop);
+  g.stroke();
+  g.setLineDash([]);
+  g.textBaseline = 'middle';
+  // each track's reading at the pointer, beside the line
+  g.font = font.mono(11, 600);
+  const right = px < W - 90;
+  names.forEach((name, k) => {
+    const tr = view.tracks[k];
+    const v = tr && s.channels.get(name)?.v[i];
+    if (!tr || v === undefined || Number.isNaN(v)) return;
+    const label = fmt(v);
     const w = g.measureText(label).width + 8;
-    const lx = Math.min(W - w, Math.max(0, px - w / 2));
+    const h = textLen(16);
+    const lx = right ? px + 4 : px - 4 - w;
+    const ly = tr.top + tr.th / 2 - h / 2;
     g.fillStyle = ink.card;
-    g.fillRect(lx, axisTop + 2, w, AXIS - 4);
-    g.fillStyle = ink.text;
-    g.fillText(label, lx + 4, axisTop + AXIS / 2);
-  }
+    g.fillRect(lx, ly, w, h);
+    g.fillStyle = tr.color;
+    g.fillText(label, lx + 4, ly + h / 2);
+  });
+  // the pointer's time on the axis
+  const label = new Date(s.t[i]).toISOString().slice(11, 19);
+  g.font = font.mono(10, 600);
+  const w = g.measureText(label).width + 8;
+  const lx = Math.min(W - w, Math.max(0, px - w / 2));
+  g.fillStyle = ink.card;
+  g.fillRect(lx, axisTop + 2, w, view.axis - 4);
+  g.fillStyle = ink.text;
+  g.fillText(label, lx + 4, axisTop + view.axis / 2);
 }
 
 function fmt(v: number): string {
