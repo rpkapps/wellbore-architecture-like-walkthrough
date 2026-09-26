@@ -2,7 +2,7 @@ import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
 import { ChartScatterIcon, ColumnsIcon, FocusIcon, FoldVerticalIcon, NavigationIcon, RadarIcon, ScissorsIcon, TargetIcon } from 'lucide-react';
 import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
-import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
+import { DEFAULT_PARAMS, PARAM_RANGES, paramProblem, type NumericParam, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
 import { FEATURES, graphicsQuality, labelOf, setGraphicsQuality, type FeatureDef, type FeatureId, type GraphicsQuality } from '../features/registry';
 import { CorrelationFeature } from '../features/correlation';
@@ -21,6 +21,7 @@ import { atDefault, groupOf, maximised, place, placementLabel, placements, PLACE
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
 import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema, type Selection } from '../ui/selection';
+import { assistantActions } from '../assistant-host/actions';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -37,7 +38,7 @@ import { defineAction, type Action, type AnyAction } from './registry';
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts', assistant: 'Assistant' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -65,8 +66,8 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
 /** How each home names a feature in the palette. */
 const HOME_WORD: Record<FeatureDef['home'], string> = { view: 'view', overlay: 'overlay', colour: 'colour by', wells: 'wells', graphics: 'graphics', tool: 'tool' };
 
-/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells". */
-function featureChoice(f: FeatureDef, on: boolean): string {
+/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells" (`on`: the feature is on now, so the choice turns it off). */
+export function featureChoice(f: FeatureDef, on: boolean): string {
   switch (f.home) {
     case 'overlay':
       return `${on ? 'Hide' : 'Show'} ${labelOf(f.id)}`;
@@ -450,7 +451,8 @@ export function appActions(): AnyAction<App>[] {
         const visible = app.engine.geology.state.get(sel.id)?.visible;
         return visible === undefined ? null : { input: { formation: sel.id, visible: !visible }, label: visible ? 'Hide' : 'Show' };
       },
-      run: (app, { formation, visible, opacity }) => app.setLayer(formation, { visible, opacity }),
+      run: (app, { formation, visible, opacity }) =>
+        app.setLayer(formation, { ...(visible !== undefined ? { visible } : {}), ...(opacity !== undefined ? { opacity } : {}) }),
     }),
     A({
       id: 'scene.isolate',
@@ -1026,7 +1028,9 @@ export function appActions(): AnyAction<App>[] {
       id: 'interp.set_parameter',
       title: 'Set interpretation parameter',
       description:
-        'Changes a petrophysical parameter of the active well (Vsh from GR, porosity, Archie / Simandoux saturation, net pay cut-offs) and re-interprets. Keys: grClean, grShale, rhoMa, rhoFl, a, m, n, rw, rwTemp, rsh, cutVsh, cutPhi, cutSw.',
+        `Changes a petrophysical parameter of the active well (Vsh from GR, porosity, Archie / Simandoux saturation, net pay cut-offs) and re-interprets. Allowed ranges: ${Object.entries(PARAM_RANGES)
+          .map(([k, [lo, hi]]) => `${k} ${lo}–${hi}`)
+          .join(', ')}; grClean stays below grShale.`,
       category: 'Interpretation',
       where: 'Interpretation',
       input: z.object({ key: z.enum(NUMERIC_PARAMS), value: z.number() }),
@@ -1041,7 +1045,10 @@ export function appActions(): AnyAction<App>[] {
       },
       enabled: (app) => !!app.engine.activeWell.petro?.available,
       run: (app, { key, value }) => {
-        (app.engine.activeWell.params as unknown as Record<string, number>)[key] = value;
+        const params = app.engine.activeWell.params;
+        const problem = paramProblem(params, key as NumericParam, value);
+        if (problem) throw new Error(problem);
+        (params as unknown as Record<string, number>)[key] = value;
         app.reinterpret();
         return { key, value };
       },
@@ -1322,5 +1329,8 @@ export function appActions(): AnyAction<App>[] {
       where: 'Top bar › Full screen',
       run: () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()),
     }),
+
+    // ------------------------------------------------------------------ assistant
+    ...assistantActions(),
   ];
 }

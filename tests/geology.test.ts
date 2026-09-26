@@ -176,3 +176,23 @@ describe('section box slabs', () => {
     }
   });
 });
+
+describe('formation layer state', () => {
+  const field = { extent: { xMin: -1000, xMax: 3000, nMin: 0, nMax: 2000 }, horizons: horizons() } as unknown as FieldModel;
+
+  it('keeps the opacity when only visibility changes (a missing field is never written)', () => {
+    const geo = new GeologyModel(field);
+    const before = geo.state.get('hugin')!.opacity;
+    geo.setLayer('hugin', { visible: false, opacity: undefined });
+    expect(geo.state.get('hugin')).toEqual({ visible: false, opacity: before });
+  });
+
+  it('ignores a non-finite opacity and clamps it to 0–1', () => {
+    const geo = new GeologyModel(field);
+    const before = geo.state.get('draupne')!.opacity;
+    geo.setLayer('draupne', { opacity: NaN });
+    expect(geo.state.get('draupne')!.opacity).toBe(before);
+    geo.setLayer('draupne', { opacity: 7 });
+    expect(geo.state.get('draupne')!.opacity).toBe(1);
+  });
+});
