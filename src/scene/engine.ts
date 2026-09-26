@@ -221,6 +221,8 @@ export class Engine {
     this.composer.addPass(this.final);
 
     this.rig = new CameraRig(this.camera, this.renderer.domElement);
+    // Explore's wheel zooms toward what is under the pointer
+    this.rig.pickPoint = (x, y) => this.pick(x, y)?.point ?? null;
     this.lutTex = makeLutTexture('resistivity');
 
     this.env = new Environment(field);

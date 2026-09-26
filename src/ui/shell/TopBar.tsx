@@ -48,7 +48,7 @@ function GroupDivider() {
 export function TopBar({ app, brand = true }: { app: App; brand?: boolean }) {
   const ready = useSignal(app.ready);
   return (
-    <AppShellHeader className="gap-2 px-2 sm:px-3">
+    <AppShellHeader data-intro="top" className="gap-2 px-2 sm:px-3">
       <AppShellBrand className="shrink-0">
         {/* mounts as the loader leaves, so the loader's logo flies here */}
         {brand ? (

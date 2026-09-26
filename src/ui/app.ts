@@ -202,6 +202,8 @@ export class App {
   private resolveReady!: () => void;
   /** resolves once the first well is on screen */
   readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
+  /** The page loader's progress line: each step of the start-up after the data has loaded (set by the loader). */
+  onBootStep?: (msg: string, f: number) => void;
 
   readonly importer: DataImporter;
   /** live and streamed data: the connectors (src/connect) */
@@ -284,28 +286,52 @@ export class App {
     this.bindKeys();
     for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
     this.frameModules = [...this.modules.values()].filter((m) => m.frame);
-    void this.loadWell(this.field.primary.id, false).then(() => {
-      const w = this.engine.activeWell;
-      const hug = w.zones.find((z) => z.formationId === 'hugin');
-      this.engine.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
-      this.chapterIdx = -1;
-      this.sectionAlongWell();
-      // features start once the first well is on screen
-      for (const m of this.modules.values())
-        this.flags.watch(m.id, (on) => {
-          try {
-            if (on) m.enable();
-            else m.disable();
-            e.requestRender();
-          } catch (err) {
-            console.error(`feature ${m.id}`, err);
-            this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
-          }
-        });
-      if (!prefs.value.labels) this.setDisplay({ labels: false });
-      this.ready.set(true);
-      this.resolveReady();
-    });
+    void this.boot();
+  }
+
+  /**
+   * Start-up after the data has loaded, in steps the loader reports, each
+   * given a frame to paint before its work runs: the first well's geometry,
+   * the log tracks, the overlays, then the shaders, compiled before the first
+   * frame so the loader does not leave onto a stall.
+   */
+  private async boot() {
+    const step = async (msg: string, f: number) => {
+      this.onBootStep?.(msg, f);
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    };
+    // (the loader sets its hook once the app is constructed)
+    await Promise.resolve();
+    const e = this.engine;
+    await step(`Building the ${this.field.primary.name} wellbore`, 0.88);
+    await this.loadWell(this.field.primary.id, false);
+    const w = e.activeWell;
+    const hug = w.zones.find((z) => z.formationId === 'hugin');
+    e.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
+    this.chapterIdx = -1;
+    this.sectionAlongWell();
+    await step('Starting the overlays', 0.92);
+    // features start once the first well is on screen
+    for (const m of this.modules.values())
+      this.flags.watch(m.id, (on) => {
+        try {
+          if (on) m.enable();
+          else m.disable();
+          e.requestRender();
+        } catch (err) {
+          console.error(`feature ${m.id}`, err);
+          this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
+        }
+      });
+    if (!prefs.value.labels) this.setDisplay({ labels: false });
+    await step('Preparing the shaders', 0.95);
+    try {
+      await e.renderer.compileAsync(e.scene, e.camera);
+    } catch {
+      /* compiled on the first frame instead */
+    }
+    this.ready.set(true);
+    this.resolveReady();
   }
 
   /**

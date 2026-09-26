@@ -404,7 +404,6 @@ export async function loadVolve(baseUrl: string, report?: (msg: string, frac: nu
   const primary = field.primary;
   await onProgress(`Loading ${primary.name} logs`, 0.3);
   await field.ensureLoaded(primary, (m) => report?.(m, 0.5));
-  await onProgress('Building scene', 0.8);
   return field;
 }
 

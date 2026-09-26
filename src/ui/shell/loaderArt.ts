@@ -220,7 +220,7 @@ export function createMorph(g: Ctx, colors: MorphColors, sprite: (size: number) 
       const sc = s * 0.34;
       const cx = w / 2;
       const cy = h / 2;
-      const out = leaveAt === null ? 0 : Math.min(1, (now - leaveAt) / 700);
+      const out = leaveAt === null ? 0 : Math.min(1, (now - leaveAt) / 1100);
       const fade = 1 - out;
       // halo behind the form, brighter mid-morph
       const halo = mix(ca, cb, m);

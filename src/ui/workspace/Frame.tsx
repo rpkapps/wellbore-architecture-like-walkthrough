@@ -240,7 +240,7 @@ export function WorkspaceFrame({
     <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden">
       <div className="absolute inset-0">{viewport}</div>
       {/* the area the panels leave free: overlays are laid out in it */}
-      <div ref={freeEl} className="pointer-events-none absolute @container [contain:size_layout_style]" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
+      <div ref={freeEl} data-intro="overlays" className="pointer-events-none absolute @container [contain:size_layout_style]" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
         {overlay}
       </div>
       {!hidden && (
@@ -297,7 +297,7 @@ export function WorkspaceFrame({
       )}
       <Activity mode={hidden ? 'hidden' : 'visible'}>
         <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
-          <div className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
+          <div data-intro="timeline" className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
             {timeline}
           </div>
         </ViewTransition>

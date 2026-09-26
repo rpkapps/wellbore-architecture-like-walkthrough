@@ -46,6 +46,11 @@ export class CameraRig {
   private orbitOffset = new THREE.Vector3(-60, 30, 60);
   onMdChange?: (md: number) => void;
   onUserInput?: () => void;
+  /** The point of the scene under a pointer position (set by the engine), for zooming toward it. */
+  pickPoint?: (clientX: number, clientY: number) => THREE.Vector3 | null;
+  /** Explore's wheel zoom still to apply (log of the scale), eased in over a few frames, toward `zoomAnchor`. */
+  private zoomPending = 0;
+  private zoomAnchor = new THREE.Vector3();
   wellbore?: WellboreAssembly;
   mdMax = 1000;
   chaseDistance = 1;
@@ -62,6 +67,18 @@ export class CameraRig {
     this.orbit.zoomSpeed = 1.1;
     this.orbit.enabled = false;
     this.orbit.addEventListener('start', () => this.onUserInput?.());
+    // Explore's orbit zooms toward the point under the pointer (the orbit controls' own zoom goes
+    // toward the orbit centre): caught before the controls see the wheel. Guided keeps its own.
+    dom.addEventListener(
+      'wheel',
+      (e) => {
+        if (this.mode !== 'explore' || this.exploreView !== 'orbit' || !this.orbit.enabled) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.zoomAt(e);
+      },
+      { passive: false, capture: true },
+    );
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
       this.keys.add(e.code);
@@ -274,8 +291,49 @@ export class CameraRig {
     this.camera.lookAt(this.smoothedLook);
   }
 
+  /** Queue a wheel zoom toward the point under the pointer (or along its ray, at the orbit centre's distance). */
+  private zoomAt(e: WheelEvent) {
+    if (this.flight) {
+      this.orbit.target.copy(this.lookTarget);
+      this.flight = null;
+    }
+    // lines and pages as pixels; a notch of a mouse wheel (~100 px) is about 16 %
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    const hit = this.pickPoint?.(e.clientX, e.clientY);
+    if (hit) this.zoomAnchor.copy(hit);
+    else {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const ndc = new THREE.Vector3(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1, 0.5);
+      const dir = ndc.unproject(this.camera).sub(this.camera.position).normalize();
+      this.zoomAnchor.copy(this.camera.position).addScaledVector(dir, this.camera.position.distanceTo(this.orbit.target));
+    }
+    this.zoomPending += Math.max(-0.6, Math.min(0.6, dy * 0.0015 * this.orbit.zoomSpeed));
+    this.onUserInput?.();
+  }
+
+  /**
+   * Ease in the queued zoom: the camera and the orbit centre scale about the
+   * anchor, so the point under the pointer stays under it. Never closer than
+   * a few metres to the anchor, nor further than the orbit allows.
+   */
+  private applyZoom(dt: number) {
+    if (Math.abs(this.zoomPending) < 1e-4) {
+      this.zoomPending = 0;
+      return;
+    }
+    const step = this.zoomPending * Math.min(1, dt * 14);
+    this.zoomPending -= step;
+    const a = this.zoomAnchor;
+    const d = this.camera.position.distanceTo(a);
+    const k = Math.max(Math.min(1, 3 / Math.max(d, 1e-6)), Math.min(this.orbit.maxDistance / Math.max(d, 1e-6), Math.exp(step)));
+    if (k === 1) return;
+    this.camera.position.sub(a).multiplyScalar(k).add(a);
+    this.orbit.target.sub(a).multiplyScalar(k).add(a);
+  }
+
   private updateExplore(dt: number) {
     if (this.exploreView === 'orbit') {
+      this.applyZoom(dt);
       this.orbit.update();
       this.panWithKeys(dt);
       return;

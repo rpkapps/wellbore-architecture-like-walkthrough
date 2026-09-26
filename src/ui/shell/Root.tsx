@@ -12,6 +12,10 @@ import { Workspace } from './Workspace';
 /** The loader stays at least this long before it starts to leave, so a fast load never flashes it. */
 const LOADER_MIN_MS = 2000;
 
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** After the next frame is painted. */
+const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+
 type Boot = { stage: 'loading'; msg: string; f: number } | { stage: 'failed'; msg: string } | { stage: 'running'; app: App };
 
 /**
@@ -27,14 +31,17 @@ export function Root() {
     let cancelled = false;
     const shownAt = performance.now();
     loadVolve('./data/volve/', (msg, f) => setProgress({ msg, f }))
-      .then((field) => {
+      .then(async (field) => {
         if (cancelled) return;
-        setProgress({ msg: 'Building geological model and wellbore geometry', f: 0.86 });
+        // the model is built in one go: show the step before it starts
+        setProgress({ msg: 'Building the geological model', f: 0.82 });
+        await paint();
         const app = new App(field);
+        app.onBootStep = (msg, f) => setProgress({ msg, f });
         app.actions.register(...appActions());
         const twin = { app, field, engine: undefined as unknown, actions: app.actions };
         (window as unknown as Record<string, unknown>).twin = twin;
-        void app.whenReady.then(() => {
+        void app.whenReady.then(async () => {
           const e = app.engine;
           twin.engine = e;
           // cinematic start: high establishing shot, then settle on the field overview
@@ -51,23 +58,28 @@ export function Root() {
           e.rig.orbit.target.copy(o.target);
           e.start();
           setProgress({ msg: 'Ready', f: 1 });
-          setTimeout(() => {
-            // the particles burst, then the loader leaves in a view transition
-            // (its logo flies into the top bar) while the camera sweeps down
-            setLoader('leaving');
-            setTimeout(() => {
-              // started by hand, once, before any of React's own transitions:
-              // the loader and the logo carry transition names only meanwhile
-              const done = () => flushSync(() => setLoader('gone'));
-              const html = document.documentElement;
-              const vt = (document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } }).startViewTransition;
-              if (vt && !html.hasAttribute('data-reduce-motion')) {
-                html.setAttribute('data-vt-loader', '');
-                vt.call(document, done).finished.finally(() => html.removeAttribute('data-vt-loader'));
-              } else done();
-              e.rig.flyTo(o.pos, o.target, 3.2);
-            }, 520);
-          }, Math.max(300, LOADER_MIN_MS - (performance.now() - shownAt)));
+          // the line fills, and the loader has been up for at least LOADER_MIN_MS
+          await wait(Math.max(700, LOADER_MIN_MS - (performance.now() - shownAt)));
+          // the words lift away and the particles burst
+          setLoader('leaving');
+          await wait(650);
+          // then the loader opens from the middle onto the scene (a view transition started by
+          // hand, once, before any of React's own: the loader and the logo carry transition
+          // names only meanwhile), the logo flies into the top bar, the camera sweeps down,
+          // and the workspace settles in around it
+          const html = document.documentElement;
+          const done = () =>
+            flushSync(() => {
+              html.setAttribute('data-intro', '');
+              setLoader('gone');
+            });
+          const vt = (document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } }).startViewTransition;
+          if (vt && !html.hasAttribute('data-reduce-motion')) {
+            html.setAttribute('data-vt-loader', '');
+            vt.call(document, done).finished.finally(() => html.removeAttribute('data-vt-loader'));
+          } else done();
+          e.rig.flyTo(o.pos, o.target, 5);
+          setTimeout(() => html.removeAttribute('data-intro'), 2600);
         });
         setBoot({ stage: 'running', app });
       })
