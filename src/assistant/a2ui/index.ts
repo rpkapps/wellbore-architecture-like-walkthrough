@@ -1,11 +1,11 @@
 /*
- * CONTRACT STUB (owned by the A2UI work): the public surface of `a2ui/`.
- * The UI renders `UIPart`s with `A2UISurface`; the controller adds
- * `renderUiTool()` to the host's tools and `a2uiPromptGuide()` to the system
- * prompt, and pulls ```a2ui fences out of streamed text with `extractA2UIFences`.
+ * The public surface of `a2ui/`: an A2UI v0.9 renderer for generated UI in
+ * chat messages. The UI renders `UIPart`s with `A2UISurface`; the controller
+ * adds `renderUiTool()` to the host's tools and `a2uiPromptGuide()` to the
+ * system prompt, and pulls ```a2ui fences out of streamed text with
+ * `extractA2UIFences`. The processor and validator are framework-free.
  */
-import type { ComponentType } from 'react';
-import type { AssistantTool, Dataset, UIEventPart } from '../core/types';
+import type { Dataset, UIEventPart } from '../core/types';
 
 export interface A2UISurfaceProps {
   /** the A2UI messages of one UIPart, in order */
@@ -18,10 +18,21 @@ export interface A2UISurfaceProps {
   streaming?: boolean;
 }
 
-export declare const A2UISurface: ComponentType<A2UISurfaceProps>;
-/** The built-in `render_ui` tool: validates the A2UI messages and reports problems back to the model. */
-export declare function renderUiTool(): AssistantTool;
-/** The part of the system prompt that teaches the model the protocol and the catalog. */
-export declare function a2uiPromptGuide(): string;
-/** Splits ```a2ui fenced blocks (JSON array or JSONL of A2UI messages) out of assistant text. */
-export declare function extractA2UIFences(text: string): { text: string; blocks: unknown[][] };
+export { A2UISurface } from './Surface';
+export { renderUiTool, renderUiMessages } from './tool';
+export { a2uiPromptGuide, PROMPT_EXAMPLE } from './prompt';
+export { extractA2UIFences } from './fences';
+export { applyMessages, resolveRoot, surfaceKey, type ApplyOptions } from './processor';
+export { validateMessages, type ValidateOptions } from './validate';
+export { normalizeMessages, parseMessagesText } from './normalize';
+export { COMPONENTS as CATALOG_SCHEMA } from './catalog/schema';
+export { BASIC_CATALOG_ID, BASIC_CATALOG_ID_091, DATA_CATALOG_ID, SUPPORTED_CATALOG_IDS } from './types';
+export type { A2UIMessage, A2UIComponent, A2UIClientAction, SurfaceState, DynamicValue, ChildList, Action } from './types';
+
+/** The v0.9 client `action` message for an action event (for transports that speak A2UI to a server). */
+export function toClientAction(event: Omit<UIEventPart, 'type'>, timestamp = new Date().toISOString()) {
+  return {
+    version: 'v0.9' as const,
+    action: { name: event.name, surfaceId: event.surfaceId, sourceComponentId: event.sourceComponentId ?? '', timestamp, context: event.context ?? {} },
+  };
+}
