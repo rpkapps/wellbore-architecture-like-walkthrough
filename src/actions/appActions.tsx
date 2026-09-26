@@ -10,8 +10,8 @@ import { ACCENTS, prefs, setAllOverlays, setPrefs, type Accent, type Density, ty
 import { exportCsv } from '../ui/shell/InterpretationPanel';
 import { toolWindows } from '../ui/toolWindow';
 import { withTransition } from '../ui/transition';
-import { locate, PRESETS } from '../ui/workspace/layout';
-import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
+import { openPanels, PRESETS } from '../ui/workspace/layout';
+import { atDefault, groupOf, maximised, place, placementLabel, placements, PLACEMENTS, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
 import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema } from '../ui/selection';
@@ -58,7 +58,7 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
 type PanelPlace = { id: string; title: string; location: string; about?: string; keywords?: string[] };
 
 /**
- * Every panel there is, with where it is now in words ("Left column · tab 2",
+ * Every panel there is, with where it is now in words ("Left sidebar · top · tab 2",
  * "Hidden"), including the windows of features that are off: the palette's
  * "where is it?" answer, and what `panels.reveal` can bring into view.
  */
@@ -82,9 +82,31 @@ function panelPlaces(app: App): PanelPlace[] {
 /** A panel to open or move: a feature's tool window (opened through its feature) or a built-in panel. */
 function panelRef(app: App, panel: string): PanelRef {
   const tool = toolWindows.value.find((w) => w.opts.id === panel);
-  if (tool) return { id: panel, tool, open: () => showTool(app, tool) };
-  if (panel in BUILTIN_PANELS) return { id: panel };
+  if (tool) return { id: panel, title: tool.opts.title, tool, open: () => showTool(app, tool) };
+  if (panel in BUILTIN_PANELS) return { id: panel, title: BUILTIN_PANELS[panel as keyof typeof BUILTIN_PANELS] };
   throw new Error(`No panel "${panel}".`);
+}
+
+/**
+ * Undo the last layout change (or, given its `n`, the change a toast reports
+ * and those after it). A feature's window follows its feature, so a window the
+ * restored layout shows turns its feature back on, and one it no longer shows
+ * closes. Returns false when there was nothing to undo.
+ */
+export function undoLayout(app: App, n?: number): boolean {
+  const ws = app.workspace;
+  let ok = false;
+  withTransition(() => {
+    ok = ws.undo(n);
+    if (!ok) return;
+    const open = new Set(openPanels(ws.value));
+    for (const w of toolWindows.value) {
+      const id = w.opts.id;
+      if (open.has(id) && !w.visible) showTool(app, w);
+      else if (!open.has(id) && w.visible) w.close();
+    }
+  });
+  return ok;
 }
 
 /** Every panel that can be shown now: the built-in ones and the open features' tool windows. */
@@ -435,7 +457,7 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'panels.reveal',
       title: 'Go to panel',
-      description: 'Says where a panel is (its column and tab, floating, or hidden) and brings it into view: unfolds its column, brings its tab to the front, and turns its feature on if needed.',
+      description: 'Says where a panel is (its sidebar or the bottom panel, slot and tab, floating, or hidden) and brings it into view: unfolds its sidebar, brings its tab to the front, and turns its feature on if needed.',
       category: 'Panels',
       where: 'Rail',
       keywords: ['where', 'find', 'locate', 'reveal', 'panel', 'window', 'tab'],
@@ -500,21 +522,41 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'panels.place',
       title: 'Move panel',
-      description: 'Moves a panel to the left, right or bottom column, undocks it into a floating window, or resets it to where it opens by default (opening it first if it is closed).',
+      description:
+        'Moves a panel to the top or bottom of the left or right sidebar or to the bottom panel, undocks it into a floating window, docks a floating one back where it came from, or resets it to where the workspace puts it (opening it first if it is closed). The toast that follows offers Undo.',
       category: 'Panels',
-      input: z.object({ panel: z.string(), to: z.enum(['left', 'right', 'bottom', 'float', 'default']) }),
-      choices: (app) => {
-        const where = { left: 'move to left', right: 'move to right', bottom: 'move to bottom', float: 'undock', default: 'reset location' } as const;
-        return Object.entries(panelIds())
+      where: 'Panel menu ⋯ · rail right-click',
+      keywords: ['dock', 'undock', 'float', 'sidebar', 'split'],
+      input: z.object({ panel: z.string(), to: z.enum(PLACEMENTS as [Placement, ...Placement[]]) }),
+      choices: (app) =>
+        Object.entries(panelIds())
           .filter(([id]) => app.workspace.isOpen(id))
-          .flatMap(([panel, label]) => {
-            const at = locate(app.workspace.value, panel);
-            return (Object.keys(where) as (keyof typeof where)[])
-              .filter((to) => (to === 'float' ? at?.kind !== 'float' : to === 'default' ? !atDefault(app.workspace, panel) : !(at?.kind === 'dock' && at.zone === to)))
-              .map((to) => ({ label: `${label}: ${where[to]}`, input: { panel, to } }));
-          });
+          .flatMap(([panel, label]) =>
+            [...placements(app.workspace, panel), ...(atDefault(app.workspace, panel) ? [] : (['default'] as const))].map((to) => ({
+              label: `${label}: ${placementLabel(app.workspace, panel, to).toLowerCase()}`,
+              input: { panel, to },
+            })),
+          ),
+      run: (app, { panel, to }) => {
+        withTransition(() => place(app.workspace, panelRef(app, panel), to));
+        return { panel, now: describeLocation(app.workspace.layout.value, panel) };
       },
-      run: (app, { panel, to }) => withTransition(() => place(app.workspace, panelRef(app, panel), to as Placement)),
+    }),
+    A({
+      id: 'panels.undo_layout',
+      title: 'Undo layout change',
+      description: 'Takes back the last change to the panel layout: a move, undock, dock back, close or reset location (the toast after each offers the same), or a resize or reorder.',
+      category: 'Panels',
+      shortcut: 'Ctrl Z',
+      keywords: ['undo', 'layout', 'panel', 'dock', 'revert'],
+      // a toast's Undo names its change: that one (and any made after it) is taken back
+      input: z.object({ change: z.number().int().optional().meta({ description: 'The change a toast reported; the last one when left out' }) }).optional(),
+      run: (app, input) => {
+        if (!undoLayout(app, input?.change)) throw new Error('No layout change to undo.');
+        // (in place of the change's own toast, so its Undo is not pressed twice)
+        app.toast('Layout change undone.', 'info', { id: 'layout-change' });
+        return { layout: 'restored' };
+      },
     }),
     A({
       id: 'panels.maximise',

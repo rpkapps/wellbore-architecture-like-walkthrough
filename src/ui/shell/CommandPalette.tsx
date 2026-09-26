@@ -22,7 +22,7 @@ const ALL = () => true;
  * types its prefix, so the list doubles as a way in.
  */
 const MODES: { prefix: string; title: string; detail: string }[] = [
-  { prefix: '>', title: 'Panels: where is it?', detail: 'Every panel with its place (column, tab, floating or hidden); Enter brings it into view' },
+  { prefix: '>', title: 'Panels: where is it?', detail: 'Every panel with its place (sidebar, slot, tab, floating or hidden); Enter brings it into view' },
   { prefix: '', title: 'Commands and settings', detail: 'Plain words find commands by name, place or description: “colour”, “section box”, “porosity”' },
   { prefix: '', title: 'Wells and formations', detail: 'A well or formation name opens the well, or isolates or inspects the formation: “F-12”, “Hugin”' },
 ];

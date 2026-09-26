@@ -94,22 +94,22 @@ describe('palette history', () => {
 describe('describeLocation', () => {
   const stack = (id: string, ...panels: string[]) => ({ id, panels, active: panels[0], weight: 1 });
   const L: Layout = {
-    v: 1,
+    v: 2,
     left: { size: 300, collapsed: false, stacks: [stack('s1', 'scene', 'interpretation', 'features'), stack('s2', 'properties')] },
     right: { size: 400, collapsed: true, stacks: [stack('s3', 'logs')] },
     bottom: { size: 260, collapsed: false, stacks: [stack('s4', 'crossplot')] },
     floating: [{ id: 'f1', panels: ['mapview', 'views'], active: 'mapview', x: 0, y: 0, w: 300, h: 200 }],
   };
 
-  it('names the column, the group and the tab when there is more than one', () => {
-    expect(describeLocation(L, 'scene')).toBe('Left column · group 1 · tab 1');
-    expect(describeLocation(L, 'interpretation')).toBe('Left column · group 1 · tab 2');
-    expect(describeLocation(L, 'properties')).toBe('Left column · group 2');
-    expect(describeLocation(L, 'crossplot')).toBe('Bottom column');
+  it('names the region, the slot of a split sidebar and the tab when there is more than one', () => {
+    expect(describeLocation(L, 'scene')).toBe('Left sidebar · top · tab 1');
+    expect(describeLocation(L, 'interpretation')).toBe('Left sidebar · top · tab 2');
+    expect(describeLocation(L, 'properties')).toBe('Left sidebar · bottom');
+    expect(describeLocation(L, 'crossplot')).toBe('Bottom panel');
   });
 
-  it('says when the column is folded', () => {
-    expect(describeLocation(L, 'logs')).toBe('Right column (folded)');
+  it('says when the sidebar is folded', () => {
+    expect(describeLocation(L, 'logs')).toBe('Right sidebar (folded)');
   });
 
   it('names floating windows and their tabs', () => {
