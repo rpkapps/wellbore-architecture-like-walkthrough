@@ -12,6 +12,7 @@ import { Note, SliderField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { ProvBadge } from '../ui/prov';
 import { Rev, SCENE } from '../ui/signal';
+import type { InspectorRow } from '../ui/inspect';
 import type { FeatureModule } from './registry';
 
 /**
@@ -32,11 +33,23 @@ export class ContactsFeature implements FeatureModule {
 
   constructor(private app: App) {
     this.group.name = 'contacts';
+    // a click on it selects the overlay (its details and settings in Properties)
+    this.group.userData = { kind: 'feature', featureId: this.id };
+    app.engine.pickables.add(this.group);
   }
 
   /** Contact depth used for the field plane (TVDSS), or null. */
   get planeDepth(): number | null {
     return this.override ?? this.estimate?.depth ?? null;
+  }
+
+  identify(point: { x: number; y: number; z: number }): InspectorRow[] {
+    const d = this.planeDepth;
+    return [
+      { h: 'Where you clicked' },
+      ['Depth', `${fmt.n(-point.y, 1)} m TVDSS`, ''],
+      ['Contact depth', d === null ? 'not found yet' : `${fmt.n(d, 1)} m TVDSS`, this.override !== null ? 'user' : 'calculated'],
+    ];
   }
 
   wellContact(name: string): ContactEvidence | undefined {
@@ -171,7 +184,10 @@ export class ContactsFeature implements FeatureModule {
     for (const c of [...this.group.children]) {
       this.group.remove(c);
       (c as THREE.Mesh).geometry?.dispose();
-      if (c instanceof CSS2DObject) c.element.remove();
+      // the field plane carries its label as a child: its element would stay on screen
+      c.traverse((o) => {
+        if (o instanceof CSS2DObject) o.element.remove();
+      });
     }
     this.plane = undefined;
   }

@@ -4,6 +4,7 @@ import type { App } from '../ui/app';
 import { Note } from '../ui/controls';
 import type { FeatureModule } from './registry';
 import { REAL, loadRealisticTextures, texturesLoaded } from '../scene/textures';
+import { hasRop } from '../data/drilling';
 
 /** Sun shadows + log-depth ambient occlusion. */
 export class ShadowsFeature implements FeatureModule {
@@ -69,12 +70,18 @@ export class SeaFxFeature implements FeatureModule {
   }
 }
 
-/** Rate-of-penetration colouring mode. */
+/**
+ * Rate-of-penetration colouring mode: offered in the colour key (and to V and
+ * the palette) whenever the active well has an ROP log, so it needs no switch.
+ */
 export class RopFeature implements FeatureModule {
   readonly id = 'rop' as const;
   constructor(private app: App) {}
   enable() {
-    this.app.setPropertyAvailable('rop', true);
+    this.onWell();
+  }
+  onWell() {
+    this.app.setPropertyAvailable('rop', hasRop(this.app.engine.activeWell?.logs));
   }
   disable() {
     this.app.setPropertyAvailable('rop', false);

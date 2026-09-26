@@ -103,6 +103,10 @@ function supportsReversedDepth(): boolean {
   }
 }
 
+/** Time constants (s) of the near-rock fade's reach: growing (rock fading away), and shrinking (rock coming back). */
+const FADE_AWAY_S = 0.18;
+const FADE_BACK_S = 0.1;
+
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly labelRenderer: LabelRenderer;
@@ -124,6 +128,14 @@ export class Engine {
   private glow: GlowPass;
   private final: FinalPass;
   private raycaster = new THREE.Raycaster();
+  /**
+   * Objects drawn by the overlay features (the log curtain, the geosteering
+   * band…) that a click can pick: each is tagged `userData.kind = 'feature'`
+   * with its `featureId`. A feature adds its group while it is on. One marked
+   * `userData.soft` (a see-through envelope around the well) gives way to
+   * the well when the same click also hits the well behind it.
+   */
+  readonly pickables = new Set<THREE.Object3D>();
   private lutTex: THREE.DataTexture;
   mode: PropertyMode = 'resistivity';
   tunnel = false;
@@ -213,6 +225,19 @@ export class Engine {
     this.composer.addPass(this.final);
 
     this.rig = new CameraRig(this.camera, this.renderer.domElement);
+    // Explore turns around, zooms toward and drags what is under the pointer, and stays on the scene
+    this.rig.pickPoint = (x, y) => this.pick(x, y)?.point ?? null;
+    this.scene.add(this.rig.pivotMarker(() => this.requestRender()));
+    let bounds: THREE.Box3 | null = null;
+    this.rig.sceneBounds = () => {
+      // the model block (its full extent, whatever the section box) and the platform above it
+      if (!bounds || bounds.isEmpty()) {
+        const f = this.geology.fullBox;
+        const g = new THREE.Box3().setFromObject(this.geology.group);
+        bounds = g.isEmpty() ? null : new THREE.Box3(new THREE.Vector3(f.xMin, g.min.y, -f.nMax), new THREE.Vector3(f.xMax, 250, -f.nMin));
+      }
+      return bounds;
+    };
     this.lutTex = makeLutTexture('resistivity');
 
     this.env = new Environment(field);
@@ -647,9 +672,26 @@ export class Engine {
     if (!this.gpu && this.drewLastTick && now - this.lastDrawAt < 100) this.noteFrameMs(now - this.lastDrawAt);
     this.drewLastTick = true;
     this.lastDrawAt = now;
+    if (this.drawWaiters.length) {
+      const due = this.drawWaiters.filter((w) => --w.n <= 0);
+      this.drawWaiters = this.drawWaiters.filter((w) => w.n > 0);
+      for (const w of due) w.resolve();
+    }
+  }
+
+  private drawWaiters: { n: number; resolve: () => void }[] = [];
+
+  /** Resolves once the view has drawn `n` more frames (it draws on demand: this asks for them). */
+  whenDrawn(n = 1): Promise<void> {
+    this.requestRender(500);
+    return new Promise((resolve) => this.drawWaiters.push({ n, resolve }));
   }
 
   /** Per-frame scene state that depends on the camera, the cursor and the time: only when a frame is drawn. */
+  /** The near-rock fade: whether its reach has been set yet, and when it last eased. */
+  private fadeStarted = false;
+  private fadeAt = 0;
+
   private updateScene(t: number, inside: boolean, tfx: boolean) {
     const cam = this.camera.position;
     this.geology.sortForCamera(cam.y);
@@ -663,18 +705,29 @@ export class Engine {
       wb.uniforms.uCut.value = inside ? 0 : 1;
       this.headlight.intensity = inside ? 7 : cam.distanceTo(f.pos) < 300 ? 4 : 0;
       this.headlight.distance = inside ? 140 : 400;
-      // proximity bubble in the regional model around the point of interest
       const guided = this.rig.mode === 'guided';
       this.geology.setGuided(guided || (cam.y < -this.field.meta.waterDepth && this.rig.exploreView === 'fly'));
-      if (guided) {
-        FOCUS.uFocus.value.copy(f.pos).lerp(cam, 0.35);
-        FOCUS.uFocusR.value = Math.max(150, cam.distanceTo(f.pos) * 2.4);
-        FOCUS.uFocusOn.value = 1;
-      } else if (cam.y < -this.field.meta.waterDepth) {
-        FOCUS.uFocus.value.copy(cam);
-        FOCUS.uFocusR.value = 220;
-        FOCUS.uFocusOn.value = 1;
-      } else FOCUS.uFocusOn.value = 0;
+      const dt = Math.min(0.2, Math.max(0, t - this.fadeAt));
+      this.fadeAt = t;
+      if (this.geology.stepOpacity(dt)) this.requestRender();
+      // Rock close to the camera fades, out to just short of what is being looked at (Guided: a
+      // little past the well, so the rock around it thins too), so it thins steadily while zooming
+      // rather than switch. What is looked at can change in a step (the next thing under the
+      // pointer, a change of mode or view), so the reach eases toward it, never jumps: rock fades
+      // away over about half a second and comes back a little faster.
+      const view = guided ? 'guided' : this.rig.exploreView;
+      const reach = guided ? cam.distanceTo(f.pos) * 1.3 + 20 : view === 'fly' ? 250 : Math.min(0.9 * this.rig.lookDistance(), 800);
+      const R = FOCUS.uFocusR.value;
+      if (!this.fadeStarted) {
+        this.fadeStarted = true;
+        FOCUS.uFocusR.value = reach;
+      } else if (Math.abs(reach - R) > 0.05) {
+        const tau = reach > R ? FADE_AWAY_S : FADE_BACK_S;
+        FOCUS.uFocusR.value = reach + (R - reach) * Math.exp(-dt / tau);
+        this.requestRender();
+      }
+      FOCUS.uFocus.value.copy(cam);
+      FOCUS.uFocusOn.value = 1;
     }
     this.paths.update(this.camera, this.contextVisible && this.labelsVisible);
     this.paths.group.visible = this.contextVisible;
@@ -747,14 +800,35 @@ export class Engine {
       for (const m of this.geology.meshes.values()) if (m.visible && (m.material as THREE.Material).opacity > 0.15) targets.push(m);
       if (this.paths.group.visible) targets.push(...this.paths.group.children.filter((c) => c.type === 'Mesh'));
       targets.push(this.env.platform);
+      for (const o of this.pickables) if (o.visible && o.parent) targets.push(o);
     }
     ensureBVHFor(targets);
     const hits = this.raycaster.intersectObjects(targets, true);
+    // What a click passes through on its way to what it means: a see-through envelope around
+    // the well (the uncertainty cones) gives way to the well behind it; a formation drawn as
+    // glass gives way to what shows through it (the well, an overlay, another well), but not
+    // to a solid formation behind (then the glass one was clicked).
+    const WELL_PARTS = new Set(['wall', 'casing', 'cement', 'fracture', 'top', 'pay']);
+    let soft: { hit: PickResult; glass: boolean } | null = null;
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;
       while (o && !o.userData?.kind) o = o.parent;
       if (!o) continue;
+      // a hidden part is not the thing drawn
+      if (!h.object.visible) continue;
       const kind = o.userData.kind as string;
+      // rock faded away near the camera is not there to click or zoom into
+      if (kind === 'formation' && FOCUS.uFocusOn.value > 0.5 && h.point.distanceTo(FOCUS.uFocus.value) < FOCUS.uFocusR.value * 0.65) continue;
+      const glass = kind === 'formation' && ((h.object as THREE.Mesh).material as THREE.Material).opacity < 0.7;
+      if (!soft && (glass || o.userData.soft)) {
+        soft = { hit: { kind, point: h.point.clone(), object: o }, glass };
+        continue;
+      }
+      if (soft) {
+        // more glass on the way through
+        if (soft.glass && glass) continue;
+        if (soft.glass ? kind === 'formation' : !WELL_PARTS.has(kind)) return soft.hit;
+      }
       // respect the wall cutaway: skip hits on the removed wedge
       if ((kind === 'wall' || kind === 'casing') && wb && wb.uniforms.uCut.value > 0.5) {
         const md = h.uv ? h.uv.y : undefined;
@@ -768,7 +842,7 @@ export class Engine {
       }
       return { kind, point: h.point.clone(), md: h.uv && (kind === 'wall' || kind === 'casing') ? h.uv.y : undefined, object: o };
     }
-    return null;
+    return soft?.hit ?? null;
   }
 
   /** Viewpoint that frames the whole model. */

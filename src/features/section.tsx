@@ -1,14 +1,15 @@
+import type { Well } from '../data/dataset';
 import { sampleHorizon } from '../data/surfaces';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
 import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
-import { font, ink } from '../ui/tokens';
+import { font, ink, textLen } from '../ui/tokens';
 import type { ContactsFeature } from './contacts';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
 import { niceStep, type GeosteerFeature } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
 
 /** select key for "no log" */
@@ -34,6 +35,10 @@ export class SectionFeature implements FeatureModule {
   private view = new PanelCanvas({ draw: (g, W, H) => this.draw(g, W, H), cursor: (g) => this.drawCursor(g), visible: () => this.panel.visible && this.path.length >= 2 });
   private path: PathPt[] = [];
   private mode: 'reservoir' | 'full' | 'cursor' = 'reservoir';
+  /** the extent to go back to when it stops following the cursor */
+  private fixedMode: 'reservoir' | 'full' = 'reservoir';
+  /** the well it stays on whichever well is open (null: the open one) */
+  private pinned: Well | null = null;
   private ve = 0; // 0 = auto
   private curve = 'GR';
   private lastMd = -1;
@@ -49,17 +54,13 @@ export class SectionFeature implements FeatureModule {
       id: 'section',
       title: 'Section along the well',
       badge: 'interpreted',
-      onClose: () => app.flags.set('section', false),
+      onClose: () => windowClosed(app.flags, 'section', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect
             label="Extent"
             value={this.mode}
-            onChange={(v) => {
-              this.mode = v as typeof this.mode;
-              this.view.invalidate();
-              this.panel.rev.bump();
-            }}
+            onChange={(v) => this.setMode(v as typeof this.mode)}
             options={[
               { id: 'reservoir', label: 'Reservoir' },
               { id: 'full', label: 'Whole well' },
@@ -88,6 +89,26 @@ export class SectionFeature implements FeatureModule {
           />
         </>
       ),
+      links: () => {
+        const w = this.well();
+        const open = w === app.engine.activeWell;
+        return {
+          subject: w.name,
+          followsWell: !this.pinned,
+          pinned: this.pinned?.name,
+          pin: (on) => this.pin(on),
+          channels: [
+            {
+              id: 'cursor',
+              label: 'Follow the depth cursor',
+              short: 'depth cursor',
+              on: this.mode === 'cursor',
+              set: (on) => this.setMode(on ? 'cursor' : this.fixedMode),
+              disabled: open ? undefined : 'open well only',
+            },
+          ],
+        };
+      },
       body: () => (
         <CanvasBox
           view={this.view}
@@ -110,6 +131,38 @@ export class SectionFeature implements FeatureModule {
 
   onWell() {
     this.rebuild();
+    // the link chip names the well
+    this.panel.rev.bump();
+  }
+
+  /** The well the section follows: the open one, unless it is pinned to another. */
+  private well(): Well {
+    return this.pinned ?? this.app.engine.activeWell;
+  }
+
+  private setMode(m: typeof this.mode) {
+    this.mode = m;
+    if (m !== 'cursor') this.fixedMode = m;
+    this.view.invalidate();
+    this.panel.rev.bump();
+  }
+
+  /** Keep the section on the well it shows now (false: follow the open well again). */
+  private pin(on: boolean) {
+    this.pinTo(on ? this.well() : null);
+  }
+
+  /** Keep the section on one well whichever well is open (null: follow the open well). */
+  pinTo(w: Well | null) {
+    this.pinned = w;
+    if (!this.app.flags.on('section')) return;
+    this.rebuild();
+    this.panel.rev.bump();
+  }
+
+  /** Is the cursor on the well this section shows? */
+  private onOpenWell() {
+    return this.well() === this.app.engine.activeWell;
   }
 
   frame() {
@@ -124,7 +177,7 @@ export class SectionFeature implements FeatureModule {
     if (Math.abs(md - this.lastMd) < 0.5) return;
     this.lastMd = md;
     // following the cursor moves the section; otherwise only the cursor dot moves
-    if (this.mode === 'cursor') this.view.redraw();
+    if (this.mode === 'cursor' && this.onOpenWell()) this.view.redraw();
     else this.view.moveCursor();
   }
 
@@ -133,7 +186,7 @@ export class SectionFeature implements FeatureModule {
   }
 
   private rebuild() {
-    const w = this.app.engine.activeWell;
+    const w = this.well();
     if (!w) return;
     const t = w.trajectory;
     const dz = this.app.field.meta.datumElevation;
@@ -180,7 +233,7 @@ export class SectionFeature implements FeatureModule {
   private extent(W: number, H: number): { s0: number; s1: number; d0: number; d1: number } {
     const P = this.path;
     const L = P[P.length - 1].s;
-    const w = this.app.engine.activeWell;
+    const w = this.well();
     const hug = w.zones.filter((z) => ['draupne', 'heather', 'hugin', 'sleipner', 'skagerrak'].includes(z.formationId));
     let s0: number;
     let s1: number;
@@ -192,7 +245,7 @@ export class SectionFeature implements FeatureModule {
       const d0 = -60;
       if (!this.ve) return { s0, s1, d0, d1: dMax };
       dc = (d0 + dMax) / 2;
-    } else if (this.mode === 'cursor') {
+    } else if (this.mode === 'cursor' && this.onOpenWell()) {
       const md = this.app.engine.rig.md;
       const c = P.reduce((a, b) => (Math.abs(b.md - md) < Math.abs(a.md - md) ? b : a));
       s0 = c.s - 600;
@@ -223,14 +276,18 @@ export class SectionFeature implements FeatureModule {
         best = p;
       }
     }
-    if (bd < 40 * 40) this.app.travelTo(best.md);
+    if (bd >= 40 * 40) return;
+    // a pinned section of another well: open that well there
+    if (this.onOpenWell()) this.app.travelTo(best.md);
+    else void this.app.loadWellAsync(this.well().id, false).then(() => this.app.travelTo(best.md));
   }
 
   private draw(g: CanvasRenderingContext2D, W: number, H: number) {
-    const PL = 48;
+    // the margins and offsets that hold text grow with the density
+    const PL = textLen(48);
     const PR = 10;
     const PT = 8;
-    const PB = 20;
+    const PB = textLen(20);
     const { s0, s1, d0, d1 } = this.extent(W, H);
     const X = (s: number) => PL + ((s - s0) / (s1 - s0)) * (W - PL - PR);
     const Y = (d: number) => PT + ((d - d0) / (d1 - d0)) * (H - PT - PB);
@@ -273,12 +330,14 @@ export class SectionFeature implements FeatureModule {
       const c = cols[2];
       const top = c.d[k];
       const bot = k + 1 < f.horizons.length ? c.d[k + 1] : base;
-      if (Y(bot) - Y(top) < 11 || Y(top) > H - PB || Y(bot) < PT) return;
+      if (Y(bot) - Y(top) < textLen(11) || Y(top) > H - PB || Y(bot) < PT) return;
       g.fillStyle = 'rgba(255,255,255,0.75)';
-      g.fillText(FORMATION_BY_ID.get(hz.id)?.name ?? hz.id, X(c.s) + 4, Math.max(PT + 10, Y(top) + 11));
+      g.fillText(FORMATION_BY_ID.get(hz.id)?.name ?? hz.id, X(c.s) + 4, Math.max(PT + textLen(10), Y(top) + textLen(11)));
     });
     // cross-feature overlays
-    const gs = this.app.flags.on('geosteer') ? this.app.feature<GeosteerFeature>('geosteer')?.profile : null;
+    // (the geosteering surfaces and the survey uncertainty are the open well's)
+    const open = this.onOpenWell();
+    const gs = open && this.app.flags.on('geosteer') ? this.app.feature<GeosteerFeature>('geosteer')?.profile : null;
     if (gs && gs.source === 'tied') {
       g.setLineDash([5, 3]);
       for (const [k, c] of [
@@ -315,7 +374,7 @@ export class SectionFeature implements FeatureModule {
       g.textAlign = 'right';
       g.fillText(`OWC ${fmt.n(owc.planeDepth, 0)} m (calc.)`, W - PR - 4, y - 4);
     }
-    const unc = this.app.flags.on('uncertainty') ? this.app.feature<UncertaintyFeature>('uncertainty') : undefined;
+    const unc = open && this.app.flags.on('uncertainty') ? this.app.feature<UncertaintyFeature>('uncertainty') : undefined;
     if (unc) {
       g.beginPath();
       this.path.forEach((p, i) => (i ? g.lineTo(X(p.s), Y(p.tvdss - (unc.verticalAt(p.md) ?? 0))) : g.moveTo(X(p.s), Y(p.tvdss - (unc.verticalAt(p.md) ?? 0)))));
@@ -325,7 +384,7 @@ export class SectionFeature implements FeatureModule {
       g.fill();
     }
     // log along the path, filled on the upper side
-    const w = this.app.engine.activeWell;
+    const w = this.well();
     const def = this.curve ? CURVE_BY_KEY.get(this.curve) : undefined;
     const data = def?.get(w);
     if (def && data) {
@@ -401,22 +460,31 @@ export class SectionFeature implements FeatureModule {
     g.font = font.mono(10);
     g.fillStyle = ink.muted;
     g.textAlign = 'right';
-    const sy = niceStep((d1 - d0) / 6);
-    for (let d = Math.ceil(d0 / sy) * sy; d <= d1; d += sy) g.fillText(d.toFixed(0), PL - 5, Y(d) + 3);
+    const sy = niceStep(Math.max((d1 - d0) / 6, ((d1 - d0) * textLen(20)) / (H - PT - PB)));
+    for (let d = Math.ceil(d0 / sy) * sy; d <= d1; d += sy) g.fillText(d.toFixed(0), PL - 5, Y(d) + textLen(3.5));
     g.textAlign = 'center';
     const sx = niceStep((s1 - s0) / 8);
-    for (let s = Math.ceil(s0 / sx) * sx; s <= s1; s += sx) g.fillText(`${s.toFixed(0)}`, X(s), H - 6);
+    for (let s = Math.ceil(s0 / sx) * sx; s <= s1; s += sx) g.fillText(`${s.toFixed(0)}`, X(s), H - textLen(6));
     g.textAlign = 'left';
-    g.fillText('TVDSS', 4, 12);
+    g.fillText('TVDSS', 4, textLen(12));
     const ve = ((s1 - s0) / (W - PL - PR)) / ((d1 - d0) / (H - PT - PB));
     g.textAlign = 'right';
-    g.fillText(`along-path distance m · VE ×${ve.toFixed(ve < 2 ? 1 : 0)}${def && data ? ` · ${def.label} (${def.range})` : ''}`, W - PR, H - 6 - 12);
+    const note = `along-path distance m · VE ×${ve.toFixed(ve < 2 ? 1 : 0)}${def && data ? ` · ${def.label} (${def.range})` : ''}`;
+    // on a card, so the lines under it do not run through it
+    const nw = g.measureText(note).width;
+    const nh = textLen(14);
+    g.fillStyle = ink.card;
+    g.globalAlpha = 0.8;
+    g.fillRect(W - PR - nw - 4, H - textLen(18) - nh + textLen(4), nw + 8, nh);
+    g.globalAlpha = 1;
+    g.fillStyle = ink.muted;
+    g.fillText(note, W - PR, H - textLen(18));
   }
 
   private drawCursor(g: CanvasRenderingContext2D) {
     const X = this.tx;
     const Y = this.ty;
-    if (!X || !Y || this.path.length < 2) return;
+    if (!X || !Y || this.path.length < 2 || !this.onOpenWell()) return;
     const md = this.app.engine.rig.md;
     const cp = this.path.reduce((a, b) => (Math.abs(b.md - md) < Math.abs(a.md - md) ? b : a));
     g.fillStyle = '#7fe3ff';

@@ -1,22 +1,66 @@
+import { Badge } from '@tecton/react/components/badge';
 import { Button } from '@tecton/react/components/button';
-import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { ColorSwatch } from '@tecton/react/tecton/color-swatch';
 import { TreeView, TreeViewAction, TreeViewItem, TreeViewItemContent, TreeViewVisibilityToggle } from '@tecton/react/tecton/tree-view';
 import { LayersIcon } from 'lucide-react';
-import { memo, useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../../data/stratigraphy';
+import { featuresAt, labelOf, type FeatureId } from '../../features/registry';
 import type { App, LayerPreset, SceneDisplay, WellboreDisplay } from '../app';
 import { SliderField, SwitchField } from '../controls';
+import { useFlags } from '../flags';
 import { ProvBadge } from '../prov';
 import { PanelAccordion, PanelSection } from '../section';
 import { ScrubChip } from '../scrub';
-import { useRev } from '../signal';
+import type { Selection } from '../selection';
+import { useRev, useSignal, useSignalPart } from '../signal';
+import { SelectionActionsButton } from './SelectionMenu';
 import { SectionBoxEditor } from '../viz/SectionBoxEditor';
 import { ColormapPicker } from '../viz/ColormapPicker';
 import { Tip } from '../icon-button';
 
-const OPACITY = [1, 0.75, 0.5, 0.25, 0.1];
+/** Folder rows: they open and close, and are never the selection. */
+const FOLDERS = ['formations', 'wells', 'wellbore', 'overlays', 'scene'];
+/** Layer rows that are scene options, selected as overlays (their Properties is a visibility switch and a note). */
+const LAYERS = new Set(['casing', 'fractures', 'markers', 'labels', 'otherWells', 'sea', 'contours']);
+/**
+ * The Overlays folder: optional features drawn in 3D (log curtain, oil–water
+ * contact, uncertainty cones, the geosteering band). The eye switches the
+ * feature, so a hidden overlay computes nothing; selected, its settings show
+ * in Properties (`FeatureModule.settings`).
+ */
+const OVERLAYS: FeatureId[] = featuresAt('overlay').map((f) => f.id);
+const OVERLAY_SET = new Set<string>(OVERLAYS);
+
+/** The selection a tree row stands for (its key: a formation id, `well:<id>`, a layer or an overlay feature id). */
+function selectionOfKey(key: string): Selection | null {
+  if (FORMATION_BY_ID.has(key)) return { kind: 'formation', id: key };
+  if (key.startsWith('well:')) return { kind: 'well', id: key.slice(5) };
+  if (LAYERS.has(key) || OVERLAY_SET.has(key)) return { kind: 'overlay', id: key };
+  return null;
+}
+
+/** The row a selection highlights (a point on a well highlights the well, the contact plane its overlay). */
+function keyOfSelection(sel: Selection | null): string | null {
+  if (!sel) return null;
+  if (sel.kind === 'formation') return sel.id;
+  if (sel.kind === 'well') return `well:${sel.id}`;
+  if (sel.kind === 'overlay' && LAYERS.has(sel.id)) return sel.id;
+  if ((sel.kind === 'overlay' || sel.kind === 'contact') && OVERLAY_SET.has(sel.id)) return sel.id;
+  return null;
+}
+
+/** Right click on a row: select it and open its menu of actions. */
+function rowMenu(app: App, e: MouseEvent) {
+  const row = (e.target as HTMLElement).closest<HTMLElement>('[data-sel-key]');
+  const sel = row?.dataset.selKey ? selectionOfKey(row.dataset.selKey) : null;
+  if (!sel) return;
+  e.preventDefault();
+  app.openContextMenu(sel, e.clientX, e.clientY);
+}
+
 const PRESETS: [LayerPreset, string][] = [
   ['default', 'Glass overburden'],
   ['solid', 'Solid'],
@@ -24,10 +68,15 @@ const PRESETS: [LayerPreset, string][] = [
   ['pay', 'Isolate pay'],
 ];
 
-/** Layers of the scene as a tree, then the section box, near-well and display settings. */
+/**
+ * Layers of the scene as a tree, then the section box, near-well and display
+ * settings. A click on a row selects it (Properties shows it), a double click
+ * opens a well or brings up Properties, a right click opens its actions.
+ */
 export function ScenePanel({ app }: { app: App }) {
   return (
-    <div className="flex flex-col">
+    // tree rows are React Aria tree items, which take no context-menu trigger of their own: one handler finds the row
+    <div className="flex flex-col" onContextMenu={(e) => rowMenu(app, e)}>
       <Layers app={app} />
       <PanelAccordion defaultExpandedKeys={['box']}>
         <PanelSection id="box" title="Section box">
@@ -46,6 +95,10 @@ export function ScenePanel({ app }: { app: App }) {
 
 function Layers({ app }: { app: App }) {
   useRev(app.sceneRev);
+  const selected = keyOfSelection(useSignal(app.selection));
+  // the wells folder follows which well is open
+  const activeWell = useSignalPart(app.wellRev, () => app.engine.activeWell.id);
+  const overlays = useFlags(app.flags, OVERLAYS);
   const geo = app.engine.geology;
   const wb = app.wellbore;
   const d = app.display;
@@ -65,7 +118,7 @@ function Layers({ app }: { app: App }) {
     );
   };
   const leaf = (id: string, label: string, visible: boolean, onChange: (v: boolean) => void, suffix?: ReactNode) => (
-    <TreeViewItem id={id} textValue={label} isHidden={!visible}>
+    <TreeViewItem key={id} id={id} textValue={label} isHidden={!visible} data-sel-key={id}>
       <TreeViewItemContent suffix={suffix} endAdornment={toggle(label, visible, onChange)}>
         {label}
       </TreeViewItemContent>
@@ -74,10 +127,26 @@ function Layers({ app }: { app: App }) {
   return (
     <TreeView
       aria-label="Scene layers"
-      defaultExpandedKeys={['formations']}
+      defaultExpandedKeys={['formations', 'overlays']}
       className="p-1"
+      selectionMode="single"
+      selectionBehavior="replace"
+      selectedKeys={selected ? [selected] : []}
+      disabledKeys={FOLDERS}
+      disabledBehavior="selection"
+      onSelectionChange={(keys) => {
+        if (keys === 'all') return;
+        const k = [...keys][0];
+        if (k === undefined) return app.select(null);
+        const sel = selectionOfKey(String(k));
+        if (sel) app.select(sel);
+      }}
       onAction={(key: Key) => {
-        if (FORMATION_BY_ID.has(String(key))) app.inspectFormation(String(key));
+        const sel = selectionOfKey(String(key));
+        if (!sel) return;
+        // a double click (or Enter) opens a well, and brings up the Properties of anything else
+        if (sel.kind === 'well' && sel.id !== activeWell && app.selectableWells().some((w) => w.id === sel.id)) void app.actions.run('nav.select_well', { id: sel.id });
+        else void app.actions.run('selection.properties', { selection: sel });
       }}
     >
       <TreeViewItem id="formations" textValue="Formations">
@@ -106,13 +175,22 @@ function Layers({ app }: { app: App }) {
               id={id}
               textValue={f.name}
               isHidden={!st.visible}
+              data-sel-key={id}
               onHoverStart={() => (geo.setHighlight(id), app.engine.requestRender())}
               onHoverEnd={() => (geo.setHighlight(null), app.engine.requestRender())}
             >
-              <FormationRow app={app} id={id} visible={st.visible} opacity={st.opacity} color={f.color} isolated={geo.isolatedId === id} />
+              <FormationRow app={app} id={id} visible={st.visible} opacity={st.opacity} color={f.color} />
             </TreeViewItem>
           );
         })}
+      </TreeViewItem>
+      <TreeViewItem id="wells" textValue="Wells">
+        <TreeViewItemContent kind="folder">Wells</TreeViewItemContent>
+        {app.selectableWells().map((w) => (
+          <TreeViewItem key={w.id} id={`well:${w.id}`} textValue={w.name} data-sel-key={`well:${w.id}`}>
+            <WellRow app={app} id={w.id} name={w.name} active={w.id === activeWell} />
+          </TreeViewItem>
+        ))}
       </TreeViewItem>
       <TreeViewItem id="wellbore" textValue="Wellbore">
         <TreeViewItemContent
@@ -124,6 +202,12 @@ function Layers({ app }: { app: App }) {
         {leaf('casing', 'Casing & cement', wb.casing, (v) => app.setWellboreDisplay({ casing: v }))}
         {leaf('fractures', 'Natural fractures', wb.fractures, (v) => app.setWellboreDisplay({ fractures: v }), <ProvBadge prov="schematic" />)}
         {leaf('markers', 'Tops & depth marks', wb.markers, (v) => app.setWellboreDisplay({ markers: v }))}
+      </TreeViewItem>
+      <TreeViewItem id="overlays" textValue="Overlays">
+        <TreeViewItemContent kind="folder" endAdornment={groupToggle('every overlay', overlays, (v) => OVERLAYS.forEach((id) => app.flags.set(id, v)))}>
+          Overlays
+        </TreeViewItemContent>
+        {OVERLAYS.map((id, i) => leaf(id, labelOf(id), overlays[i], (v) => app.flags.set(id, v)))}
       </TreeViewItem>
       <TreeViewItem id="scene" textValue="Scene">
         <TreeViewItemContent
@@ -141,11 +225,27 @@ function Layers({ app }: { app: App }) {
   );
 }
 
+/** A wellbore of the field: the open one is marked; its actions open it or show its properties. */
+const WellRow = memo(function WellRow({ app, id, name, active }: { app: App; id: string; name: string; active: boolean }) {
+  return (
+    <TreeViewItemContent
+      suffix={active ? <Badge variant="outline">open</Badge> : undefined}
+      endAdornment={
+        <SelectionActionsButton app={app} selection={{ kind: 'well', id }} label={`${name} actions`}>
+          <TreeViewAction aria-label={`${name} actions`} />
+        </SelectionActionsButton>
+      }
+    >
+      {name}
+    </TreeViewItemContent>
+  );
+});
+
 /**
  * A formation's row. Memoised on what it shows, so scrubbing one layer's
  * opacity (a scene change every frame) renders that row, not the whole tree.
  */
-const FormationRow = memo(function FormationRow({ app, id, visible, opacity, color, isolated }: { app: App; id: string; visible: boolean; opacity: number; color: string; isolated: boolean }) {
+const FormationRow = memo(function FormationRow({ app, id, visible, opacity, color }: { app: App; id: string; visible: boolean; opacity: number; color: string }) {
   const f = FORMATION_BY_ID.get(id)!;
   return (
     <TreeViewItemContent
@@ -165,7 +265,10 @@ const FormationRow = memo(function FormationRow({ app, id, visible, opacity, col
           <Tip label={visible ? 'Hide' : 'Show'}>
             <TreeViewVisibilityToggle aria-label={`${visible ? 'Hide' : 'Show'} ${f.name}`} isVisible={visible} onChange={(v) => app.setLayer(id, { visible: v })} />
           </Tip>
-          <LayerMenu app={app} id={id} name={f.name} opacity={opacity} isolated={isolated} />
+          {/* the same actions as the row's right-click menu */}
+          <SelectionActionsButton app={app} selection={{ kind: 'formation', id }} label={`${f.name} actions`}>
+            <TreeViewAction aria-label={`${f.name} actions`} />
+          </SelectionActionsButton>
         </>
       }
     >
@@ -189,30 +292,6 @@ function PresetMenu({ app }: { app: App }) {
             {label}
           </DropdownMenuItem>
         ))}
-      </DropdownMenu>
-    </DropdownMenuTrigger>
-  );
-}
-
-function LayerMenu({ app, id, name, opacity, isolated }: { app: App; id: string; name: string; opacity: number; isolated: boolean }) {
-  const nearest = OPACITY.reduce((a, b) => (Math.abs(b - opacity) < Math.abs(a - opacity) ? b : a));
-  return (
-    <DropdownMenuTrigger>
-      <Tip label="More">
-        <TreeViewAction aria-label={`${name} actions`} />
-      </Tip>
-      <DropdownMenu placement="bottom end" className="w-max min-w-44">
-        <DropdownMenuGroup>
-          <DropdownMenuItem onAction={() => app.inspectFormation(id)}>Details</DropdownMenuItem>
-          <DropdownMenuItem onAction={() => app.isolate(isolated ? null : id)}>{isolated ? 'Show all formations' : 'Isolate (ghost the others)'}</DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup selectionMode="single" selectedKeys={[String(nearest)]} onSelectionChange={(k) => k !== 'all' && k.size && app.setLayer(id, { opacity: +String([...k][0]) })}>
-          <DropdownMenuLabel>Opacity</DropdownMenuLabel>
-          {OPACITY.map((o) => (
-            <DropdownMenuItem key={o} id={String(o)}>{`${Math.round(o * 100)}%`}</DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
       </DropdownMenu>
     </DropdownMenuTrigger>
   );
@@ -278,7 +357,7 @@ function WellboreControls({ app }: { app: App }) {
 function DisplayControls({ app }: { app: App }) {
   useRev(app.sceneRev, app.viewRev);
   const [textures, setTextures] = useState(() => app.flags.on('textures'));
-  // mirrors Features → Realistic textures so it can be flipped right next to the view
+  // mirrors Settings › Graphics › Textures so it can be flipped right next to the view
   useEffect(() => app.flags.watch('textures', setTextures), [app]);
   const s: SceneDisplay = app.display;
   return (

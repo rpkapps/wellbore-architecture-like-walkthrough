@@ -2,15 +2,20 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { STATUS_COLOR, steerAt, steerProfile, type SteerProfile, type SurfaceSource } from '../data/geosteer';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { TrajectoryIcon } from '@tecton/react/icons';
 import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
-import { font, ink, wash } from '../ui/tokens';
-import type { FeatureModule } from './registry';
+import { font, ink, textLen, textScale, wash } from '../ui/tokens';
+import { type FeatureModule, windowClosed } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
+import type { InspectorRow } from '../ui/inspect';
+import { mdNear } from './identify';
 
 /**
  * Geosteering: where is the well relative to the top and base of the target
@@ -31,36 +36,34 @@ export class GeosteerFeature implements FeatureModule {
   private xmap: { a: number; b: number; x0: number; x1: number; y0: number; y1: number } | null = null;
   private readout = new Signal<ReactNode>(null);
   private hud = new Signal<ReactNode>(null);
+  /** the status alone (IN ZONE), for the timeline's position read-out */
+  private chip = new Signal<ReactNode>(null);
   private lastMd = -1;
   private readoutMd = -1;
   private readoutAt = 0;
   private readoutTimer = 0;
   private view: 'window' | 'cursor' = 'window';
+  /** the formations it can steer in (a top and a base in the model) */
+  readonly targets: { id: string; label: string }[];
 
   constructor(private app: App) {
     // cached drawings: redraw when a colour they use changes
     app.paintRev.subscribe(() => this.strip.invalidate());
     this.group.name = 'geosteer';
-    const targets = app.field.horizons
+    // a click on it selects the overlay (its details and settings in Properties)
+    this.group.userData = { kind: 'feature', featureId: this.id };
+    app.engine.pickables.add(this.group);
+    const targets = (this.targets = app.field.horizons
       .filter((hz, i) => FORMATION_BY_ID.has(hz.id) && app.field.horizons[i + 1])
-      .map((hz) => ({ id: hz.id, label: FORMATION_BY_ID.get(hz.id)!.name }));
+      .map((hz) => ({ id: hz.id, label: FORMATION_BY_ID.get(hz.id)!.name })));
     this.panel = new ToolWindow({
       id: 'geosteer',
       title: 'Geosteering',
       badge: 'calculated',
-      onClose: () => app.flags.set('geosteer', false),
+      onClose: () => windowClosed(app.flags, 'geosteer', () => this.panel.hide()),
       header: () => (
         <>
-          <CompactSelect
-            label="Target formation"
-            value={this.target}
-            onChange={(v) => {
-              this.target = v;
-              this.rebuild();
-              this.panel.rev.bump();
-            }}
-            options={targets}
-          />
+          <CompactSelect label="Target formation" value={this.target} onChange={(v) => this.setTarget(v)} options={targets} />
           <CompactSelect
             label="Surfaces"
             value={this.source}
@@ -77,11 +80,7 @@ export class GeosteerFeature implements FeatureModule {
           <CompactSelect
             label="Strip extent"
             value={this.view}
-            onChange={(v) => {
-              this.view = v as 'window' | 'cursor';
-              this.strip.invalidate();
-              this.panel.rev.bump();
-            }}
+            onChange={(v) => this.setView(v as 'window' | 'cursor')}
             options={[
               { id: 'window', label: 'Whole lateral' },
               { id: 'cursor', label: '±250 m of cursor' },
@@ -89,24 +88,32 @@ export class GeosteerFeature implements FeatureModule {
           />
         </>
       ),
-      body: () => (
-        <>
-          <div className="flex flex-col gap-1 text-xs">
-            <Live s={this.readout} />
-          </div>
-          <CanvasBox
-            view={this.strip}
-            aria-label="Distance to the target boundaries along the well: click to travel"
-            className="cursor-pointer"
-            onClick={(e) => {
-              const md = this.mdAtX(e.nativeEvent.offsetX);
-              if (md !== null) app.travelTo(md);
-            }}
-          />
-        </>
-      ),
+      links: () => ({
+        subject: app.engine.activeWell.name,
+        followsWell: true,
+        channels: [{ id: 'cursor', label: 'Follow the depth cursor (±250 m)', short: 'depth cursor', on: this.view === 'cursor', set: (on) => this.setView(on ? 'cursor' : 'window') }],
+      }),
+      body: () =>
+        this.profile && !this.profile.window ? (
+          this.renderEmpty()
+        ) : (
+          <>
+            <div className="flex flex-col gap-1 text-xs">
+              <Live s={this.readout} />
+            </div>
+            <CanvasBox
+              view={this.strip}
+              aria-label="Distance to the target boundaries along the well: click to travel"
+              className="cursor-pointer"
+              onClick={(e) => {
+                const md = this.mdAtX(e.nativeEvent.offsetX);
+                if (md !== null) app.travelTo(md);
+              }}
+            />
+          </>
+        ),
     });
-    app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} /> });
+    app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} />, chip: () => <Live s={this.chip} /> });
     // the strip draws the uncertainty band when that feature is on
     app.flags.watch('uncertainty', () => this.strip.invalidate());
   }
@@ -123,10 +130,76 @@ export class GeosteerFeature implements FeatureModule {
     clearTimeout(this.readoutTimer);
     this.readoutTimer = 0;
     this.hud.set(null);
+    this.chip.set(null);
+  }
+
+  identify(point: { x: number; y: number; z: number }): InspectorRow[] {
+    const md = mdNear(this.app, point);
+    const s = md !== null && this.profile ? steerAt(this.profile, md) : null;
+    if (!s) return [];
+    const name = FORMATION_BY_ID.get(this.target)?.name ?? this.target;
+    return [
+      { h: 'Where you clicked' },
+      ['Depth', `${fmt.n(s.md, 1)} m MD`, 'measured'],
+      ['Status', s.status === 'in' ? `in the ${name}` : s.status === 'above' ? `above the ${name} top` : `below the ${name} base`, 'calculated'],
+      ['To the top', s.dTop >= 0 ? `${fmt.n(s.dTop, 1)} m below it` : `${fmt.n(-s.dTop, 1)} m above it`, 'calculated'],
+      ['To the base', s.dBase >= 0 ? `${fmt.n(s.dBase, 1)} m above it` : `${fmt.n(-s.dBase, 1)} m below it`, 'calculated'],
+    ];
   }
 
   onWell() {
     this.rebuild();
+    // the link chip names the well; a well that misses the target shows why
+    this.panel.rev.bump();
+  }
+
+  /** Steer in another formation (its top and base become the boundaries). */
+  setTarget(id: string) {
+    if (!this.targets.some((t) => t.id === id)) return;
+    this.target = id;
+    if (this.app.flags.on('geosteer')) this.rebuild();
+    this.panel.rev.bump();
+  }
+
+  private setView(v: 'window' | 'cursor') {
+    this.view = v;
+    this.strip.invalidate();
+    this.panel.rev.bump();
+  }
+
+  /** The open well never reaches the target: say so, and offer the formation it does end in. */
+  private renderEmpty() {
+    const w = this.app.engine.activeWell;
+    const name = FORMATION_BY_ID.get(this.target)?.name ?? this.target;
+    const end = w.zoneAt(w.tdMD - 1)?.formationId;
+    const alt = end && end !== this.target ? this.targets.find((t) => t.id === end) : undefined;
+    const primary = this.app.field.primary;
+    return (
+      <Empty className="min-h-0 flex-1 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <TrajectoryIcon />
+          </EmptyMedia>
+          <EmptyTitle>
+            {w.name} does not reach the {name}
+          </EmptyTitle>
+          <EmptyDescription>{alt ? `It ends in the ${alt.label}: steer in that instead.` : primary !== w ? `${primary.name} lands in it.` : 'Pick another target formation above.'}</EmptyDescription>
+        </EmptyHeader>
+        {(alt || primary !== w) && (
+          <EmptyContent>
+            {alt ? (
+              <Button size="sm" onPress={() => this.setTarget(alt.id)}>
+                Steer in the {alt.label}
+              </Button>
+            ) : (
+              <Button size="sm" onPress={() => this.app.selectWell(primary.id)}>
+                Open {primary.name}
+              </Button>
+            )}
+          </EmptyContent>
+        )}
+      </Empty>
+    );
   }
 
   frame() {
@@ -287,6 +360,7 @@ export class GeosteerFeature implements FeatureModule {
     if (!p || !p.window) {
       this.readout.set(<span className="text-muted-foreground">This well does not reach the {FORMATION_BY_ID.get(this.target)?.name ?? this.target} in the model.</span>);
       this.hud.set(null);
+      this.chip.set(null);
       return;
     }
     const s = steerAt(p, md);
@@ -329,6 +403,14 @@ export class GeosteerFeature implements FeatureModule {
         </span>
       ) : null,
     );
+    this.chip.set(
+      inWin && s ? (
+        <span className="flex items-center gap-1 font-medium" style={{ color: STATUS_COLOR[s.status] }}>
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s.status] }} />
+          {status}
+        </span>
+      ) : null,
+    );
   }
 
   private range(): { a: number; b: number } | null {
@@ -341,7 +423,10 @@ export class GeosteerFeature implements FeatureModule {
     return { a: p.window.from, b: p.window.to };
   }
 
-  private pad = { l: 46, r: 12, t: 8, b: 20 };
+  /** plot margins; the ones holding labels grow with the density's text */
+  private get pad() {
+    return { l: textLen(46), r: 12, t: 8, b: textLen(20) };
+  }
 
   private mdAtX(x: number): number | null {
     const r = this.range();
@@ -397,17 +482,17 @@ export class GeosteerFeature implements FeatureModule {
     g.fillStyle = ink.muted;
     g.font = font.mono(10);
     g.textAlign = 'right';
-    const stepY = niceStep((y1 - y0) / 5);
+    const stepY = niceStep(Math.max((y1 - y0) / 5, ((y1 - y0) * textLen(20)) / (H - P.t - P.b)));
     for (let d = Math.ceil(y0 / stepY) * stepY; d <= y1; d += stepY) {
       g.beginPath();
       g.moveTo(P.l, Y(d));
       g.lineTo(W - P.r, Y(d));
       g.stroke();
-      g.fillText(d.toFixed(0), P.l - 4, Y(d) + 3);
+      g.fillText(d.toFixed(0), P.l - 4, Y(d) + 3.5 * textScale());
     }
     g.textAlign = 'center';
     const stepX = niceStep((r.b - r.a) / 8);
-    for (let md = Math.ceil(r.a / stepX) * stepX; md <= r.b; md += stepX) g.fillText(md.toFixed(0), X(md), H - 6);
+    for (let md = Math.ceil(r.a / stepX) * stepX; md <= r.b; md += stepX) g.fillText(md.toFixed(0), X(md), H - textLen(6));
     // untied model surfaces for comparison
     if (p.source === 'tied') {
       g.setLineDash([4, 4]);

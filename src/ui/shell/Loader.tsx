@@ -42,7 +42,7 @@ function Morph({ leaving }: { leaving: boolean }) {
           ro.disconnect();
           worker.postMessage({ type: 'stop' });
           // let the burst finish before the worker goes
-          setTimeout(() => worker.terminate(), 1000);
+          setTimeout(() => worker.terminate(), 2000);
         };
       } catch {
         /* fall through to drawing on the page */
@@ -69,22 +69,64 @@ function Morph({ leaving }: { leaving: boolean }) {
 }
 
 /**
+ * The loading line. The steps arrive unevenly and the work between them
+ * blocks the page, so the line never jumps to a step: it glides there, then
+ * keeps creeping on toward the end, slower and slower, until the next step
+ * arrives. It is a transform animation, which the compositor runs even while
+ * the page is busy, and it never moves back.
+ */
+function ProgressLine({ f }: { f: number }) {
+  const bar = useRef<HTMLDivElement>(null);
+  const shown = useRef(0);
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    // where the line is now (a running animation's value)
+    const m = /matrix\(([^,]+)/.exec(getComputedStyle(el).transform);
+    const now = Math.max(shown.current, m ? parseFloat(m[1]) : 0);
+    const to = Math.max(now, f);
+    for (const a of el.getAnimations()) a.cancel();
+    const out = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+    if (f >= 1) el.animate([{ transform: `scaleX(${now})`, easing: out }, { transform: 'scaleX(1)' }], { duration: 450, fill: 'forwards' });
+    else {
+      // glide to the step in 0.7 s, then creep on a third of what is left over about ten seconds
+      const glide = 700;
+      const creep = 10000;
+      el.animate(
+        [
+          { transform: `scaleX(${now})`, easing: out },
+          { transform: `scaleX(${to})`, offset: glide / (glide + creep), easing: 'cubic-bezier(0.05, 0.5, 0.3, 1)' },
+          { transform: `scaleX(${to + (0.985 - to) * 0.35})` },
+        ],
+        { duration: glide + creep, fill: 'forwards' },
+      );
+    }
+    shown.current = to;
+  }, [f]);
+  return (
+    <div className="relative h-0.5 w-full overflow-hidden rounded-full bg-border-subtle">
+      <div ref={bar} className="absolute inset-0 origin-left rounded-full bg-ui-accent shadow-[0_0_12px_var(--ui-accent)]" style={{ transform: 'scaleX(0)' }} />
+      <div className="loader-sheen absolute inset-y-0 w-1/4" />
+    </div>
+  );
+}
+
+/**
  * The page loader: the particle form morph over the app background, the
  * wordmark and what is loading below it, and a progress line. On exit the
  * particles burst; the view transition blurs the loader away and carries the
  * logo up into the top bar.
  */
 export function Loader({ progress, failed, leaving }: { progress: { msg: string; f: number }; failed: string | null; leaving: boolean }) {
-  const pct = Math.round(progress.f * 100);
   return (
-    <div role="status" aria-live="polite" className="loader fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-background">
+    <div role="status" aria-live="polite" data-leaving={leaving || undefined} className="loader fixed inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-background">
       <div aria-hidden className="loader-vignette pointer-events-none absolute inset-0" />
       <div className="loader-in relative aspect-square w-[min(58vmin,440px)]">
         <Morph leaving={leaving} />
       </div>
       <div className="relative -mt-4 flex w-[min(90vw,420px)] flex-col items-center gap-3 text-center">
         <div className="loader-in flex items-center gap-3 [animation-delay:120ms]">
-          <span className="brand-logo flex">
+          <span className="flex">
             <Logo className="size-8" />
           </span>
           <h1 className="text-[2rem] leading-none font-light tracking-[-0.02em] text-fg-1">
@@ -98,14 +140,13 @@ export function Loader({ progress, failed, leaving }: { progress: { msg: string;
             <AlertDescription>{failed}</AlertDescription>
           </Alert>
         ) : (
-          <div className="loader-in mt-3 flex w-full flex-col gap-2 [animation-delay:320ms]">
-            <div className="relative h-0.5 w-full overflow-hidden rounded-full bg-border-subtle">
-              <div className="absolute inset-y-0 left-0 rounded-full bg-ui-accent shadow-[0_0_12px_var(--ui-accent)] transition-[width] duration-500 ease-out" style={{ width: `${pct}%` }} />
-              <div className="loader-sheen absolute inset-y-0 w-1/4" />
-            </div>
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="type-caption truncate font-mono">{progress.msg}</span>
-              <span className="type-value text-[0.75rem]!">{pct}%</span>
+          <div className="loader-in loader-status mt-3 flex w-full flex-col gap-2 [animation-delay:320ms]">
+            <ProgressLine f={progress.f} />
+            {/* the step now under way; each new one slides in over the last */}
+            <div className="relative h-5 overflow-hidden">
+              <span key={progress.msg} className="loader-step type-caption absolute inset-x-0 top-0 truncate font-mono">
+                {progress.msg}
+              </span>
             </div>
           </div>
         )}

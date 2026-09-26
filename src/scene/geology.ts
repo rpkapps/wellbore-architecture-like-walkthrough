@@ -29,7 +29,9 @@ export interface SlabInfo {
  * Regional geological block model: one closed solid per formation between two
  * interpolated horizons, clipped to an adjustable "section box" (as in BIM
  * section boxes). Cut faces are properly capped because each slab is rebuilt
- * from the horizon grids whenever the box changes.
+ * from the horizon grids whenever the box changes; the rebuild writes into the
+ * slabs' existing buffers, so a drag of the box costs a vertex update per
+ * frame, not new geometry.
  */
 export class GeologyModel {
   readonly group = new THREE.Group();
@@ -69,36 +71,73 @@ export class GeologyModel {
     this.rebuild();
   }
 
-  rebuild() {
-    for (const m of this.meshes.values()) {
-      m.geometry.dispose();
-      this.group.remove(m);
-    }
+  /** Every slab's mesh, kept while a unit is stripped away so its material and buffers are reused when it comes back. */
+  private slabs = new Map<string, THREE.Mesh>();
+  /** node counts the slab buffers are laid out for */
+  private grid: { nx: number; nz: number } | null = null;
+
+  /**
+   * Rebuild the slabs for the current box. The buffers keep their size while
+   * the grid's node counts do, so the vertices are rewritten in place and the
+   * GPU buffers updated rather than reallocated. `preview` (a box being
+   * dragged) keeps the current counts so every step of the drag is such an
+   * update; the drag's end rebuilds at the box's own resolution.
+   */
+  rebuild(preview = false) {
     const hs = this.field.horizons;
-    const oldMats = new Map<string, THREE.Material>();
-    for (const [id, m] of this.meshes) oldMats.set(id, m.material as THREE.Material);
+    const box = this.box;
+    const want = slabGrid(box);
+    const grid = want && preview && this.grid ? this.grid : want;
+    const relayout = !grid || !this.grid || grid.nx !== this.grid.nx || grid.nz !== this.grid.nz;
+    this.grid = grid;
     this.meshes.clear();
+    // each horizon is sampled once: it is the top of one slab and the base of the one above
+    const depth = grid ? hs.map((h) => sampleBoxGrid(h, box, grid.nx, grid.nz)) : [];
     for (let i = 0; i < hs.length; i++) {
       const top = hs[i];
-      const base = hs[i + 1] ?? null;
-      const geo = buildSlab(top, base, this.modelBase, this.box);
-      if (!geo) continue;
-      const f = FORMATION_BY_ID.get(top.id)!;
-      const mat = (oldMats.get(top.id) as ReturnType<typeof createRockMaterial>) ?? createRockMaterial(LITHO_INDEX[f.lithology], f.color);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.name = `formation:${top.id}`;
-      mesh.userData = { kind: 'formation', formationId: top.id, top, base } satisfies SlabInfo;
+      let mesh = this.slabs.get(top.id);
+      const old = mesh && !relayout ? slabArrays(mesh.geometry) : undefined;
+      const bounds = new THREE.Box3();
+      const arrays = grid ? writeSlab(depth[i], depth[i + 1] ?? null, this.modelBase, box, grid.nx, grid.nz, old, bounds) : null;
+      if (!arrays) {
+        if (mesh) this.group.remove(mesh);
+        continue;
+      }
+      if (!mesh) {
+        const f = FORMATION_BY_ID.get(top.id)!;
+        mesh = new THREE.Mesh(slabGeometry(arrays, bounds), createRockMaterial(LITHO_INDEX[f.lithology], f.color));
+        mesh.name = `formation:${top.id}`;
+        mesh.userData = { kind: 'formation', formationId: top.id, top, base: hs[i + 1] ?? null } satisfies SlabInfo;
+        this.slabs.set(top.id, mesh);
+      } else if (!old) {
+        mesh.geometry.dispose();
+        mesh.geometry = slabGeometry(arrays, bounds);
+      } else {
+        const g = mesh.geometry;
+        g.attributes.position.needsUpdate = true;
+        g.attributes.normal.needsUpdate = true;
+        g.attributes.aStrat.needsUpdate = true;
+        setBounds(g, bounds);
+      }
       this.meshes.set(top.id, mesh);
-      this.group.add(mesh);
+      if (mesh.parent !== this.group) this.group.add(mesh);
     }
+    // a unit stripped away while the counts changed: its buffers no longer fit
+    if (relayout)
+      for (const [id, m] of this.slabs)
+        if (!this.meshes.has(id)) {
+          m.geometry.dispose();
+          m.geometry = new THREE.BufferGeometry();
+        }
     this.applyState();
   }
 
   onBoxChange?: (b: SectionBox) => void;
 
-  setBox(b: Partial<SectionBox>) {
+  /** Move the section box; `preview` while it is dragged (see `rebuild`). */
+  setBox(b: Partial<SectionBox>, preview = false) {
     this.box = { ...this.box, ...b };
-    this.rebuild();
+    this.rebuild(preview);
     this.onBoxChange?.(this.box);
   }
 
@@ -143,22 +182,46 @@ export class GeologyModel {
   /** called after visibility / opacity changes (e.g. to refresh the static shadow map) */
   onStateChange?: () => void;
 
+  /** Where `globalOpacity` is heading: `stepOpacity` eases it there rather than jump. */
+  private opacityGoal = 1;
+
   setGuided(on: boolean) {
-    if (this.forceTransparent === on) return;
-    this.forceTransparent = on;
-    this.globalOpacity = on ? 0.7 : 1;
-    this.applyState();
+    const goal = on ? 0.7 : 1;
+    if (goal === this.opacityGoal) return;
+    this.opacityGoal = goal;
+    // see-through from the start of the fade in; solid again only once it has faded back
+    if (on && !this.forceTransparent) {
+      this.forceTransparent = true;
+      this.applyState();
+    }
+  }
+
+  /** Ease the model's opacity toward its goal (0.3 of opacity in half a second); true while it is still moving. */
+  stepOpacity(dt: number): boolean {
+    const goal = this.opacityGoal;
+    if (this.globalOpacity === goal) return false;
+    const step = dt * 0.6;
+    this.globalOpacity = Math.abs(goal - this.globalOpacity) <= step ? goal : this.globalOpacity + Math.sign(goal - this.globalOpacity) * step;
+    if (this.globalOpacity === goal) {
+      this.forceTransparent = goal < 1;
+      this.applyState();
+      return false;
+    }
+    for (const [id, m] of this.meshes) (m.material as THREE.MeshStandardMaterial).opacity = this.opacityOf(id);
+    return true;
+  }
+
+  private opacityOf(id: string): number {
+    const op = this.state.get(id)!.opacity * this.globalOpacity;
+    return this.isolated && this.isolated !== id ? Math.min(op, 0.06) : op;
   }
 
   applyState() {
     for (const [id, m] of this.meshes) {
       const s = this.state.get(id)!;
       const mat = m.material as THREE.MeshStandardMaterial;
-      let op = s.opacity * this.globalOpacity;
+      const op = this.opacityOf(id);
       let vis = s.visible;
-      if (this.isolated && this.isolated !== id) {
-        op = Math.min(op, 0.06);
-      }
       if (op <= 0.01) vis = false;
       m.visible = vis;
       const transparent = op < 0.995 || this.forceTransparent;
@@ -199,51 +262,73 @@ export class GeologyModel {
 }
 
 const BASE_GAP = 0.25; // m
+/** vertical subdivisions of the cut faces, for lighting and banding */
+const WALL_K = 8;
 
-/** Build a closed slab between two horizon grids clipped to the section box. */
-function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number, box: SectionBox): THREE.BufferGeometry | null {
+/** Grid node counts of the slabs for a section box: about 110 cells along its long side, never finer than 25 m. */
+export function slabGrid(box: SectionBox): { nx: number; nz: number } | null {
   const W = box.xMax - box.xMin;
   const H = box.nMax - box.nMin;
   if (W < 10 || H < 10) return null;
   const cell = Math.max(25, Math.max(W, H) / 110);
-  const nx = Math.max(2, Math.round(W / cell) + 1);
-  const nz = Math.max(2, Math.round(H / cell) + 1);
-  const topD = (x: number, n: number) => sampleHorizon(top, x, n);
-  const baseD = (x: number, n: number) => (base ? sampleHorizon(base, x, n) : modelBase);
-  // effective top honours the overburden strip depth
-  const effTop = (x: number, n: number) => Math.max(topD(x, n), box.stripTo);
-  let anyThickness = false;
-  const pos: number[] = [];
-  const strat: number[] = [];
-  const idx: number[] = [];
-  const push = (x: number, y: number, n: number, s: number) => {
-    pos.push(x, y, -n);
-    strat.push(s);
-    return pos.length / 3 - 1;
+  return { nx: Math.max(2, Math.round(W / cell) + 1), nz: Math.max(2, Math.round(H / cell) + 1) };
+}
+
+/** A horizon's depth at every grid node of the box, row-major [iz * nx + ix]. */
+export function sampleBoxGrid(h: HorizonGrid, box: SectionBox, nx: number, nz: number): Float64Array {
+  const W = box.xMax - box.xMin;
+  const H = box.nMax - box.nMin;
+  const d = new Float64Array(nx * nz);
+  for (let iz = 0; iz < nz; iz++) {
+    const n = box.nMin + (iz / (nz - 1)) * H;
+    for (let ix = 0; ix < nx; ix++) d[iz * nx + ix] = sampleHorizon(h, box.xMin + (ix / (nx - 1)) * W, n);
+  }
+  return d;
+}
+
+/** The vertex and index arrays of one slab; their sizes depend only on the grid's node counts. */
+export interface SlabArrays {
+  position: Float32Array;
+  normal: Float32Array;
+  strat: Float32Array;
+  index: Uint16Array | Uint32Array;
+}
+
+/** The typed arrays behind a slab geometry, to write the next box into; undefined for an empty placeholder. */
+function slabArrays(g: THREE.BufferGeometry): SlabArrays | undefined {
+  const p = g.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!p || !g.index) return undefined;
+  return {
+    position: p.array as Float32Array,
+    normal: g.getAttribute('normal').array as Float32Array,
+    strat: g.getAttribute('aStrat').array as Float32Array,
+    index: g.index.array as Uint16Array | Uint32Array,
   };
-  // top & bottom grids
-  const topStart = 0;
-  for (let iz = 0; iz < nz; iz++)
-    for (let ix = 0; ix < nx; ix++) {
-      const x = box.xMin + (ix / (nx - 1)) * W;
-      const n = box.nMin + (iz / (nz - 1)) * H;
-      const t = topD(x, n);
-      const b = baseD(x, n);
-      const et = Math.min(effTop(x, n), b);
-      if (b - et > 0.3) anyThickness = true;
-      push(x, -et, n, et - t);
-    }
-  if (!anyThickness) return null;
-  const botStart = pos.length / 3;
-  for (let iz = 0; iz < nz; iz++)
-    for (let ix = 0; ix < nx; ix++) {
-      const x = box.xMin + (ix / (nx - 1)) * W;
-      const n = box.nMin + (iz / (nz - 1)) * H;
-      const t = topD(x, n);
-      const b = baseD(x, n);
-      // sit the base a hair below the next unit's top so coincident horizons never z-fight
-      push(x, -b - BASE_GAP, n, b - t);
-    }
+}
+
+/** Bounds known from the build (a sphere around the box: as good for culling and ray tests, and no pass over the vertices). */
+function setBounds(g: THREE.BufferGeometry, b: THREE.Box3) {
+  g.boundingBox = (g.boundingBox ?? new THREE.Box3()).copy(b);
+  g.boundingSphere = b.getBoundingSphere(g.boundingSphere ?? new THREE.Sphere());
+}
+
+function slabGeometry(a: SlabArrays, bounds: THREE.Box3): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(a.position, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(a.normal, 3));
+  g.setAttribute('aStrat', new THREE.BufferAttribute(a.strat, 1));
+  g.setIndex(new THREE.BufferAttribute(a.index, 1));
+  setBounds(g, bounds);
+  return g;
+}
+
+/** A slab's index: it depends only on the node counts, so it is written once per grid. */
+function slabIndex(nx: number, nz: number, vertices: number): Uint16Array | Uint32Array {
+  const K = WALL_K;
+  const count = 12 * (nx - 1) * (nz - 1) + 6 * K * 2 * (nx - 1 + nz - 1);
+  const idx = vertices > 65535 ? new Uint32Array(count) : new Uint16Array(count);
+  let o = 0;
+  const botStart = nx * nz;
   for (let iz = 0; iz < nz - 1; iz++)
     for (let ix = 0; ix < nx - 1; ix++) {
       const a = iz * nx + ix;
@@ -251,53 +336,201 @@ function buildSlab(top: HorizonGrid, base: HorizonGrid | null, modelBase: number
       const c = a + nx;
       const d = c + 1;
       // top faces up (+y); our z = -north so winding is flipped relative to (x, n)
-      idx.push(topStart + a, topStart + b, topStart + c, topStart + b, topStart + d, topStart + c);
-      idx.push(botStart + a, botStart + c, botStart + b, botStart + b, botStart + c, botStart + d);
+      idx[o++] = a;
+      idx[o++] = b;
+      idx[o++] = c;
+      idx[o++] = b;
+      idx[o++] = d;
+      idx[o++] = c;
+      idx[o++] = botStart + a;
+      idx[o++] = botStart + c;
+      idx[o++] = botStart + b;
+      idx[o++] = botStart + b;
+      idx[o++] = botStart + c;
+      idx[o++] = botStart + d;
     }
-  // side walls: walk each edge, vertical subdivisions for lighting/banding
-  const K = 8;
-  const edge = (pts: [number, number][], outward: 1 | -1) => {
-    const start = pos.length / 3;
-    for (const [x, n] of pts) {
-      const t = topD(x, n);
-      const b = baseD(x, n);
-      const et = Math.min(effTop(x, n), b);
-      for (let k = 0; k <= K; k++) {
-        const d = et + ((b - et) * k) / K;
-        push(x, -d, n, d - t);
-      }
-    }
-    for (let i = 0; i < pts.length - 1; i++)
+  // side walls, in the order south (+z), north (-z), west (-x), east (+x)
+  let start = 2 * nx * nz;
+  const walls: [number, 1 | -1][] = [
+    [nx, -1],
+    [nx, 1],
+    [nz, 1],
+    [nz, -1],
+  ];
+  for (const [len, outward] of walls) {
+    for (let i = 0; i < len - 1; i++)
       for (let k = 0; k < K; k++) {
         const a = start + i * (K + 1) + k;
         const b = a + 1;
         const c = a + (K + 1);
         const d = c + 1;
-        if (outward === 1) idx.push(a, c, b, b, c, d);
-        else idx.push(a, b, c, b, d, c);
+        if (outward === 1) {
+          idx[o++] = a;
+          idx[o++] = c;
+          idx[o++] = b;
+          idx[o++] = b;
+          idx[o++] = c;
+          idx[o++] = d;
+        } else {
+          idx[o++] = a;
+          idx[o++] = b;
+          idx[o++] = c;
+          idx[o++] = b;
+          idx[o++] = d;
+          idx[o++] = c;
+        }
       }
-  };
-  const xs = (n: number) => Array.from({ length: nx }, (_, i) => [box.xMin + (i / (nx - 1)) * W, n] as [number, number]);
-  const ns = (x: number) => Array.from({ length: nz }, (_, i) => [x, box.nMin + (i / (nz - 1)) * H] as [number, number]);
-  edge(xs(box.nMin), -1); // south face (+z)
-  edge(xs(box.nMax), 1); // north face (-z)
-  edge(ns(box.xMin), 1); // west face (-x)
-  edge(ns(box.xMax), -1); // east face (+x)
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('aStrat', new THREE.Float32BufferAttribute(strat, 1));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  // pinched / stripped units produce zero-area faces whose vertices get a zero normal;
-  // a zero normal becomes NaN in the lighting and bloom spreads it into black blocks
-  const nrm = g.getAttribute('normal') as THREE.BufferAttribute;
-  for (let i = 0; i < nrm.count; i++) {
-    const x = nrm.getX(i),
-      y = nrm.getY(i),
-      z = nrm.getZ(i);
-    const l = x * x + y * y + z * z;
-    if (!(l > 1e-12) || !Number.isFinite(l)) nrm.setXYZ(i, 0, 1, 0);
+    start += len * (K + 1);
   }
-  g.computeBoundingSphere();
-  return g;
+  return idx;
+}
+
+/**
+ * A closed slab between two horizons clipped to the section box: the top and
+ * base grids and the four cut faces, with the top honouring the overburden
+ * strip depth. Depths come pre-sampled at the box's grid nodes (`top`, and
+ * `base` or the flat model base), so a horizon is sampled once for both slabs
+ * it bounds and the cut faces reuse the grid's edge nodes.
+ *
+ * Writes into `out` when given (arrays of the same node counts), so dragging
+ * the box updates the GPU buffers in place instead of allocating new ones;
+ * returns null (with `out` partly written) when the unit has no thickness
+ * inside the box. `bounds` receives the slab's bounding box.
+ */
+export function writeSlab(
+  top: Float64Array,
+  base: Float64Array | null,
+  modelBase: number,
+  box: SectionBox,
+  nx: number,
+  nz: number,
+  out?: SlabArrays,
+  bounds?: THREE.Box3,
+): SlabArrays | null {
+  const K = WALL_K;
+  const W = box.xMax - box.xMin;
+  const H = box.nMax - box.nMin;
+  const s = box.stripTo;
+  const nv = 2 * nx * nz + 2 * (nx + nz) * (K + 1);
+  const arrays: SlabArrays = out ?? { position: new Float32Array(nv * 3), normal: new Float32Array(nv * 3), strat: new Float32Array(nv), index: slabIndex(nx, nz, nv) };
+  const { position: pos, strat } = arrays;
+  const xAt = (ix: number) => box.xMin + (ix / (nx - 1)) * W;
+  const nAt = (iz: number) => box.nMin + (iz / (nz - 1)) * H;
+  const baseAt = (i: number) => (base ? base[i] : modelBase);
+  // effective top honours the overburden strip depth
+  const effTop = (t: number, b: number) => Math.min(Math.max(t, s), b);
+  let v = 0;
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  const push = (x: number, y: number, n: number, st: number) => {
+    if (y < yMin) yMin = y;
+    if (y > yMax) yMax = y;
+    pos[v * 3] = x;
+    pos[v * 3 + 1] = y;
+    pos[v * 3 + 2] = -n;
+    strat[v++] = st;
+  };
+  // top & bottom grids
+  let anyThickness = false;
+  for (let iz = 0; iz < nz; iz++) {
+    const n = nAt(iz);
+    for (let ix = 0; ix < nx; ix++) {
+      const i = iz * nx + ix;
+      const t = top[i];
+      const b = baseAt(i);
+      const et = effTop(t, b);
+      if (b - et > 0.3) anyThickness = true;
+      push(xAt(ix), -et, n, et - t);
+    }
+  }
+  if (!anyThickness) return null;
+  for (let iz = 0; iz < nz; iz++) {
+    const n = nAt(iz);
+    for (let ix = 0; ix < nx; ix++) {
+      const i = iz * nx + ix;
+      const b = baseAt(i);
+      // sit the base a hair below the next unit's top so coincident horizons never z-fight
+      push(xAt(ix), -b - BASE_GAP, n, b - top[i]);
+    }
+  }
+  // side walls along the grid's edge nodes, vertical subdivisions for lighting/banding
+  const wall = (ix0: number, iz0: number, dix: number, diz: number, len: number) => {
+    for (let j = 0; j < len; j++) {
+      const ix = ix0 + dix * j;
+      const iz = iz0 + diz * j;
+      const i = iz * nx + ix;
+      const t = top[i];
+      const b = baseAt(i);
+      const et = effTop(t, b);
+      const x = xAt(ix);
+      const n = nAt(iz);
+      for (let k = 0; k <= K; k++) {
+        const d = et + ((b - et) * k) / K;
+        push(x, -d, n, d - t);
+      }
+    }
+  };
+  wall(0, 0, 1, 0, nx); // south face (+z)
+  wall(0, nz - 1, 1, 0, nx); // north face (-z)
+  wall(0, 0, 0, 1, nz); // west face (-x)
+  wall(nx - 1, 0, 0, 1, nz); // east face (+x)
+  vertexNormals(pos, arrays.index, arrays.normal);
+  // x and north span the box exactly (its corners are grid nodes); as stored in float32
+  const f = Math.fround;
+  bounds?.min.set(f(box.xMin), f(yMin), f(-box.nMax));
+  bounds?.max.set(f(box.xMax), f(yMax), f(-box.nMin));
+  return arrays;
+}
+
+/**
+ * Area-weighted vertex normals, as three.js' `computeVertexNormals` makes
+ * them, straight on the typed arrays (several times faster than going
+ * through its attribute accessors). Pinched or stripped units produce
+ * zero-area faces whose vertices get a zero normal; a zero normal becomes
+ * NaN in the lighting and bloom spreads it into black blocks, so those point up.
+ */
+function vertexNormals(pos: Float32Array, idx: ArrayLike<number>, nrm: Float32Array) {
+  nrm.fill(0);
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i] * 3;
+    const b = idx[i + 1] * 3;
+    const c = idx[i + 2] * 3;
+    const bx = pos[b];
+    const by = pos[b + 1];
+    const bz = pos[b + 2];
+    const cbx = pos[c] - bx;
+    const cby = pos[c + 1] - by;
+    const cbz = pos[c + 2] - bz;
+    const abx = pos[a] - bx;
+    const aby = pos[a + 1] - by;
+    const abz = pos[a + 2] - bz;
+    const x = cby * abz - cbz * aby;
+    const y = cbz * abx - cbx * abz;
+    const z = cbx * aby - cby * abx;
+    nrm[a] += x;
+    nrm[a + 1] += y;
+    nrm[a + 2] += z;
+    nrm[b] += x;
+    nrm[b + 1] += y;
+    nrm[b + 2] += z;
+    nrm[c] += x;
+    nrm[c + 1] += y;
+    nrm[c + 2] += z;
+  }
+  for (let i = 0; i < nrm.length; i += 3) {
+    const x = nrm[i];
+    const y = nrm[i + 1];
+    const z = nrm[i + 2];
+    const l = Math.sqrt(x * x + y * y + z * z);
+    if (l > 0 && Number.isFinite(l)) {
+      const k = 1 / l;
+      nrm[i] = x * k;
+      nrm[i + 1] = y * k;
+      nrm[i + 2] = z * k;
+    } else {
+      nrm[i] = 0;
+      nrm[i + 1] = 1;
+      nrm[i + 2] = 0;
+    }
+  }
 }

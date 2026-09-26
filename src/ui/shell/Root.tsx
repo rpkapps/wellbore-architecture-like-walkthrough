@@ -1,13 +1,27 @@
 import { Toaster } from '@tecton/react/components/sonner';
 import { useEffect, useState } from 'react';
-import { flushSync } from 'react-dom';
+import * as THREE from 'three';
 import { loadVolve } from '../../data/dataset';
+import { loadRealisticTextures } from '../../scene/textures';
 import { appActions } from '../../actions/appActions';
 import { App } from '../app';
 import { prefs, resolvedTheme } from '../prefs';
 import { useSignal } from '../signal';
 import { Loader } from './Loader';
 import { Workspace } from './Workspace';
+
+/** The loader stays at least this long before it starts to leave, so a fast load never flashes it. */
+const LOADER_MIN_MS = 2000;
+/** How long the loader takes to fade away over the workspace (the CSS of .loader[data-leaving] and .app-reveal). */
+const LOADER_FADE_MS = 1600;
+/** The intro's camera sweep from the establishing shot down to the field overview (s). */
+const INTRO_FLIGHT_S = 6.5;
+/** Input that ends the intro: the workspace comes in at once. */
+const INPUTS = ['pointerdown', 'wheel', 'keydown'] as const;
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** After the next frame is painted. */
+const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
 
 type Boot = { stage: 'loading'; msg: string; f: number } | { stage: 'failed'; msg: string } | { stage: 'running'; app: App };
 
@@ -22,46 +36,83 @@ export function Root() {
 
   useEffect(() => {
     let cancelled = false;
+    const shownAt = performance.now();
     loadVolve('./data/volve/', (msg, f) => setProgress({ msg, f }))
-      .then((field) => {
+      .then(async (field) => {
         if (cancelled) return;
-        setProgress({ msg: 'Building geological model and wellbore geometry', f: 0.86 });
+        // the model is built in one go: show the step before it starts
+        setProgress({ msg: 'Building the geological model', f: 0.82 });
+        await paint();
         const app = new App(field);
+        app.onBootStep = (msg, f) => setProgress({ msg, f });
         app.actions.register(...appActions());
         const twin = { app, field, engine: undefined as unknown, actions: app.actions };
         (window as unknown as Record<string, unknown>).twin = twin;
-        void app.whenReady.then(() => {
+        void app.whenReady.then(async () => {
           const e = app.engine;
           twin.engine = e;
-          // cinematic start: high establishing shot, then settle on the field overview
+          // cinematic start: a high establishing shot off to one side of the field, from which
+          // the camera sweeps down around it to the overview
           const o = e.overviewPose();
           e.rig.setMode('explore');
           e.rig.setExploreView('orbit');
-          e.camera.position
-            .copy(o.pos)
-            .multiplyScalar(1.8)
-            .setY(o.pos.y + 3500);
+          // the view toolbar shows the navigation mode from the view revision
+          app.viewRev.bump();
+          const end = new THREE.Spherical().setFromVector3(o.pos.clone().sub(o.target));
+          e.camera.position.setFromSpherical(new THREE.Spherical(end.radius * 2.4, end.phi * 0.55, end.theta - 0.95)).add(o.target);
           e.camera.lookAt(o.target);
           e.rig.orbit.target.copy(o.target);
           e.start();
+          // the loader goes once the view has drawn, with its photo textures (8 s at most), so
+          // nothing pops in under the fade
+          setProgress({ msg: 'Drawing the first frames', f: 0.97 });
+          await Promise.race([
+            (async () => {
+              await e.whenDrawn(2);
+              if (app.flags.on('textures')) {
+                await loadRealisticTextures();
+                await e.whenDrawn(2);
+              }
+            })(),
+            wait(8000),
+          ]);
           setProgress({ msg: 'Ready', f: 1 });
-          setTimeout(() => {
-            // the particles burst, then the loader leaves in a view transition
-            // (its logo flies into the top bar) while the camera sweeps down
-            setLoader('leaving');
-            setTimeout(() => {
-              // started by hand, once, before any of React's own transitions:
-              // the loader and the logo carry transition names only meanwhile
-              const done = () => flushSync(() => setLoader('gone'));
-              const html = document.documentElement;
-              const vt = (document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } }).startViewTransition;
-              if (vt && !html.hasAttribute('data-reduce-motion')) {
-                html.setAttribute('data-vt-loader', '');
-                vt.call(document, done).finished.finally(() => html.removeAttribute('data-vt-loader'));
-              } else done();
-              e.rig.flyTo(o.pos, o.target, 3.2);
-            }, 520);
-          }, 300);
+          // the intro starts on the 3D view alone: the workspace hides now, under the loader
+          const html = document.documentElement;
+          const motion = !html.hasAttribute('data-reduce-motion');
+          if (motion) html.setAttribute('data-intro', 'scene');
+          // the line fills, and the loader has been up for at least LOADER_MIN_MS
+          await wait(Math.max(700, LOADER_MIN_MS - (performance.now() - shownAt)));
+          // The intro: the loader fades away onto the 3D view alone, high above the field, and the
+          // camera sweeps down around it to the overview; as it settles, the workspace (top bar,
+          // rail, panels, timeline, overlays) fades in around it. Any input brings it in at once.
+          let chromeShown = false;
+          const showChrome = () => {
+            if (chromeShown) return;
+            chromeShown = true;
+            for (const t of INPUTS) window.removeEventListener(t, showChrome, true);
+            html.setAttribute('data-intro', 'chrome');
+            setTimeout(() => html.removeAttribute('data-intro'), 1400);
+            // messages held back while the loader showed
+            app.releaseToasts();
+          };
+          for (const t of INPUTS) window.addEventListener(t, showChrome, true);
+          setLoader('leaving');
+          e.rig.flyTo(o.pos, o.target, INTRO_FLIGHT_S, undefined, { around: true });
+          await wait(LOADER_FADE_MS);
+          setLoader('gone');
+          // the workspace comes in as the camera settles (at 62% of the sweep, by the flight itself,
+          // so a slow machine does not bring it in over a camera still high above)
+          if (!motion) showChrome();
+          else {
+            const watch = () => {
+              if (chromeShown) return;
+              const k = e.rig.flightProgress();
+              if (k === null || k >= 0.62) showChrome();
+              else requestAnimationFrame(watch);
+            };
+            requestAnimationFrame(watch);
+          }
         });
         setBoot({ stage: 'running', app });
       })
@@ -76,7 +127,12 @@ export function Root() {
 
   return (
     <>
-      {boot.stage === 'running' && <Workspace app={boot.app} brand={loader === 'gone'} />}
+      {boot.stage === 'running' && (
+        // hidden under the loader while it builds, then faded up as the loader fades away
+        <div className="app-reveal h-svh w-full" data-veiled={loader === 'shown' || undefined}>
+          <Workspace app={boot.app} />
+        </div>
+      )}
       {loader !== 'gone' && <Loader progress={progress} failed={boot.stage === 'failed' ? boot.msg : null} leaving={loader === 'leaving'} />}
       <Toasts />
     </>

@@ -9,7 +9,11 @@ import { ProvBadge } from '../prov';
 import { useRev, useSignal } from '../signal';
 import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
-/** Details of whatever was last clicked in the scene. */
+/**
+ * Details of the selected object, over the 3D view: shown while the
+ * Properties panel is closed (or hidden behind another tab), which otherwise
+ * shows them. Closing it clears the selection.
+ */
 export function InspectorCard({ app }: { app: App }) {
   const v = useSignal(app.inspector);
   // toggle actions (isolate) show the scene's current state
@@ -17,7 +21,7 @@ export function InspectorCard({ app }: { app: App }) {
   const [collapsed, setCollapsed] = useCollapsed('inspector');
   if (!v) return null;
   const close = (
-    <IconButton label="Close" size="icon-xs" onPress={() => app.inspector.set(null)}>
+    <IconButton label="Close" size="icon-xs" onPress={() => app.select(null)}>
       <XIcon />
     </IconButton>
   );

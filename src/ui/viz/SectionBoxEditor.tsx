@@ -11,7 +11,21 @@ const STRIP_MAX = 3200; // m TVDSS
 const GAUGE_W = 44;
 
 type Edge = 'xMin' | 'xMax' | 'nMin' | 'nMax';
-type Drag = { edges: Edge[]; move?: { x: number; n: number; box: SectionBox } } | { strip: true };
+/** the four face handles, in the order they are drawn */
+const handles: [Edge, string][] = [
+  ['xMin', 'West face'],
+  ['xMax', 'East face'],
+  ['nMax', 'North face'],
+  ['nMin', 'South face'],
+];
+/** A drag on the plan: the edges it moves, or the whole box from where it was grabbed; `at` is the plan's place on the page, read once. */
+type Drag = { edges: Edge[]; move?: { x: number; n: number; box: SectionBox }; at: DOMRect };
+
+/** What the box cuts away, in world coordinates: everything but the box (far past the plan's edges). */
+const FAR = 1e6;
+const maskPath = (b: SectionBox) => `M${-FAR},${-FAR} H${FAR} V${FAR} H${-FAR} Z M${b.xMin},${b.nMin} V${b.nMax} H${b.xMax} V${b.nMin} Z`;
+const km = (v: number) => (v / 1000).toFixed(2);
+const readout = (b: SectionBox) => `W ${km(b.xMin)} · E ${km(b.xMax)} · S ${km(b.nMin)} · N ${km(b.nMax)} km · strip ${fmt.n(b.stripTo, 0)} m`;
 
 /** The plan's pixel layout: its size and the uniform world → pixel scale. */
 interface View {
@@ -32,6 +46,11 @@ interface View {
  * their edges are dragged, so the size never goes through React: the map is
  * drawn in world coordinates under one transform, and `layout` writes that
  * transform and the few pixel-sized marks (handles, bit, grid, scale bar).
+ *
+ * A drag doesn't go through React either: each step writes the box's marks
+ * straight into the drawing (`paint`) and previews the 3D box, which updates
+ * the slabs in place once per frame; releasing commits the box to state and
+ * rebuilds the slabs at the box's own resolution.
  */
 export function SectionBoxEditor({ app }: { app: App }) {
   const rev = useRev(app.sceneRev, app.wellRev);
@@ -56,10 +75,15 @@ export function SectionBoxEditor({ app }: { app: App }) {
   const bit = useRef<SVGCircleElement>(null);
   const scaleBar = useRef<SVGRectElement>(null);
   const scaleText = useRef<SVGTextElement>(null);
+  const mask = useRef<SVGPathElement>(null);
+  const frame = useRef<SVGRectElement>(null);
+  const text = useRef<HTMLParagraphElement>(null);
   const gauge = useRef<GaugeLayout | null>(null);
   const v = useRef<View>({ w: 0, h: 0, k: 1, ox: 0, oy: 0 });
+  // the box as drawn: the state's, or while a drag is under way the drag's
   const boxNow = useRef(box);
-  boxNow.current = box;
+  const busy = useRef(false);
+  if (!busy.current) boxNow.current = box;
   const [shown, setShown] = useState(false);
 
   const px = (x: number) => v.current.ox + (x - fb.xMin) * v.current.k;
@@ -90,6 +114,41 @@ export function SectionBoxEditor({ app }: { app: App }) {
       el?.setAttribute('x', at[i][0].toFixed(1));
       el?.setAttribute('y', at[i][1].toFixed(1));
     });
+  };
+  /** Every mark that shows the box, written straight into the drawing (a drag step renders nothing). */
+  const paint = () => {
+    const b = boxNow.current;
+    mask.current?.setAttribute('d', maskPath(b));
+    const f = frame.current;
+    if (f) {
+      f.setAttribute('x', String(b.xMin));
+      f.setAttribute('y', String(b.nMin));
+      f.setAttribute('width', String(b.xMax - b.xMin));
+      f.setAttribute('height', String(b.nMax - b.nMin));
+    }
+    handleEls.current.forEach((el, i) => {
+      const e = handles[i][0];
+      el?.setAttribute('aria-valuenow', String(Math.round(b[e])));
+      el?.setAttribute('aria-valuetext', `${km(b[e])} km`);
+    });
+    if (text.current) text.current.textContent = readout(b);
+    placeBox();
+    gauge.current?.(v.current.h, b.stripTo);
+  };
+  /** A drag step: the drawing and the 3D box follow at once, nothing renders. */
+  const live = (b: Partial<SectionBox>) => {
+    busy.current = true;
+    boxNow.current = { ...boxNow.current, ...b };
+    paint();
+    app.setBox(b, false, true);
+  };
+  /** A drag's end: the box goes into state (one render) and the slabs are rebuilt at its own resolution. */
+  const commit = () => {
+    if (!busy.current) return;
+    busy.current = false;
+    const b = boxNow.current;
+    setBox(b);
+    app.setBox(b);
   };
   const layout = (W: number) => {
     const mapW = Math.max(0, W - GAUGE_W - 8);
@@ -150,11 +209,11 @@ export function SectionBoxEditor({ app }: { app: App }) {
     latest.current.layout(W);
     return () => ro.disconnect();
   }, []);
-  // the box moved (drag, keys, another control) or the drawing mounted
+  // the box moved (keys, a preset, a drag's end) or the drawing mounted
   useLayoutEffect(() => {
     placeBox();
     placeBit();
-    gauge.current?.(v.current.h, box.stripTo);
+    gauge.current?.(v.current.h, boxNow.current.stripTo);
   });
   // the camera's place on the plan follows playback without rendering
   useEffect(() => app.poseText.subscribe(() => latest.current.placeBit()), [app]);
@@ -171,6 +230,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
     return Math.min(fb.nMax, Math.max(b.nMin + MIN_SPAN, v));
   };
   const hit = (sx: number, sy: number): Edge[] | 'move' | null => {
+    const box = boxNow.current;
     const T = 7;
     const inX = sx > px(box.xMin) - T && sx < px(box.xMax) + T;
     const inY = sy > py(box.nMax) - T && sy < py(box.nMin) + T;
@@ -182,37 +242,38 @@ export function SectionBoxEditor({ app }: { app: App }) {
     else if (Math.abs(sy - py(box.nMax)) < T) e.push('nMax');
     return e.length ? e : 'move';
   };
-  const local = (ev: ReactPointerEvent<SVGSVGElement>) => {
-    const r = ev.currentTarget.getBoundingClientRect();
-    return [ev.clientX - r.left, ev.clientY - r.top];
-  };
+  // during a drag the plan's place on the page is the one read when it started (no layout read per step)
+  const local = (ev: ReactPointerEvent<SVGSVGElement>, r: DOMRect = ev.currentTarget.getBoundingClientRect()) => [ev.clientX - r.left, ev.clientY - r.top];
   const onDown = (ev: ReactPointerEvent<SVGSVGElement>) => {
-    const [sx, sy] = local(ev);
+    const at = ev.currentTarget.getBoundingClientRect();
+    const [sx, sy] = local(ev, at);
     const h = hit(sx, sy);
     if (!h) return;
     ev.currentTarget.setPointerCapture(ev.pointerId);
-    drag.current = h === 'move' ? { edges: [], move: { x: toX(sx), n: toN(sy), box } } : { edges: h };
+    drag.current = h === 'move' ? { edges: [], move: { x: toX(sx), n: toN(sy), box: boxNow.current }, at } : { edges: h, at };
   };
   const onMove = (ev: ReactPointerEvent<SVGSVGElement>) => {
-    const [sx, sy] = local(ev);
     const d = drag.current;
-    if (!d || 'strip' in d) {
+    if (!d) {
+      const [sx, sy] = local(ev);
       setHot(hit(sx, sy));
       return;
     }
+    const [sx, sy] = local(ev, d.at);
     if (d.move) {
       const m = d.move;
       const dx = Math.max(fb.xMin - m.box.xMin, Math.min(fb.xMax - m.box.xMax, toX(sx) - m.x));
       const dn = Math.max(fb.nMin - m.box.nMin, Math.min(fb.nMax - m.box.nMax, toN(sy) - m.n));
-      edit({ xMin: m.box.xMin + dx, xMax: m.box.xMax + dx, nMin: m.box.nMin + dn, nMax: m.box.nMax + dn });
+      live({ xMin: m.box.xMin + dx, xMax: m.box.xMax + dx, nMin: m.box.nMin + dn, nMax: m.box.nMax + dn });
       return;
     }
     const b: Partial<SectionBox> = {};
-    for (const e of d.edges) b[e] = Math.round(clampEdge(e, e[0] === 'x' ? toX(sx) : toN(sy), box) / 10) * 10;
-    edit(b);
+    for (const e of d.edges) b[e] = Math.round(clampEdge(e, e[0] === 'x' ? toX(sx) : toN(sy), boxNow.current) / 10) * 10;
+    live(b);
   };
   const onUp = () => {
     drag.current = null;
+    commit();
   };
   const edgeKey = (e: Edge) => (ev: KeyboardEvent) => {
     const step = ev.shiftKey ? 250 : 50;
@@ -234,15 +295,6 @@ export function SectionBoxEditor({ app }: { app: App }) {
             ? 'cursor-ew-resize'
             : 'cursor-ns-resize'
         : 'cursor-default';
-  const handles: [Edge, string][] = [
-    ['xMin', 'West face'],
-    ['xMax', 'East face'],
-    ['nMax', 'North face'],
-    ['nMin', 'South face'],
-  ];
-  // what the box cuts away, in world coordinates: everything but the box (far past the plan's edges)
-  const far = 1e6;
-  const km = (v: number) => (v / 1000).toFixed(2);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -253,6 +305,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
           onPointerDown={onDown}
           onPointerMove={onMove}
           onPointerUp={onUp}
+          onPointerCancel={onUp}
           onPointerLeave={() => !drag.current && setHot(null)}
           aria-label="Section box, plan view"
         >
@@ -269,7 +322,8 @@ export function SectionBoxEditor({ app }: { app: App }) {
           <g ref={worldRef[1]}>
             <Wells app={app} />
             <path
-              d={`M${-far},${-far} H${far} V${far} H${-far} Z M${box.xMin},${box.nMin} V${box.nMax} H${box.xMax} V${box.nMin} Z`}
+              ref={mask}
+              d={maskPath(box)}
               fillRule="evenodd"
               className="pointer-events-none fill-background/55"
             />
@@ -278,6 +332,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
           <circle ref={bit} r={3.5} strokeWidth={1.5} className="pointer-events-none fill-primary stroke-card" />
           <g ref={worldRef[2]}>
             <rect
+              ref={frame}
               x={box.xMin}
               y={box.nMin}
               width={box.xMax - box.xMin}
@@ -308,7 +363,7 @@ export function SectionBoxEditor({ app }: { app: App }) {
               className={`outline-none focus-visible:stroke-ring focus-visible:stroke-2 ${hot !== 'move' && hot?.includes(e) ? 'fill-primary' : 'fill-foreground'}`}
             />
           ))}
-          <g className="pointer-events-none fill-muted-foreground" fontSize={9} fontWeight={600}>
+          <g className="pointer-events-none fill-muted-foreground" fontSize="0.68rem" fontWeight={600}>
             {/* pinned to the right and bottom edges by nested viewports, so they need no layout */}
             <svg x="100%" overflow="visible">
               <text x={-9} y={14} textAnchor="middle">
@@ -327,10 +382,10 @@ export function SectionBoxEditor({ app }: { app: App }) {
             </svg>
           </g>
         </svg>
-        {shown && <DepthGauge app={app} layout={gauge} value={box.stripTo} onChange={(v) => edit({ stripTo: v })} />}
+        {shown && <DepthGauge app={app} layout={gauge} value={box.stripTo} onChange={(v) => edit({ stripTo: v })} onDrag={(v) => live({ stripTo: v })} onDragEnd={commit} />}
       </div>
-      <p className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
-        W {km(box.xMin)} · E {km(box.xMax)} · S {km(box.nMin)} · N {km(box.nMax)} km · strip {fmt.n(box.stripTo, 0)} m
+      <p ref={text} className="font-mono text-[0.75rem] text-muted-foreground tabular-nums">
+        {readout(box)}
       </p>
     </div>
   );
@@ -403,7 +458,23 @@ type GaugeLayout = (height: number, value: number) => void;
  * The formation column of the active well by TVDSS, with the overburden cut
  * as a handle: everything above it is stripped from the 3D model.
  */
-function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObject<GaugeLayout | null>; value: number; onChange: (v: number) => void }) {
+function DepthGauge({
+  app,
+  layout,
+  value,
+  onChange,
+  onDrag,
+  onDragEnd,
+}: {
+  app: App;
+  layout: RefObject<GaugeLayout | null>;
+  value: number;
+  /** a key step */
+  onChange: (v: number) => void;
+  /** a drag step (drawn by the layout, not by rendering) and the drag's end */
+  onDrag: (v: number) => void;
+  onDragEnd: () => void;
+}) {
   const w = app.engine.activeWell;
   const datum = app.field.meta.datumElevation;
   const top = 4;
@@ -416,6 +487,7 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
   const hatch = useRef<SVGRectElement>(null);
   const ticks = useRef<SVGGElement>(null);
   const handle = useRef<SVGGElement>(null);
+  const slider = useRef<SVGGElement>(null);
   const H = useRef(0);
   // its height follows the plan's, set by the plan's layout rather than by rendering
   useLayoutEffect(() => {
@@ -428,6 +500,8 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
       column.current?.setAttribute('height', String(span));
       hatch.current?.setAttribute('height', (+y(v) - top).toFixed(1));
       handle.current?.setAttribute('transform', `translate(0,${y(v)})`);
+      slider.current?.setAttribute('aria-valuenow', String(v));
+      slider.current?.setAttribute('aria-valuetext', `${fmt.n(v, 0)} m TVDSS`);
       ticks.current?.childNodes.forEach((t, i) => (t as SVGGElement).setAttribute('transform', `translate(0,${y(i * 1000)})`));
     };
     return () => {
@@ -435,8 +509,13 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
     };
   }, [layout]);
   const toV = (sy: number) => Math.round((Math.max(0, Math.min(1, (sy - top) / Math.max(1, H.current - 2 * top))) * STRIP_MAX) / 10) * 10;
-  const dragging = useRef(false);
-  const set = (ev: ReactPointerEvent<SVGSVGElement>) => onChange(toV(ev.clientY - ev.currentTarget.getBoundingClientRect().top));
+  // the gauge's top on the page while dragged, read once when the drag starts
+  const dragTop = useRef<number | null>(null);
+  const end = () => {
+    if (dragTop.current === null) return;
+    dragTop.current = null;
+    onDragEnd();
+  };
   return (
     <svg
       ref={svg}
@@ -444,11 +523,12 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
       className="shrink-0 cursor-ns-resize touch-none select-none"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
-        dragging.current = true;
-        set(e);
+        dragTop.current = e.currentTarget.getBoundingClientRect().top;
+        onDrag(toV(e.clientY - dragTop.current));
       }}
-      onPointerMove={(e) => dragging.current && set(e)}
-      onPointerUp={() => (dragging.current = false)}
+      onPointerMove={(e) => dragTop.current !== null && onDrag(toV(e.clientY - dragTop.current))}
+      onPointerUp={end}
+      onPointerCancel={end}
     >
       <defs>
         <clipPath id="sb-col">
@@ -481,7 +561,7 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
         </svg>
         <rect ref={hatch} x={bx} y={top} width={bw} fill="url(#sb-hatch)" />
       </g>
-      <g ref={ticks} className="fill-muted-foreground font-mono" fontSize={8.5}>
+      <g ref={ticks} className="fill-muted-foreground font-mono" fontSize="0.68rem">
         {[0, 1000, 2000, 3000].map((d) => (
           <g key={d}>
             <rect x={bx + bw + 1} y={-0.5} width={3} height={1} />
@@ -492,6 +572,7 @@ function DepthGauge({ app, layout, value, onChange }: { app: App; layout: RefObj
         ))}
       </g>
       <g
+        ref={slider}
         role="slider"
         tabIndex={0}
         aria-label="Strip overburden to"

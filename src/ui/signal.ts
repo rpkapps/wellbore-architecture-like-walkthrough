@@ -74,6 +74,16 @@ export function useSignal<T>(s: Signal<T>): T {
   return useSyncExternalStore(s.subscribe, () => s.value);
 }
 
+/**
+ * One derived part of a signal (a flag, an id): the component renders again
+ * only when that part changes, not on every change of the signal (a layout
+ * edit re-renders what depends on "is Properties showing", not every widget).
+ * `pick` must return a primitive or a stable reference.
+ */
+export function useSignalPart<T, U>(s: Signal<T>, pick: (v: T) => U): U {
+  return useSyncExternalStore(s.subscribe, () => pick(s.value));
+}
+
 /** Subscribe to one or more revision counters; returns their sum so callers can key memos on it. */
 export function useRev(...revs: Rev[]): number {
   let sum = 0;

@@ -1,33 +1,27 @@
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { Popover, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { Skeleton } from '@tecton/react/components/skeleton';
+import { LogCurveIcon } from '@tecton/react/icons';
 import { MinusIcon, PlusIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { App } from '../app';
-import { openWindows, ToolWindow, toolWindows } from '../toolWindow';
 import { IconButton } from '../icon-button';
 import type { LogTracks } from '../logTracks';
 import { ProvBadge } from '../prov';
-import { useSignal } from '../signal';
+import { useRev, useSignal } from '../signal';
 import { TrackEditor } from './TrackEditor';
 
-const editors = new WeakMap<App, ToolWindow>();
-
-/** The track editor opens as a panel beside the logs, so the tracks redraw as they change. Created once, outside render. */
-export function trackEditor(app: App): ToolWindow {
-  let p = editors.get(app);
-  if (!p) {
-    p = new ToolWindow({ id: 'log-tracks', title: 'Log tracks', body: () => <TrackEditor app={app} /> });
-    editors.set(app, p);
-  }
-  return p;
-}
-
-/** The log panel's header controls: provenance key, track editor and depth window. */
+/**
+ * The log panel's header controls: provenance key, track editor and depth
+ * window. The track editor is a popover on its button rather than a panel of
+ * its own: it only changes how these tracks draw, and they stay in view
+ * beside it while it is open.
+ */
 export function LogsActions({ app }: { app: App }) {
   const logs = app.logs;
   const win = useSignal(logs.windowSize);
-  useSignal(toolWindows);
-  const editor = editors.get(app);
-  const editing = useSignal(openWindows).some((w) => w === editor);
+  const editing = useSignal(app.tracksOpen);
   return (
     <>
       <span className="mr-1 flex items-center gap-0.5">
@@ -35,9 +29,19 @@ export function LogsActions({ app }: { app: App }) {
         <ProvBadge prov="calculated" short />
         <ProvBadge prov="interpreted" short />
       </span>
-      <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'} isDisabled={!editor} onPress={() => editor?.toggle()}>
-        <SlidersHorizontalIcon />
-      </IconButton>
+      <PopoverTrigger isOpen={editing} onOpenChange={(o) => app.tracksOpen.set(o)}>
+        <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'}>
+          <SlidersHorizontalIcon />
+        </IconButton>
+        <Popover placement="bottom end" className="w-96">
+          <PopoverHeader>
+            <PopoverTitle>Log tracks</PopoverTitle>
+          </PopoverHeader>
+          <div className="flex max-h-[70vh] min-h-0 flex-col">
+            <TrackEditor app={app} />
+          </div>
+        </Popover>
+      </PopoverTrigger>
       <IconButton label="Zoom out" size="icon-xs" onPress={() => logs.zoom(1.6)}>
         <MinusIcon />
       </IconButton>
@@ -58,15 +62,38 @@ export function LogsBody({ app }: { app: App }) {
     return () => logs.attach(null);
   }, [logs]);
   const loading = useSignal(app.loadingWell);
+  useRev(app.wellRev);
+  const w = app.engine?.activeWell;
   return (
     <div className="relative min-h-0 flex-1">
       {loading && <LogsSkeleton name={loading} />}
+      {!loading && w && !w.logs && <NoLogs app={app} name={w.name} />}
       {/* the canvas keeps its own size (grown in steps while the panel resizes); this box clips it to the panel */}
       <div className="absolute inset-0 overflow-hidden">
         <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute top-0 left-0 block cursor-crosshair" />
       </div>
       <LogReadout logs={logs} />
     </div>
+  );
+}
+
+/** The open well has no logs (a trajectory, or a live well before its first readings): say so, and offer the import. */
+function NoLogs({ app, name }: { app: App; name: string }) {
+  return (
+    <Empty className="absolute inset-2 z-10 w-auto border bg-panel">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <LogCurveIcon />
+        </EmptyMedia>
+        <EmptyTitle>{name} has no logs</EmptyTitle>
+        <EmptyDescription>Import LAS, CSV or XLSX logs for it, or open a well that has them.</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button size="sm" onPress={() => app.dataOpen.set(true)}>
+          Import logs…
+        </Button>
+      </EmptyContent>
+    </Empty>
   );
 }
 
@@ -103,7 +130,7 @@ function LogReadout({ logs }: { logs: LogTracks }) {
   return (
     <div
       role="status"
-      className="pointer-events-none absolute z-10 flex w-44 flex-col gap-1 rounded-md bg-popover px-2.5 py-2 font-mono text-[10.5px] text-popover-foreground shadow-md ring-1 ring-foreground/10"
+      className="pointer-events-none absolute z-10 flex w-44 flex-col gap-1 rounded-md bg-popover px-2.5 py-2 font-mono text-[0.75rem] text-popover-foreground shadow-md ring-1 ring-foreground/10"
       style={{ left: left ? r.x - 188 : r.x + 16, top: Math.max(4, Math.min(r.y + 14, r.h - 260)) }}
     >
       <span className="text-foreground">{r.title}</span>

@@ -12,19 +12,20 @@ import type { PropertyMode } from '../scene/wellbore';
 import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
 import { onAnyChange, Rev, SCENE, Signal } from './signal';
-import { Workspace } from './workspace/layout';
+import { DOCK_PANELS, Workspace, type WorkspaceContext } from './workspace/layout';
+import { openWindows } from './toolWindow';
 import { prefs, themeRev } from './prefs';
 import { ActionRegistry } from '../actions/registry';
-import { noteSyncUpdate, transitionBusyFor, withTransition } from './transition';
+import { withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
 import { createFeatureModules } from '../features';
 import { inspect, type InspectorView } from './inspect';
+import { sameSelection, type Selection } from './selection';
+import type { Marking } from './marking';
 import { DataImporter } from './dataImport';
 import { DataHub } from '../connect/hub';
 import type { ConnectRequest } from './shell/ConnectDialog';
-
-export type SidebarTab = 'scene' | 'interpretation' | 'features';
 
 /** Position read-out along the active well (timeline, log cursor). */
 export interface Pose {
@@ -44,7 +45,7 @@ export interface Hud {
   camY: number;
 }
 
-/** A command a feature adds to the top-bar toolbar (measure, snapshot, saved views). */
+/** A command a feature adds to the viewport toolbar (measure, snapshot, saved views). */
 export interface ToolEntry {
   id: string;
   label: string;
@@ -59,10 +60,14 @@ export interface ToolEntry {
   watch?: Signal<unknown>;
 }
 
-/** A read-out a feature adds under the compass (geosteering status, measuring hint). */
+/** A read-out a feature adds to the position details (geosteering status, measuring hint). */
 export interface HudEntry {
   id: string;
   render: () => ReactNode;
+  /** a few words for the timeline's position read-out, beside the depth (geosteering: IN ZONE) */
+  chip?: () => ReactNode;
+  /** an instruction for what the next click does (measuring): shown over the 3D view, above its toolbar, not tucked into the details */
+  prompt?: boolean;
 }
 
 /** Near-well display options that belong to the wellbore, reapplied whenever it is rebuilt. */
@@ -144,6 +149,33 @@ export class App {
   readonly heading = new FrameValue();
   readonly playing = new Signal(false);
   readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
+  /**
+   * The chapter card shows over the timeline (guided mode only): going to a
+   * chapter (a marker, N / P, the tour) or playing opens it; its close
+   * button, pausing and Explore put it away, leaving the numbered markers.
+   */
+  readonly chapterCard = new Signal(false);
+  /**
+   * The selected object (a click in the 3D view or the Scene tree, an
+   * action): Properties, the details card and the right-click menus follow it.
+   * Set it with `select`.
+   */
+  readonly selection = new Signal<Selection | null>(null);
+  /** Properties stays on this object (its pin) whatever is selected meanwhile */
+  readonly pinned = new Signal<Selection | null>(null);
+  /**
+   * Depth intervals of a well a view has marked (the crossplot's brushed
+   * samples): the timeline shows them as ticks to travel to. The view that
+   * set it clears it.
+   */
+  readonly marking = new Signal<Marking | null>(null);
+  /** a right-click menu of the selection's actions, open at this point of the window */
+  readonly contextMenu = new Signal<{ x: number; y: number; selection: Selection } | null>(null);
+  /**
+   * The details of the selection, derived from it (and rebuilt when the well
+   * or its interpretation changes): the floating details card shows these.
+   * Read-only for the chrome; change the selection instead.
+   */
   readonly inspector = new Signal<InspectorView | null>(null);
   readonly tools = new Signal<ToolEntry[]>([]);
   readonly huds = new Signal<HudEntry[]>([]);
@@ -152,6 +184,8 @@ export class App {
   readonly productionOpen = new Signal(false);
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
+  /** the Well logs track editor: a popover on the logs header, so the tracks redraw beside it as they change */
+  readonly tracksOpen = new Signal(false);
   readonly personaliseOpen = new Signal(false);
   readonly paletteOpen = new Signal(false);
   /** every operation as a typed action: the command palette runs these, and an assistant can (actions/tanstack.ts) */
@@ -163,7 +197,7 @@ export class App {
    * the 3D view fills the window and this caption sits over it.
    */
   readonly presentation = new Signal<ReactNode>(null);
-  /** property modes switched on by features (ROP) */
+  /** property modes features offer (ROP, when the well has the log) */
   readonly optionalModes = new Signal<ReadonlySet<PropertyMode>>(new Set());
 
   readonly wellbore: WellboreDisplay = { casingOpacity: 0.42, wallOpacity: 1, shellOpacity: 1, casing: true, fractures: true, markers: true };
@@ -175,6 +209,8 @@ export class App {
   private resolveReady!: () => void;
   /** resolves once the first well is on screen */
   readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
+  /** The page loader's progress line: each step of the start-up after the data has loaded (set by the loader). */
+  onBootStep?: (msg: string, f: number) => void;
 
   readonly importer: DataImporter;
   /** live and streamed data: the connectors (src/connect) */
@@ -185,6 +221,16 @@ export class App {
   constructor(readonly field: FieldModel) {
     this.importer = new DataImporter(this);
     this.hub = new DataHub(this);
+    // a layout change made from a panel's menu or buttons is announced, with Undo (one toast at a time)
+    this.workspace.changes.subscribe(() => {
+      const c = this.workspace.changes.value;
+      // (it stays a little longer than a plain message: time to reach Undo)
+      if (c) this.toast(`${c.label}.`, 'info', { id: 'layout-change', duration: 8000, action: { label: 'Undo', onClick: () => void this.actions.run('panels.undo_layout', { change: c.n }) } });
+    });
+    // the details follow the selection, and the data they read out
+    const details = () => this.inspector.set(this.selection.value && this.engine ? this.inspectorFor(this.selection.value) : null);
+    this.selection.subscribe(details);
+    this.wellRev.subscribe(() => this.selection.value && details());
     // formation colours the user picked, before the geology is built from them
     try {
       const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
@@ -215,9 +261,10 @@ export class App {
     };
     personal();
     prefs.subscribe(personal);
-    // a new theme: every canvas redraws with its colours
+    // a new theme, accent or density: every canvas redraws with its colours and text sizes
     themeRev.subscribe(() => {
       this.logs.invalidate();
+      this.paintRev.bump();
       this.notifyFeatures();
       this.viewRev.bump();
       this.sceneRev.bump();
@@ -229,7 +276,7 @@ export class App {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
     };
     this.logs.onScroll = (md) => {
-      this.followingBit = false;
+      this.stopFollowing();
       e.rig.playing = false;
       e.rig.targetMd = null;
       e.rig.setMd(md);
@@ -237,47 +284,84 @@ export class App {
     e.rig.onUserInput = () => {
       this.stopTour();
       // orbiting the view in Explore keeps following (the camera moves with the bit); travelling along the well stops it
-      if (e.rig.mode !== 'explore') this.followingBit = false;
+      if (e.rig.mode !== 'explore') this.stopFollowing();
     };
+    // the Follow the bit toggle is the one switch: on goes to the bit now, off stops where the view is
+    this.hub.followBit.subscribe(() => (this.hub.followBit.value ? this.goToBit() : this.letGoOfBit()));
     e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
     for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
     this.frameModules = [...this.modules.values()].filter((m) => m.frame);
-    void this.loadWell(this.field.primary.id, false).then(() => {
-      const w = this.engine.activeWell;
-      const hug = w.zones.find((z) => z.formationId === 'hugin');
-      this.engine.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
-      this.chapterIdx = -1;
-      this.sectionAlongWell();
-      // features start once the first well is on screen
-      for (const m of this.modules.values())
-        this.flags.watch(m.id, (on) => {
-          try {
-            if (on) m.enable();
-            else m.disable();
-            e.requestRender();
-          } catch (err) {
-            console.error(`feature ${m.id}`, err);
-            this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
-          }
-        });
-      if (!prefs.value.labels) this.setDisplay({ labels: false });
-      this.ready.set(true);
-      this.resolveReady();
-    });
+    void this.boot();
   }
 
-  toast(msg: string, kind: 'info' | 'error' = 'info', since = performance.now()) {
-    // a toast renders with flushSync, which would cancel a panel transition in flight: let it finish (1.5 s at most)
-    const wait = transitionBusyFor();
-    if (wait > 0 && performance.now() - since < 1500) return void setTimeout(() => this.toast(msg, kind, since), wait);
-    noteSyncUpdate();
-    if (kind === 'error') toast.error(msg);
-    else toast(msg);
+  /**
+   * Start-up after the data has loaded, in steps the loader reports, each
+   * given a frame to paint before its work runs: the first well's geometry,
+   * the log tracks, the overlays, then the shaders, compiled before the first
+   * frame so the loader does not leave onto a stall.
+   */
+  private async boot() {
+    const step = async (msg: string, f: number) => {
+      this.onBootStep?.(msg, f);
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    };
+    // (the loader sets its hook once the app is constructed)
+    await Promise.resolve();
+    const e = this.engine;
+    await step(`Building the ${this.field.primary.name} wellbore`, 0.88);
+    await this.loadWell(this.field.primary.id, false);
+    const w = e.activeWell;
+    const hug = w.zones.find((z) => z.formationId === 'hugin');
+    e.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
+    this.chapterIdx = -1;
+    this.sectionAlongWell();
+    await step('Starting the overlays', 0.92);
+    // features start once the first well is on screen
+    for (const m of this.modules.values())
+      this.flags.watch(m.id, (on) => {
+        try {
+          if (on) m.enable();
+          else m.disable();
+          e.requestRender();
+        } catch (err) {
+          console.error(`feature ${m.id}`, err);
+          this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
+        }
+      });
+    if (!prefs.value.labels) this.setDisplay({ labels: false });
+    await step('Preparing the shaders', 0.95);
+    try {
+      await e.renderer.compileAsync(e.scene, e.camera);
+    } catch {
+      /* compiled on the first frame instead */
+    }
+    this.ready.set(true);
+    this.resolveReady();
   }
 
-  // ------------------------------------------------------------------ top-bar and HUD slots
+  /**
+   * Show a message. `opts.id` replaces an earlier toast with the same id
+   * instead of stacking another; `opts.action` adds a button (Undo).
+   */
+  /** Toasts made while the page loader shows wait for it to go (`releaseToasts`); null once released. */
+  private heldToasts: (() => void)[] | null = [];
+
+  /** The loader has gone: show the toasts it held back, and every later one at once. */
+  releaseToasts() {
+    const held = this.heldToasts ?? [];
+    this.heldToasts = null;
+    for (const t of held) t();
+  }
+
+  toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }) {
+    if (this.heldToasts) return void this.heldToasts.push(() => this.toast(msg, kind, opts));
+    if (kind === 'error') toast.error(msg, opts);
+    else toast(msg, opts);
+  }
+
+  // ------------------------------------------------------------------ viewport toolbar and HUD slots
   addTool(t: ToolEntry) {
     this.tools.update((l) => [...l.filter((x) => x.id !== t.id), t]);
   }
@@ -311,16 +395,20 @@ export class App {
     this.zoneCache = null;
     this.logs.setWell(w);
     this.chapters = buildChapters(w, this.field);
-    this.inspector.set(null);
+    // a point, a pick or an interval of the previous well no longer exists
+    if (this.selection.value?.well && this.selection.value.well !== w.id) this.select(null);
+    if (this.pinned.value?.well && this.pinned.value.well !== w.id) this.pinned.set(null);
     this.notifyFeatures();
     this.wellRev.bump();
     if (fly) {
       this.engine.rig.setMd(0);
       this.overview();
     }
-    this.toast(
-      `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
-    );
+    // (the first well opens behind the loader: nothing to announce)
+    if (this.ready.value)
+      this.toast(
+        `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
+      );
   }
 
   selectWell(id: string) {
@@ -416,45 +504,75 @@ export class App {
     if (id) this.hub.focus.set(id);
   }
 
-  /** following the bit of a well being drilled (until the user moves the view) */
+  /**
+   * Following the bit of a well being drilled. The Follow the bit toggle
+   * (`hub.followBit`) is the one switch, and it always tells the truth: on,
+   * the view goes to the bit and stays with it; off, it stops where it is;
+   * and taking the view over (scrolling the logs, travelling along the well)
+   * turns the toggle off. Following never changes Guided / Explore: Guided
+   * travels along the well to the bit, Explore moves the free camera with it.
+   */
   private followingBit = false;
+  /** the travel target that following set, so letting go stops that travel and nothing else */
+  private followTarget: number | null = null;
+  private followPos: THREE.Vector3 | null = null;
 
   /** Start keeping the view at the bit (the hub calls this when it opens a well being drilled). */
   startFollowing() {
     this.followingBit = true;
     this.followPos = null;
+    if (!this.hub.followBit.value) this.hub.followBit.set(true);
   }
 
-  /**
-   * Keep the view at the bit of a well being drilled. It starts following
-   * once the view is near the bottom, and lets go when the user moves.
-   */
+  /** The user took the view over: stop following, and show it on the toggle. */
+  stopFollowing() {
+    if (this.hub.followBit.value) this.hub.followBit.set(false);
+    else this.letGoOfBit();
+  }
+
+  /** The toggle went on: follow from wherever the view is, going to the bit now. */
+  private goToBit() {
+    this.startFollowing();
+    const md = this.hub.bitDepth(this.engine.activeWell.id);
+    if (md !== null) this.followDepth(md);
+  }
+
+  /** The toggle went off: stop where the view is (a travel that following started stops too). */
+  private letGoOfBit() {
+    this.followingBit = false;
+    this.followPos = null;
+    const rig = this.engine.rig;
+    if (this.followTarget !== null && rig.targetMd === this.followTarget) rig.targetMd = null;
+    this.followTarget = null;
+  }
+
+  /** Keep the view at the bit of a well being drilled, while following. */
   followDepth(md: number) {
     const rig = this.engine.rig;
-    if (rig.playing || this.chapter.value?.touring) return;
-    if (!this.followingBit) {
-      if (Math.abs(rig.md - md) > 60) return;
-      this.followingBit = true;
-    }
+    if (!this.followingBit || rig.playing || this.chapter.value?.touring) return;
+    const at = Math.min(md, rig.mdMax);
     if (rig.mode === 'explore') {
       // the free camera keeps its angle and distance, and moves with the bit
-      const p = this.engine.wellbore?.frameAt(Math.min(md, rig.mdMax)).pos;
+      const p = this.engine.wellbore?.frameAt(at).pos;
       if (!p) return;
       if (this.followPos) {
         const d = p.clone().sub(this.followPos);
         rig.camera.position.add(d);
         rig.orbit.target.add(d);
+      } else if (Math.abs(rig.md - at) > 60) {
+        // the camera is elsewhere: bring it beside the bit first, then move with it
+        this.travelTo(at);
       }
       this.followPos = p.clone();
-      rig.md = Math.min(md, rig.mdMax);
+      rig.md = at;
       this.engine.requestRender(300);
       return;
     }
     this.followPos = null;
-    if (Math.abs(rig.md - md) < 0.05) return;
-    rig.targetMd = Math.min(md, rig.mdMax);
+    if (Math.abs(rig.md - at) < 0.05) return;
+    rig.targetMd = at;
+    this.followTarget = at;
   }
-  private followPos: THREE.Vector3 | null = null;
 
   reinterpret() {
     const w = this.engine.activeWell;
@@ -485,6 +603,7 @@ export class App {
     if (mode === 'explore') {
       this.stopTour();
       rig.playing = false;
+      this.chapterCard.set(false);
       this.toast('Explore — drag to look · WASD / QE to fly · Shift to boost · wheel sets speed · double-click to focus');
     }
     this.viewRev.bump();
@@ -510,7 +629,7 @@ export class App {
     this.viewRev.bump();
   }
 
-  /** Offer or withdraw an optional property mode (ROP, from the Features panel). */
+  /** Offer or withdraw an optional property mode (ROP, while the active well has an ROP log). */
   setPropertyAvailable(m: PropertyMode, on: boolean) {
     const next = new Set(this.optionalModes.value);
     if (on) next.add(m);
@@ -581,9 +700,15 @@ export class App {
 
   // ------------------------------------------------------------------ geology
   private pendingBox: Partial<SectionBox> | null = null;
+  private pendingPreview = false;
 
-  /** Section box edits from sliders: coalesced to one rebuild per frame. */
-  setBox(b: Partial<SectionBox>, immediate = false) {
+  /**
+   * Section box edits from sliders: coalesced to one rebuild per frame.
+   * `preview` marks the steps of a drag, which update the slabs' buffers in
+   * place at the grid resolution the drag started with; the drag's last call
+   * (without it) rebuilds at the box's own resolution.
+   */
+  setBox(b: Partial<SectionBox>, immediate = false, preview = false) {
     const geo = this.engine.geology;
     if (immediate) {
       this.pendingBox = null;
@@ -593,11 +718,12 @@ export class App {
     }
     const first = !this.pendingBox;
     this.pendingBox = { ...this.pendingBox, ...b };
+    this.pendingPreview = preview;
     if (first)
       requestAnimationFrame(() => {
         const p = this.pendingBox;
         this.pendingBox = null;
-        if (p) geo.setBox(p);
+        if (p) geo.setBox(p, this.pendingPreview);
       });
   }
 
@@ -733,6 +859,7 @@ export class App {
     if (rig.md >= rig.mdMax - 1) rig.setMd(0);
     rig.playing = !rig.playing;
     rig.targetMd = null;
+    this.chapterCard.set(rig.playing);
   }
 
   setSpeed(v: number) {
@@ -741,33 +868,95 @@ export class App {
   }
 
   // ------------------------------------------------------------------ panels
-  /** The left column folds to its icons and back; the right one is the well logs. */
-  togglePanel(side: 'left' | 'right') {
-    withTransition(() => {
-      if (side === 'right') this.workspace.toggle('logs');
-      else if (!this.workspace.toggleZone('left')) this.workspace.open('scene');
-    });
+  /** The Interpretation panel is brought up (from the rail or a menu): its parameters redraw the Hydrocarbons view, so show that. */
+  interpretationShown() {
+    if (this.engine.mode === 'hydrocarbon') return;
+    this.setProperty('hydrocarbon');
+    this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
   }
 
-  /** Show a panel (Scene, Interpretation, Features), opening it where it was; a second call on the showing panel closes it. */
-  showSidebar(tab: SidebarTab, toggle = false) {
-    if (toggle && this.workspace.isShown(tab)) {
-      this.workspace.close(tab);
-      return;
+  /**
+   * Can a workspace show this panel now? The app's own panels always; a tool
+   * window only while it is open, since its feature decides that: switching
+   * workspace moves the open ones to that workspace's places for them and
+   * never opens or closes one.
+   */
+  readonly hasPanel = (id: string) => DOCK_PANELS.has(id) || openWindows.value.some((w) => w.opts.id === id);
+
+  /**
+   * Switch workspace (its tab, Ctrl PgUp / PgDn, the palette). Its layout
+   * comes back as it was left, animated, and its task context (the colouring,
+   * the navigation mode) is set through the same calls the top bar makes.
+   * Returns false for an unknown workspace.
+   */
+  switchWorkspace(id: string) {
+    const ws = this.workspace;
+    if (!ws.has(id)) return false;
+    if (id === this.targetWorkspace) return true;
+    const ctx = ws.info(id)?.context;
+    // before the transition: a toast (Explore's hint) would otherwise cut its animation short
+    if (ctx && this.ready.value) this.applyContext(ctx);
+    this.pendingWorkspace = id;
+    withTransition(() => {
+      ws.switchTo(id, this.hasPanel);
+      if (this.pendingWorkspace === id) this.pendingWorkspace = null;
+    });
+    return true;
+  }
+
+  /** a switch waiting for its transition to start */
+  private pendingWorkspace: string | null = null;
+
+  /** The workspace being switched to, or the active one: Ctrl PgDn pressed twice quickly steps twice. */
+  get targetWorkspace() {
+    return this.pendingWorkspace ?? this.workspace.current.value;
+  }
+
+  private applyContext(ctx: WorkspaceContext) {
+    const rig = this.engine.rig;
+    // an optional mode (ROP) is only set while a feature offers it
+    if (ctx.colour && ctx.colour !== this.engine.mode && (ctx.colour !== 'rop' || this.optionalModes.value.has('rop'))) this.setProperty(ctx.colour);
+    if (ctx.nav && ctx.nav !== rig.mode) this.setNav(ctx.nav);
+    if (ctx.nav === 'guided' && ctx.guidedView && ctx.guidedView !== rig.guidedView) this.setGuidedView(ctx.guidedView);
+  }
+
+  /** Reset a workspace's layout to where it started (the active one animates). */
+  resetWorkspace(id = this.workspace.current.value) {
+    withTransition(() => this.workspace.reset(id, this.hasPanel));
+  }
+
+  // ------------------------------------------------------------------ selection
+  /** Select an object (null clears the selection); selecting what is already selected changes nothing. */
+  select(sel: Selection | null) {
+    if (sameSelection(sel, this.selection.value)) return;
+    this.selection.set(sel);
+    const md = sel?.md;
+    if (md !== undefined && sel?.well === this.engine?.activeWell.id) this.logs.setCursor(md);
+  }
+
+  /** The details of a selected object: its title, read-outs and quick actions (null when it no longer exists). */
+  inspectorFor(sel: Selection): InspectorView | null {
+    try {
+      return inspect.view(this, sel);
+    } catch (err) {
+      console.error('inspect', err);
+      return null;
     }
-    if (tab === 'interpretation' && this.engine.mode !== 'hydrocarbon') {
-      this.setProperty('hydrocarbon');
-      this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
-    }
-    this.workspace.open(tab);
+  }
+
+  /** Open the right-click menu of an object at a point of the window, selecting it. */
+  openContextMenu(sel: Selection, x: number, y: number) {
+    this.select(sel);
+    this.contextMenu.set({ x, y, selection: this.selection.value! });
   }
 
   inspectFormation(id: string) {
-    this.inspector.set(inspect.formation(this, id));
+    this.select({ kind: 'formation', id });
   }
 
   inspectAt(md: number) {
-    this.inspector.set(inspect.wellAt(this, md));
+    const id = this.engine.activeWell.id;
+    this.select({ kind: 'well', id, well: id, md });
   }
 
   // ------------------------------------------------------------------ tour
@@ -781,6 +970,7 @@ export class App {
     this.setGuidedView(c.view);
     this.travelTo(c.md);
     this.chapter.set({ index: k, touring: this.tourTimer !== null });
+    this.chapterCard.set(true);
   }
 
   startTour() {
@@ -811,10 +1001,18 @@ export class App {
   }
 
   // ------------------------------------------------------------------ interaction
+  /** A right-click in the 3D view: the menu of the object under the pointer (and it is selected). */
+  private rightClickAt(x: number, y: number) {
+    const p = this.engine.pick(x, y);
+    const sel = p && inspect.selectionOf(this, p);
+    if (sel) this.openContextMenu(sel, x, y);
+  }
+
   private bindPicking() {
     const cv = this.engine.renderer.domElement;
     let down: { x: number; y: number; t: number } | null = null;
-    cv.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, t: performance.now() }));
+    // a click selects (the right button opens the menu below instead)
+    cv.addEventListener('pointerdown', (e) => (down = e.button === 2 ? null : { x: e.clientX, y: e.clientY, t: performance.now() }));
     cv.addEventListener('pointerup', (e) => {
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -824,12 +1022,72 @@ export class App {
           down = null;
           return;
         }
-        if (p) {
-          this.inspector.set(inspect.pick(this, p));
-          if (p.md !== undefined) this.logs.setCursor(p.md);
-        } else this.inspector.set(null);
+        this.select(p ? inspect.selectionOf(this, p) : null);
+        if (p?.md !== undefined) this.logs.setCursor(p.md);
       }
       down = null;
+    });
+    // right click without dragging (a right drag pans the view): the picked object's menu of actions.
+    // It opens on release, as some systems send `contextmenu` when the button goes down.
+    let rdown: { x: number; y: number } | null = null;
+    cv.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) rdown = { x: e.clientX, y: e.clientY };
+    });
+    cv.addEventListener('pointerup', (e) => {
+      const r = rdown;
+      if (e.button !== 2 || !r) return;
+      rdown = null;
+      if (Math.hypot(e.clientX - r.x, e.clientY - r.y) > 5) return;
+      this.rightClickAt(e.clientX, e.clientY);
+    });
+    // A right-click while a menu is open never reaches the page (an open menu leaves the rest of
+    // the page deaf to the pointer, and closes only for a left click): close the menu, and once it
+    // has gone pass the right-click on to what is under the pointer, so it opens that thing's menu
+    // as it would have with none open.
+    let passOn: { x: number; y: number } | null = null;
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.button !== 2 || !document.querySelector('[role="menu"]') || (e.target as Element | null)?.closest?.('[role="menu"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        passOn = { x: e.clientX, y: e.clientY };
+        this.contextMenu.set(null);
+        // any other menu (a tab's, the rail's) closes as Escape closes it
+        const focus = document.activeElement;
+        if (focus && focus !== document.body) focus.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      },
+      true,
+    );
+    window.addEventListener(
+      'pointerup',
+      (e) => {
+        const at = passOn;
+        if (e.button !== 2 || !at) return;
+        passOn = null;
+        e.stopPropagation();
+        // once the menu has gone (and the page hears the pointer again), half a second at most
+        const t0 = performance.now();
+        const send = () => {
+          if (document.querySelector('[role="menu"]') && performance.now() - t0 < 500) return void requestAnimationFrame(send);
+          const el = document.elementsFromPoint(at.x, at.y).find((x) => !x.closest('[data-testid="underlay"], [role="menu"], [role="dialog"]'));
+          if (!el) return;
+          if (el === cv) this.rightClickAt(at.x, at.y);
+          else el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2, buttons: 0 }));
+        };
+        requestAnimationFrame(send);
+      },
+      true,
+    );
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    // The app's own right-click menus stand in for the browser's everywhere: on some systems the
+    // browser's arrives after ours opened, aimed at our menu rather than the view, so it is turned
+    // off for the whole page. Text fields and selected text keep it (copy, paste, spelling).
+    document.addEventListener('contextmenu', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('input, textarea, [contenteditable=""], [contenteditable="true"]')) return;
+      if (String(window.getSelection() ?? '').trim()) return;
+      e.preventDefault();
     });
     cv.addEventListener('dblclick', (e) => {
       const p = this.engine.pick(e.clientX, e.clientY);
@@ -895,6 +1153,28 @@ export class App {
   }
 
   private bindKeys() {
+    // Ctrl PgUp / PgDn steps through the workspace tabs. Caught on the way down, since a focused
+    // button or tab list would otherwise swallow it; text fields, menus and dialogs keep it.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key !== 'PageUp' && e.key !== 'PageDown')) return;
+        if ((e.target as HTMLElement).closest?.('input, select, textarea, [role="dialog"], [role="menu"], [role="listbox"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void this.actions.run(e.key === 'PageUp' ? 'workspace.previous' : 'workspace.next');
+      },
+      true,
+    );
+    // Ctrl Z (outside text fields, menus and dialogs) takes back the last layout change
+    window.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement;
+      if (t.closest?.('input, select, textarea, [contenteditable="true"], [role="dialog"], [role="menu"], [role="listbox"]')) return;
+      if (!this.workspace.canUndo()) return;
+      e.preventDefault();
+      void this.actions.run('panels.undo_layout');
+    });
     window.addEventListener('keydown', (e) => {
       const t = e.target as HTMLElement;
       // keys belong to form controls, and to anything inside a dialog or popover
@@ -917,7 +1197,7 @@ export class App {
         const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.optionalModes.value.has('rop') ? (['rop'] as PropertyMode[]) : [])];
         act('view.color_by', { mode: order[(order.indexOf(this.engine.mode) + 1) % order.length] });
       } else if (e.key === '?') act('help.open');
-      else if (e.key === 'Escape') this.inspector.set(null);
+      else if (e.key === 'Escape') this.select(null);
     });
   }
 

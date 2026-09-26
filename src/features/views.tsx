@@ -39,7 +39,7 @@ const KEY = 'vwt.views.v1';
 export class ViewsFeature implements FeatureModule {
   readonly id = 'views' as const;
   views: SavedView[] = [];
-  /** bump when the list of views changes (Features panel settings) */
+  /** bump when the list of views changes (its settings) */
   readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private presenting = false;
@@ -83,7 +83,7 @@ export class ViewsFeature implements FeatureModule {
     return (
       <>
         <Note>
-          {this.views.length} saved view{this.views.length === 1 ? '' : 's'}. Open with the bookmark button in the top bar. During a presentation: → / Space next, ← previous, Esc exits.
+          {this.views.length} saved view{this.views.length === 1 ? '' : 's'}. Open with the bookmark button in the view toolbar. During a presentation: → / Space next, ← previous, Esc exits.
         </Note>
         <div>
           <Button variant="ghost" size="sm" onPress={() => this.panel.show()}>

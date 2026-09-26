@@ -5,7 +5,7 @@ import { colormap, RES_RANGE, toCss } from '../data/colormap';
 import type { App } from '../ui/app';
 import { Note } from '../ui/controls';
 import { Rev } from '../ui/signal';
-import { font, ink } from '../ui/tokens';
+import { fixedFont, ink } from '../ui/tokens';
 import { ropRgb } from './curves';
 import type { FeatureModule } from './registry';
 
@@ -48,7 +48,7 @@ export class SnapshotFeature implements FeatureModule {
   settings() {
     return (
       <>
-        <Note>Camera button in the top bar. Renders the current view off-screen at 2× or 4K with MSAA and post-processing, then draws the 3D labels, a legend, north arrow and data credits on top.</Note>
+        <Note>Camera button in the view toolbar (bottom of the 3D view). Renders the current view off-screen at 2× or 4K with MSAA and post-processing, then draws the 3D labels, a legend, north arrow and data credits on top.</Note>
         <div className="flex gap-1.5">
           <Button variant="ghost" size="sm" onPress={() => void this.capture('2x')}>
             Snapshot 2×
@@ -128,7 +128,7 @@ export class SnapshotFeature implements FeatureModule {
       const x = (rc.left - host.left) * k;
       const y = (rc.top - host.top) * k;
       const fs = 11 * k;
-      g.font = font.sans(fs, 600);
+      g.font = fixedFont.sans(fs, 600);
       const w = Math.max(...lines.map((l) => g.measureText(l).width)) + 12 * k;
       const hh = lines.length * fs * 1.3 + 8 * k;
       g.globalAlpha = op * 0.72;
@@ -137,7 +137,7 @@ export class SnapshotFeature implements FeatureModule {
       g.fill();
       g.globalAlpha = op;
       lines.forEach((l, i) => {
-        g.font = font.sans(fs * (i === 0 ? 1 : 0.9), i === 0 ? 600 : 400);
+        g.font = fixedFont.sans(fs * (i === 0 ? 1 : 0.9), i === 0 ? 600 : 400);
         g.fillStyle = i === 0 ? ink.text : ink.muted;
         g.fillText(l, x + 6 * k, y + 4 * k + i * fs * 1.3);
       });
@@ -150,13 +150,13 @@ export class SnapshotFeature implements FeatureModule {
     const modeName = { resistivity: 'Measured resistivity', hydrocarbon: 'Interpreted hydrocarbons (calculated)', lithology: 'Lithology (operator picks)', rop: 'Rate of penetration (measured)' }[e.mode];
     card(g, pad, pad, 430 * k, 76 * k, 10 * k, 0.78);
     g.fillStyle = ink.primary;
-    g.font = font.sans(18 * k, 700);
+    g.font = fixedFont.sans(18 * k, 700);
     g.fillText('BoreWalk', pad + 14 * k, pad + 12 * k);
     g.fillStyle = ink.text;
-    g.font = font.sans(13 * k, 600);
+    g.font = fixedFont.sans(13 * k, 600);
     g.fillText(`${w.name} · ${f.meta.name} field, ${f.meta.block}`, pad + 14 * k, pad + 36 * k);
     g.fillStyle = ink.muted;
-    g.font = font.sans(11.5 * k, 400);
+    g.font = fixedFont.sans(11.5 * k, 400);
     g.fillText(`${modeName} · MD ${e.rig.md.toFixed(0)} m · ${new Date().toISOString().slice(0, 10)}`, pad + 14 * k, pad + 55 * k);
     // colour bar
     const bw = 300 * k;
@@ -164,7 +164,7 @@ export class SnapshotFeature implements FeatureModule {
     const by = H - pad - 64 * k;
     card(g, bx - 12 * k, by - 26 * k, bw + 24 * k, 78 * k, 10 * k, 0.78);
     g.fillStyle = ink.text;
-    g.font = font.sans(11.5 * k, 600);
+    g.font = fixedFont.sans(11.5 * k, 600);
     const grad = g.createLinearGradient(bx, 0, bx + bw, 0);
     let ticks: [number, string][] = [];
     if (e.mode === 'resistivity') {
@@ -193,7 +193,7 @@ export class SnapshotFeature implements FeatureModule {
     g.fillStyle = grad;
     g.fillRect(bx, by, bw, 12 * k);
     g.fillStyle = ink.muted;
-    g.font = font.mono(10 * k);
+    g.font = fixedFont.mono(10 * k);
     g.textAlign = 'center';
     for (const [t, s] of ticks) g.fillText(s, bx + t * bw, by + 17 * k);
     g.textAlign = 'left';
@@ -220,7 +220,7 @@ export class SnapshotFeature implements FeatureModule {
     g.closePath();
     g.fill();
     g.fillStyle = ink.text;
-    g.font = font.sans(10 * k, 700);
+    g.font = fixedFont.sans(10 * k, 700);
     g.textAlign = 'center';
     g.fillText('N', 0, 6 * k);
     g.restore();
@@ -228,7 +228,7 @@ export class SnapshotFeature implements FeatureModule {
     // credits
     g.fillStyle = ink.text;
     g.globalAlpha = 0.7;
-    g.font = font.sans(10 * k, 400);
+    g.font = fixedFont.sans(10 * k, 400);
     g.fillText(`Data: Equinor and the ${f.meta.name} licence partners, Equinor Open Data Licence. ${f.meta.crs}. Near-well geometry radially exaggerated ×${e.radialScale}. Measured / calculated / reconstructed values labelled in the app.`, pad, H - pad);
     g.globalAlpha = 1;
   }

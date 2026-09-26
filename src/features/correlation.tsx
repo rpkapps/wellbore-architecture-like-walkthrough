@@ -1,16 +1,19 @@
 import { corrAxis, corrDatum, corrTrack, corrZones, type CorrAxis, type CorrDepthMode, type CorrZone } from '../data/correlation';
 import type { Well } from '../data/dataset';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { ColumnsIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, SelectField, SwitchField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Rev, Signal } from '../ui/signal';
-import { font, ink, wash } from '../ui/tokens';
+import { font, ink, textLen, wash } from '../ui/tokens';
 import { CURVES, CURVE_BY_KEY } from './curves';
 import { niceStep } from './geosteer';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 interface Column {
   well: Well;
@@ -26,6 +29,8 @@ interface Column {
 const OVERLAY_COLOR = '#ff8f9e';
 /** select key for the empty choice (no flattening, no overlay) */
 const NONE = '_none';
+/** the tops it can flatten on (the seabed unit has no top in the wells) */
+const FLATTEN_ON = MODEL_HORIZONS.filter((id) => !['nordland'].includes(id));
 
 /**
  * Multi-well correlation panel: log tracks of every logged well side by side,
@@ -61,19 +66,14 @@ export class CorrelationFeature implements FeatureModule {
       id: 'correlation',
       title: 'Well correlation',
       badge: 'measured',
-      onClose: () => app.flags.set('correlation', false),
+      onClose: () => windowClosed(app.flags, 'correlation', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect
             label="Flatten on a formation top"
             value={this.datumId || NONE}
-            onChange={(v) => {
-              this.datumId = v === NONE ? '' : v;
-              this.win = null;
-              this.rebuild();
-              this.panel.rev.bump();
-            }}
-            options={[{ id: NONE, label: 'No flattening' }, ...MODEL_HORIZONS.filter((id) => !['nordland'].includes(id)).map((id) => ({ id, label: `Flatten: ${FORMATION_BY_ID.get(id)?.name ?? id}` }))]}
+            onChange={(v) => this.flattenOn(v === NONE ? '' : v)}
+            options={[{ id: NONE, label: 'No flattening' }, ...FLATTEN_ON.map((id) => ({ id, label: `Flatten: ${FORMATION_BY_ID.get(id)?.name ?? id}` }))]}
           />
           <CompactSelect
             label="Vertical axis"
@@ -111,22 +111,33 @@ export class CorrelationFeature implements FeatureModule {
           />
         </>
       ),
-      body: () => (
-        <>
-          <CanvasBox
-            view={this.view}
-            aria-label="Log tracks of the logged wells side by side: click a track to travel there"
-            className="cursor-pointer"
-            onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
-            onPointerMove={(e) => this.hover(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
-            onPointerLeave={() => this.hover(-1, -1)}
-            onDoubleClick={() => ((this.win = null), this.view.invalidate())}
-          />
-          <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
-            <Live s={this.readout} />
-          </p>
-        </>
-      ),
+      links: () => ({
+        subject: 'Logged wells',
+        followsWell: false,
+        channels: [
+          { id: 'well', label: 'Highlight the open well', short: app.engine.activeWell.name.replace(/^15\/9-/, ''), on: true },
+          { id: 'cursor', label: 'Show the depth cursor on it', short: 'depth cursor', on: true },
+        ],
+      }),
+      body: () =>
+        !this.loading && this.cols.length < 2 ? (
+          this.renderEmpty()
+        ) : (
+          <>
+            <CanvasBox
+              view={this.view}
+              aria-label="Log tracks of the logged wells side by side: click a track to travel there"
+              className="cursor-pointer"
+              onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
+              onPointerMove={(e) => this.hover(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
+              onPointerLeave={() => this.hover(-1, -1)}
+              onDoubleClick={() => ((this.win = null), this.view.invalidate())}
+            />
+            <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
+              <Live s={this.readout} />
+            </p>
+          </>
+        ),
     });
     // the well list follows the "More Volve wells" feature (skip the immediate call from watch)
     let first = true;
@@ -168,6 +179,64 @@ export class CorrelationFeature implements FeatureModule {
   onWell() {
     // interpretation parameters or uploads may have changed calculated curves and zones
     void this.load();
+    // the link chip names the open well
+    this.panel.rev.bump();
+  }
+
+  /** Can the tracks be flattened on this formation's top? */
+  static canFlatten(id: string) {
+    return FLATTEN_ON.includes(id);
+  }
+
+  /** Flatten the tracks on a formation top ('' for none): the task bar's "Flatten on top". */
+  flattenOn(id: string) {
+    if (id && !CorrelationFeature.canFlatten(id)) return;
+    this.datumId = id;
+    this.win = null;
+    if (this.app.flags.on('correlation')) this.rebuild();
+    this.panel.rev.bump();
+  }
+
+  /** Show a well's track again if it was left out (the task bar's "Correlate"). */
+  include(wellId: string) {
+    if (!this.hidden.delete(wellId)) return;
+    if (this.app.flags.on('correlation')) this.rebuild();
+    this.rev.bump();
+  }
+
+  /** Fewer than two wells to correlate: say why, and offer what adds one. */
+  private renderEmpty() {
+    const extra = this.app.flags.on('extraWells');
+    const left = this.hidden.size > 0;
+    return (
+      <Empty className="min-h-0 flex-1 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ColumnsIcon />
+          </EmptyMedia>
+          <EmptyTitle>Correlation needs two wells with logs</EmptyTitle>
+          <EmptyDescription>
+            {this.cols.length ? `Only ${this.cols[0].well.name} has logs here.` : 'No well shown here has logs.'}{' '}
+            {left ? 'Some wells are left out in its settings.' : extra ? 'Import the logs of another well.' : 'More Volve wells adds wells with full log suites.'}
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          {left ? (
+            <Button size="sm" onPress={() => (this.hidden.clear(), this.rebuild(), this.rev.bump(), this.panel.rev.bump())}>
+              Show every logged well
+            </Button>
+          ) : extra ? (
+            <Button size="sm" onPress={() => this.app.dataOpen.set(true)}>
+              Import logs…
+            </Button>
+          ) : (
+            <Button size="sm" onPress={() => this.app.flags.set('extraWells', true)}>
+              Add more Volve wells
+            </Button>
+          )}
+        </EmptyContent>
+      </Empty>
+    );
   }
 
   frame() {
@@ -204,6 +273,7 @@ export class CorrelationFeature implements FeatureModule {
               else this.hidden.add(w.id);
               this.rebuild();
               this.rev.bump();
+              this.panel.rev.bump();
             }}
           />
         ))}
@@ -231,6 +301,7 @@ export class CorrelationFeature implements FeatureModule {
     if (this.app.flags.on('correlation')) this.rebuild();
     // uploads may have added logged wells to the settings list
     this.rev.bump();
+    this.panel.rev.bump();
   }
 
   private rebuild() {
@@ -340,10 +411,11 @@ export class CorrelationFeature implements FeatureModule {
       g.fillText('No logged wells selected.', W / 2, H / 2);
       return;
     }
-    const PL = 50;
+    // the margins that hold text grow with the density
+    const PL = textLen(50);
     const PR = 8;
-    const PT = 38;
-    const PB = 18;
+    const PT = textLen(38);
+    const PB = textLen(18);
     const n = this.cols.length;
     const cw = (W - PL - PR) / n;
     const tw = Math.max(24, cw * 0.62);
@@ -449,11 +521,11 @@ export class CorrelationFeature implements FeatureModule {
       const x = left(i) + tw / 2;
       g.font = font.sans(11, c.well === active ? 600 : 500);
       g.fillStyle = c.well === active ? '#7fe3ff' : ink.text;
-      g.fillText(c.well.name.replace(/^15\/9-/, ''), x, 14);
+      g.fillText(c.well.name.replace(/^15\/9-/, ''), x, textLen(14));
       g.font = font.sans(9.5, 400);
       g.fillStyle = ink.faint;
       const sub = this.datumId && c.datum === null ? 'top not reached' : !c.tracks.get(this.curve) ? `no ${def?.key ?? 'curve'}` : this.datumId ? `${fmt.n(c.datum!, 0)} m` : '';
-      g.fillText(sub, x, 28);
+      g.fillText(sub, x, textLen(28));
     });
     // depth axis
     g.fillStyle = ink.card;
@@ -463,8 +535,9 @@ export class CorrelationFeature implements FeatureModule {
     g.font = font.mono(10);
     g.fillStyle = ink.muted;
     g.textAlign = 'right';
-    const st = niceStep((d1 - d0) / 8);
-    for (let d = Math.ceil(d0 / st) * st; d <= d1; d += st) g.fillText(d.toFixed(0), PL - 8, Y(d) + 3);
+    // at least a label and a gap apart
+    const st = niceStep(Math.max((d1 - d0) / 8, ((d1 - d0) * textLen(20)) / (H - PT - PB)));
+    for (let d = Math.ceil(d0 / st) * st; d <= d1; d += st) g.fillText(d.toFixed(0), PL - 8, Y(d) + textLen(3.5));
     g.textAlign = 'left';
     g.fillText(this.datumId ? 'rel.' : this.mode === 'tvdss' ? 'TVDSS' : 'MD', 4, PT - 6);
     // scale note
@@ -474,7 +547,7 @@ export class CorrelationFeature implements FeatureModule {
     g.fillText(`${flat} · ${def ? `${def.label} ${def.range}` : ''}${odef ? ` · + ${odef.label}` : ''}`, W - PR, H - 4);
     if (odef) {
       g.fillStyle = OVERLAY_COLOR;
-      g.fillRect(PL, H - 11, 14, 2);
+      g.fillRect(PL, H - textLen(11), 14, 2);
     }
   }
 

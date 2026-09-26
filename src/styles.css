@@ -22,7 +22,7 @@
 
 @layer base {
   :root {
-    --ui-root: 14px;
+    --ui-root: 15px;
     --ui-accent: var(--tecton-palette-orchid-460);
     /* three text levels: values and titles / labels / captions and section headers */
     --fg-1: var(--foreground);
@@ -141,12 +141,13 @@
     cursor: crosshair !important;
   }
 
+  /* sizes in rem (written for the 14 px Compact root) so the labels grow with the density setting */
   .label3d {
     pointer-events: none;
-    font-size: 10.5px;
+    font-size: 0.75rem;
     line-height: 1.25;
     color: var(--foreground);
-    padding: 3px 7px;
+    padding: 0.2rem 0.5rem;
     border-radius: 6px;
     /* no backdrop blur: over a canvas that redraws, every label would be re-blurred by the compositor each frame */
     background: color-mix(in oklab, var(--card) 84%, transparent);
@@ -157,12 +158,12 @@
   }
   .label3d b {
     font-weight: 500;
-    margin-right: 5px;
+    margin-right: 0.35rem;
   }
   .label3d span {
     font-family: var(--font-mono);
     color: var(--muted-foreground);
-    font-size: 9.5px;
+    font-size: 0.68rem;
   }
   .label3d.tick,
   .label3d.ctx {
@@ -174,11 +175,11 @@
   }
   .label3d.tick {
     color: color-mix(in oklab, var(--foreground) 75%, transparent);
-    font-size: 10px;
+    font-size: 0.72rem;
   }
   .label3d.ctx {
     color: var(--muted-foreground);
-    font-size: 9.5px;
+    font-size: 0.68rem;
   }
   /* borders pick up the colour of the 3D object the label names */
   .label3d.shoe {
@@ -199,6 +200,13 @@
   .label3d.unc {
     border-color: rgba(184, 200, 255, 0.4);
   }
+  /* anti-collision: the colour of the separation-factor status (AC_COLOR) */
+  .label3d.ac.collision {
+    border-color: rgba(255, 90, 103, 0.75);
+  }
+  .label3d.ac.caution {
+    border-color: rgba(255, 181, 71, 0.7);
+  }
   .label3d.curtain {
     border-color: rgba(155, 226, 122, 0.4);
   }
@@ -217,7 +225,7 @@
     background: rgba(20, 16, 8, 0.88);
   }
   .label3d.measure b {
-    font-size: 12.5px;
+    font-size: 0.9rem;
     color: #ffd27a;
   }
 }
@@ -246,6 +254,22 @@
       radial-gradient(60% 50% at 50% 42%, color-mix(in oklab, var(--ui-accent) 10%, transparent), transparent 70%),
       radial-gradient(120% 90% at 50% 50%, transparent 60%, rgb(0 0 0 / 0.06) 100%);
   }
+  /* each loading step slides up in over the last one */
+  .loader-step {
+    animation: loader-step 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  /* done: the words and the line lift away while the particles burst */
+  .loader[data-leaving] .loader-status,
+  .loader[data-leaving] h1,
+  .loader[data-leaving] .type-label {
+    transition:
+      opacity 600ms ease-out,
+      transform 700ms cubic-bezier(0.4, 0, 0.2, 1),
+      filter 700ms ease-out;
+    opacity: 0;
+    transform: translateY(-8px);
+    filter: blur(4px);
+  }
   .loader-sheen {
     background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--foreground) 35%, transparent), transparent);
     animation: loader-sheen 1.6s ease-in-out infinite;
@@ -257,6 +281,13 @@
     transform: translateY(10px) scale(0.985);
   }
 }
+@keyframes loader-step {
+  from {
+    opacity: 0;
+    transform: translateY(70%);
+    filter: blur(2px);
+  }
+}
 @keyframes loader-sheen {
   from {
     left: -25%;
@@ -266,176 +297,49 @@
   }
 }
 
-/* ------------------------------------------------------------------ view transitions */
-/* the page underneath keeps drawing live (the 3D view must not freeze) */
-::view-transition-group(root) {
-  animation: none;
+/* ------------------------------------------------------------------ the page loader and intro */
+/* the loader fades away over the finished workspace (it lifts a little and
+   softens as it goes) while the workspace fades up from just under full size;
+   LOADER_FADE_MS in Root.tsx waits for the longest of these */
+.loader[data-leaving] {
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(1.03);
+  filter: blur(6px);
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 200ms,
+    transform 1500ms cubic-bezier(0.2, 0.6, 0.2, 1),
+    filter 1300ms ease-in 200ms;
 }
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
+.app-reveal {
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 250ms,
+    transform 1500ms cubic-bezier(0.2, 0.8, 0.2, 1) 100ms;
 }
-/* the loader leaves once, in a transition started by hand before React's own
-   (the names exist only while html[data-vt-loader] is set) */
-html[data-vt-loader] .loader {
-  view-transition-name: loader;
+.app-reveal[data-veiled] {
+  opacity: 0;
+  transform: scale(0.985);
 }
-html[data-vt-loader] .brand-logo {
-  view-transition-name: brand-logo;
+/* the intro: the 3D view first, alone; the workspace around it fades in as the
+   camera settles (html[data-intro] is 'scene' from before the loader leaves,
+   so the workspace is hidden at once; then 'chrome', then removed) */
+html[data-intro='chrome'] :is([data-chrome], [data-col], [data-rail]) {
+  transition:
+    opacity 1100ms cubic-bezier(0.4, 0, 0.2, 1),
+    translate 1200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-::view-transition-new(loader) {
-  animation: none;
+html[data-intro='scene'] :is([data-chrome], [data-col], [data-rail]) {
+  opacity: 0;
+  pointer-events: none;
 }
-::view-transition-old(loader) {
-  animation: loader-out 700ms cubic-bezier(0.3, 0.7, 0.2, 1) both;
+html[data-intro='scene'] [data-col='left'],
+html[data-intro='scene'] [data-rail] {
+  translate: -16px 0;
 }
-@keyframes loader-out {
-  to {
-    opacity: 0;
-    transform: scale(1.04);
-  }
+html[data-intro='scene'] [data-col='right'] {
+  translate: 16px 0;
 }
-::view-transition-group(brand-logo) {
-  animation-duration: 850ms;
-  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+html[data-intro='scene'] [data-col='bottom'] {
+  translate: 0 16px;
 }
 
-/* Panels and overlays are translucent glass. A view-transition snapshot
-   cannot carry a backdrop blur, so the moving box itself blurs what is
-   behind it (when a blur is set: a backdrop filter is costly over the 3D
-   view even at 0px), keeps the rounded corners and clips the snapshot: the
-   glass never drops out or lingers. */
-::view-transition-group(.ws-morph),
-::view-transition-group(.ws-enter),
-::view-transition-group(.ws-exit),
-::view-transition-group(.ov-tl),
-::view-transition-group(.ov-tr),
-::view-transition-group(.ov-bl),
-::view-transition-group(.ov-br) {
-  border-radius: var(--radius-lg);
-  overflow: clip;
-}
-:root[data-panel-blur]::view-transition-group(.ws-morph),
-:root[data-panel-blur]::view-transition-group(.ws-enter),
-:root[data-panel-blur]::view-transition-group(.ws-exit),
-:root[data-panel-blur]::view-transition-group(.ov-tl),
-:root[data-panel-blur]::view-transition-group(.ov-tr),
-:root[data-panel-blur]::view-transition-group(.ov-bl),
-:root[data-panel-blur]::view-transition-group(.ov-br) {
-  backdrop-filter: blur(var(--panel-blur));
-}
-/* a group that moves or resizes: the box glides, its new content is shown at
-   once at its real size (no cross-fade, no stretched text) */
-::view-transition-group(.ws-morph) {
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-  background: var(--panel-bg);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
-}
-::view-transition-old(.ws-morph) {
-  animation: none;
-  opacity: 0;
-}
-::view-transition-new(.ws-morph) {
-  animation: none;
-  height: 100%;
-  object-fit: none;
-  object-position: left top;
-}
-/* a group that appears or goes: the whole box (glass included) fades and settles */
-::view-transition-group(.ws-enter) {
-  animation: ws-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-::view-transition-group(.ws-exit) {
-  animation: ws-exit 130ms cubic-bezier(0.4, 0, 1, 1) both;
-}
-::view-transition-new(.ws-enter),
-::view-transition-old(.ws-exit) {
-  animation: none;
-}
-@keyframes ws-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-}
-@keyframes ws-exit {
-  to {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-}
-/* an overlay and its one-line chip: the glass box morphs from the corner it
-   is anchored to, showing its new face at once (clipped by the box) while
-   the old one fades out quickly */
-::view-transition-group(.ov-tl),
-::view-transition-group(.ov-tr),
-::view-transition-group(.ov-bl),
-::view-transition-group(.ov-br) {
-  animation-duration: 240ms;
-  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-  background: var(--panel-bg);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
-}
-::view-transition-image-pair(.ov-tl),
-::view-transition-image-pair(.ov-tr),
-::view-transition-image-pair(.ov-bl),
-::view-transition-image-pair(.ov-br) {
-  isolation: auto;
-}
-::view-transition-old(.ov-tl),
-::view-transition-old(.ov-tr),
-::view-transition-old(.ov-bl),
-::view-transition-old(.ov-br),
-::view-transition-new(.ov-tl),
-::view-transition-new(.ov-tr),
-::view-transition-new(.ov-bl),
-::view-transition-new(.ov-br) {
-  height: auto;
-  width: auto;
-  inset: auto;
-  object-fit: none;
-  mix-blend-mode: normal;
-}
-::view-transition-old(.ov-tl),
-::view-transition-new(.ov-tl) {
-  top: 0;
-  left: 0;
-}
-::view-transition-old(.ov-tr),
-::view-transition-new(.ov-tr) {
-  top: 0;
-  right: 0;
-}
-::view-transition-old(.ov-bl),
-::view-transition-new(.ov-bl) {
-  bottom: 0;
-  left: 0;
-}
-::view-transition-old(.ov-br),
-::view-transition-new(.ov-br) {
-  bottom: 0;
-  right: 0;
-}
-::view-transition-old(.ov-tl),
-::view-transition-old(.ov-tr),
-::view-transition-old(.ov-bl),
-::view-transition-old(.ov-br) {
-  animation: vt-out 90ms ease-out both;
-}
-::view-transition-new(.ov-tl),
-::view-transition-new(.ov-tr),
-::view-transition-new(.ov-bl),
-::view-transition-new(.ov-br) {
-  animation: none;
-}
-@keyframes vt-out {
-  to {
-    opacity: 0;
-  }
-}
-:root[data-reduce-motion]::view-transition-group(*),
-:root[data-reduce-motion]::view-transition-old(*),
-:root[data-reduce-motion]::view-transition-new(*) {
-  animation: none !important;
-}

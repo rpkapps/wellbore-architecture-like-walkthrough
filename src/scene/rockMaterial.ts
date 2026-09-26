@@ -108,11 +108,13 @@ if (uRealistic > 0.5 && (opacity > 0.45 || seabedHere)) {
   gReal = 1.0;
 }
 // structural contours (every 25 m TVDSS) on up-facing horizon surfaces
+float contour = 0.0;
 if (uContours > 0.5 && vWNormal.y > 0.6) {
   float depth = -vWPos.y;
   float dl = abs(fract(depth / 25.0 + 0.5) - 0.5) * 25.0;
   float w = max(fw * 1.2, 0.15);
   float line = 1.0 - smoothstep(w * 0.5, w * 1.5, dl);
+  contour = line;
   float major = step(abs(fract(depth / 100.0 + 0.5) - 0.5) * 100.0, 12.5);
   rc = mix(rc, rc * (major > 0.5 ? 0.45 : 0.7), line * 0.7);
 }
@@ -146,20 +148,13 @@ if (seabedHere) {
 // cut faces (vertical walls) read slightly cooler, like a sawn section
 rc *= mix(1.0, 0.92, step(abs(vWNormal.y), 0.3));
 rc = mix(rc, vec3(0.9, 0.75, 0.35), uHighlight * 0.25);
-// proximity bubble: rock near the point of interest dissolves into a faint contour grid
+// proximity bubble: rock near the point of interest fades away, keeping only a trace of its
+// structural contours (they follow the horizon, so they read as the surface, not as a mesh)
 float dF = distance(vWPos, uFocus);
 float nearF = (1.0 - smoothstep(uFocusR * 0.55, uFocusR, dF)) * uFocusOn;
-float grid = 0.0;
-{
-  vec2 gp = vWPos.xz / 50.0;
-  vec2 gd = abs(fract(gp - 0.5) - 0.5) * 50.0;
-  float gw = max(fw * 1.2, 0.2);
-  grid = 1.0 - smoothstep(gw * 0.5, gw * 1.5, min(gd.x, gd.y));
-  grid *= step(0.6, abs(vWNormal.y));
-}
 diffuseColor.rgb = rc;
 diffuseColor.a *= 1.0 - uFade;
-diffuseColor.a *= mix(1.0, 0.04 + grid * 0.35, nearF);`,
+diffuseColor.a *= mix(1.0, 0.05 + contour * 0.25, nearF);`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
@@ -178,6 +173,6 @@ else normal = perturbNormalH(-vViewPosition, normal, gH, uBump);`,
 totalEmissiveRadiance += vec3(0.9, 0.7, 0.3) * uHighlight * 0.08;`,
       );
   };
-  mat.customProgramCacheKey = () => 'rock-v4';
+  mat.customProgramCacheKey = () => 'rock-v5';
   return mat;
 }

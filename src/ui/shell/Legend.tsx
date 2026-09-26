@@ -1,18 +1,33 @@
-import { Panel, PanelActions, PanelContent, PanelHeader, PanelTitle } from '@tecton/react/tecton/panel';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@tecton/react/components/select';
+import { Panel, PanelActions, PanelContent, PanelHeader } from '@tecton/react/tecton/panel';
 import type { ReactNode } from 'react';
+import type { Key } from 'react-aria-components';
 import { colormap, toCss } from '../../data/colormap';
 import { ropByZone, ROP_RANGE } from '../../data/drilling';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
+import type { PropertyMode } from '../../scene/wellbore';
 import type { App } from '../app';
 import { Note } from '../controls';
 import { ProvBadge, type Provenance } from '../prov';
-import { useRev } from '../signal';
+import { useRev, useSignal } from '../signal';
 import { ColormapPicker } from '../viz/ColormapPicker';
 import { CollapseButton, OverlayChip, SURFACE, useCollapsed } from './overlay';
 
 const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-/** Colour key for the active property mode. */
+/** What the wellbore can be coloured by, each with the dot that marks it. */
+export const PROPERTIES: { id: PropertyMode; label: string; dot: string }[] = [
+  { id: 'resistivity', label: 'Resistivity', dot: '#7fe3ff' },
+  { id: 'hydrocarbon', label: 'Hydrocarbons', dot: '#ffb547' },
+  { id: 'lithology', label: 'Lithology', dot: '#a28e67' },
+  { id: 'rop', label: 'ROP', dot: '#f28a3c' },
+];
+
+/**
+ * Colour key for the active property mode, and the control that chooses it:
+ * its title is the "Colour by" menu, so the key and the choice it explains
+ * sit together (V still cycles the property).
+ */
 export function Legend({ app }: { app: App }) {
   useRev(app.viewRev, app.wellRev);
   const m = app.engine.mode;
@@ -20,7 +35,7 @@ export function Legend({ app }: { app: App }) {
   if (m === 'resistivity') {
     const stops = Array.from({ length: 24 }, (_, i) => `${toCss(colormap(app.colormapName, i / 23))} ${((i / 23) * 100).toFixed(1)}%`).join(',');
     return (
-      <Frame title="Resistivity · Ω·m" prov="measured" compact={<MiniRamp stops={stops} lo="0.2" hi="1000" />}>
+      <Frame app={app} unit="Ω·m" prov="measured" compact={<MiniRamp stops={stops} lo="0.2" hi="1000" />}>
         {/* the ramp itself opens the colour maps */}
         <ColormapPicker app={app} />
         <Note>Log scale · wall = shallow reading, halo → deep (RT) · radial ×{app.engine.radialScale}</Note>
@@ -48,7 +63,7 @@ export function Legend({ app }: { app: App }) {
     }
     const tot = [...byF.values()].reduce((s, a) => s + a.h, 0);
     return (
-      <Frame title="ROP · m/h" prov="measured" compact={<MiniRamp stops={stops} lo="1" hi="100" />}>
+      <Frame app={app} unit="m/h" prov="measured" compact={<MiniRamp stops={stops} lo="1" hi="100" />}>
         <Ramp stops={stops} ticks={[1, 3, 10, 30, 100].map((v) => [v, Math.log10(v) / Math.log10(ROP_RANGE.max)])} />
         {zones.length ? (
           <>
@@ -79,7 +94,7 @@ export function Legend({ app }: { app: App }) {
       ['#ffc35a', 'Net pay boundaries'],
     ];
     return (
-      <Frame title="Pore fluids" prov="calculated" compact={<Dots items={fluids} />}>
+      <Frame app={app} unit="pore fluids" prov="calculated" compact={<Dots items={fluids} />}>
         <Swatches items={fluids} />
         <Note>
           {p.satModel === 'archie' ? 'Archie' : 'Simandoux'} Sw · a {p.a}, m {p.m}, n {p.n}, Rw {p.rw} Ω·m @ {p.rwTemp} °C
@@ -96,33 +111,75 @@ export function Legend({ app }: { app: App }) {
     items.push([f.color, f.name]);
   }
   return (
-    <Frame title="Formations" prov="interpreted" compact={<Dots items={items} />}>
+    <Frame app={app} unit="formations" prov="interpreted" compact={<Dots items={items} />}>
       <Swatches items={items} />
     </Frame>
   );
 }
 
-/** The key's card; collapsed, its title and a one-line ramp or row of swatches. */
-function Frame({ title, prov, compact, children }: { title: string; prov: Provenance; compact: ReactNode; children: ReactNode }) {
+/**
+ * The key's card, headed by the colour-by menu; collapsed, the menu and a
+ * one-line ramp or row of swatches. Where the 3D view is too narrow for the
+ * card it shrinks to the menu alone, so the choice stays in reach.
+ */
+function Frame({ app, unit, prov, compact, children }: { app: App; unit: string; prov: Provenance; compact: ReactNode; children: ReactNode }) {
   const [collapsed, setCollapsed] = useCollapsed('legend');
   if (collapsed)
     return (
       <OverlayChip name="colour key" onExpand={() => setCollapsed(false)}>
-        <span className="type-title whitespace-nowrap">{title}</span>
+        <ColourBy app={app} />
         {compact}
       </OverlayChip>
     );
+  // where the 3D view is narrow only the menu shows: the card shrinks to it
   return (
-    <Panel variant="elevated" size="sm" className={`w-60 max-w-full shrink-0 ${SURFACE}`}>
-      <PanelHeader>
-        <PanelTitle className="type-title">{title}</PanelTitle>
-        <PanelActions className="mr-0 gap-1">
-          <ProvBadge prov={prov} />
+    <Panel variant="elevated" size="sm" className={`w-fit max-w-full shrink-0 @md:w-64 ${SURFACE}`}>
+      <PanelHeader className="gap-1">
+        <ColourBy app={app} />
+        <span className="type-unit hidden min-w-0 truncate @md:inline">{unit}</span>
+        <PanelActions className="mr-0 hidden gap-1 @md:flex">
+          <ProvBadge prov={prov} short />
           <CollapseButton collapsed={false} name="colour key" onChange={setCollapsed} />
         </PanelActions>
       </PanelHeader>
-      <PanelContent className="flex flex-col gap-2">{children}</PanelContent>
+      <PanelContent className="hidden flex-col gap-2 @md:flex">{children}</PanelContent>
     </Panel>
+  );
+}
+
+function Dot({ color }: { color: string }) {
+  return <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: color }} />;
+}
+
+/** "● Resistivity ▾": the property the wellbore is coloured by, as a menu (the same action as V and the command palette). */
+function ColourBy({ app }: { app: App }) {
+  const optional = useSignal(app.optionalModes);
+  const mode = app.engine.mode;
+  const props = PROPERTIES.filter((p) => p.id !== 'rop' || optional.has('rop') || mode === 'rop');
+  return (
+    <Select
+      aria-label="Colour the wellbore by (V cycles)"
+      selectedKey={mode}
+      onSelectionChange={(k: Key | null) => {
+        if (k !== null && k !== mode) void app.actions.run('view.color_by', { mode: String(k) });
+      }}
+      className="shrink-0"
+    >
+      <SelectTrigger size="sm" variant="text" className="-ml-1">
+        <SelectValue className="type-title min-w-max" />
+      </SelectTrigger>
+      <SelectContent className="w-max min-w-(--trigger-width)">
+        {props.map((p) => (
+          <SelectItem key={p.id} id={p.id} textValue={p.label}>
+            {/* the item's own row does not centre its children vertically */}
+            <span className="flex items-center gap-2">
+              <Dot color={p.dot} />
+              {p.label}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

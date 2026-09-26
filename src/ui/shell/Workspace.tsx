@@ -2,47 +2,55 @@ import { Canvas, CanvasSurface } from '@tecton/react/tecton/canvas';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Engine } from '../../scene/engine';
 import type { App } from '../app';
-import { useSignal } from '../signal';
+import { useTextScale } from '../prefs';
+import { useSignal, useSignalPart } from '../signal';
 import { activeWindow, openWindows, toolWindows } from '../toolWindow';
 import { WorkspaceFrame } from '../workspace/Frame';
 import { openPanels } from '../workspace/layout';
 import { usePanels } from '../workspace/panels';
-import { Hud } from './Hud';
+import { DataEntry, RailFooter } from '../workspace/Rail';
+import { HudPrompts } from './Hud';
 import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
-import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
+import { SelectionContextMenu } from './SelectionMenu';
+import { TaskBar } from './TaskBar';
 import { Morph } from './overlay';
-import { Timeline } from './Timeline';
+import { Timeline, timelineHeight } from './Timeline';
 import { TopBar } from './TopBar';
-import { ViewControls } from './ViewControls';
+import { ViewToolbar } from './ViewControls';
 
-const BUILTIN = new Set(['scene', 'interpretation', 'features', 'logs']);
-const TIMELINE_H = 64;
+const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
 
 /**
  * The application: the top bar, then the workspace, where the 3D view fills
  * the stage and the panels, the overlays and the timeline float over it.
  */
-export const Workspace = memo(function Workspace({ app, brand = true }: { app: App; brand?: boolean }) {
+export const Workspace = memo(function Workspace({ app }: { app: App }) {
   const ready = useSignal(app.ready);
   const presenting = useSignal(app.presentation) !== null;
   const panels = usePanels(app);
   useToolSync(app);
   const chrome = ready && !presenting;
+  // the timeline grows a little with the density's text
+  const timelineH = timelineHeight(useTextScale());
+  // the app's own rail entries: Data after Views, settings and help at the foot
+  const rail = useMemo(() => ({ extra: <DataEntry app={app} />, footer: <RailFooter app={app} /> }), [app]);
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground">
-      {!presenting && <TopBar app={app} panels={panels} brand={brand} />}
+      {!presenting && <TopBar app={app} />}
       <WorkspaceFrame
         ws={app.workspace}
         panels={panels}
         chromeless={!chrome}
+        rail={rail}
         viewport={<Viewport app={app} />}
         overlay={ready && <Overlays app={app} />}
         timeline={chrome && <Timeline app={app} />}
-        timelineHeight={chrome ? TIMELINE_H : 0}
+        timelineHeight={chrome ? timelineH : 0}
         onFree={(f) => app.engine?.setInsets(f.left, f.right, f.bottom)}
       />
+      {ready && <SelectionContextMenu app={app} />}
     </div>
   );
 });
@@ -56,7 +64,6 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
 function useToolSync(app: App) {
   useEffect(() => {
     const ws = app.workspace;
-    trackEditor(app);
     const sync = () => {
       const visible = new Set(openWindows.value.map((w) => w.opts.id));
       const known = new Set(toolWindows.value.map((w) => w.opts.id));
@@ -95,16 +102,27 @@ function Viewport({ app }: { app: App }) {
   );
 }
 
-/** The widgets over the 3D view, inside the area the panels leave free. */
+/**
+ * The widgets over the 3D view, inside the area the panels leave free: only
+ * what belongs to the view. The colour key (or the inspector, while something
+ * is inspected) at the top right; at the bottom centre the toolbar, with a
+ * tool's prompt above it and the chapter card above that, over its marker.
+ * The selection's task bar floats next to the selected object.
+ * Where the camera is lives in the timeline.
+ */
 function Overlays({ app }: { app: App }) {
   const presentation = useSignal(app.presentation);
-  const inspecting = useSignal(app.inspector) !== null;
+  // the details card stands in for Properties while that panel is not showing
+  const properties = useSignalPart(app.workspace.layout, () => app.workspace.isShown('properties'));
+  const hidden = useSignal(app.workspace.hidden);
+  const inspecting = useSignal(app.inspector) !== null && !(properties && !hidden);
   // the same elements every time: opening the inspector re-renders these wrappers, not the widgets
-  const hud = useMemo(() => <Hud app={app} />, [app]);
   const legend = useMemo(() => <Legend app={app} />, [app]);
   const inspector = useMemo(() => <InspectorCard app={app} />, [app]);
   const narrative = useMemo(() => <Narrative app={app} />, [app]);
-  const controls = useMemo(() => <ViewControls app={app} />, [app]);
+  const toolbar = useMemo(() => <ViewToolbar app={app} />, [app]);
+  const prompts = useMemo(() => <HudPrompts app={app} />, [app]);
+  const taskbar = useMemo(() => <TaskBar app={app} />, [app]);
   if (presentation !== null)
     return (
       <div className="absolute inset-x-0 bottom-8 flex justify-center px-4">
@@ -113,23 +131,18 @@ function Overlays({ app }: { app: App }) {
     );
   return (
     <>
-      <div className="absolute top-2 left-2 max-w-[calc(50%-1rem)]">
-        <div className="pointer-events-auto">
-          <Morph anchor="tl">{hud}</Morph>
-        </div>
-      </div>
-      <div className={`absolute top-2 right-2 bottom-14 max-w-[calc(50%-1rem)] flex-col items-end ${inspecting ? 'flex' : 'hidden @2xl:flex'}`}>
+      <div className="absolute top-2 right-2 bottom-14 flex max-w-[calc(100%-1rem)] flex-col items-end @2xl:max-w-[calc(50%-1rem)]">
         <div className="pointer-events-auto flex min-h-0 flex-col">
-          <Morph anchor="tr">{inspecting ? inspector : legend}</Morph>
+          <Morph name="inspector" anchor="tr">{inspecting ? inspector : legend}</Morph>
         </div>
       </div>
-      <div className="absolute bottom-2 left-2 max-w-[calc(100%-8rem)]">
-        <div className="pointer-events-auto">
-          <Morph anchor="bl">{narrative}</Morph>
-        </div>
-      </div>
-      <div className="absolute right-2 bottom-2">
-        <div className="pointer-events-auto">{controls}</div>
+      <div className="absolute inset-x-2 bottom-2 flex flex-col items-center gap-2">
+        {narrative}
+        {prompts}
+        {/* the selection's next steps: placed next to the object, or docked here above the toolbar */}
+        {taskbar}
+        {/* positioned, so it paints over the chapter card's line */}
+        <div className="pointer-events-auto relative max-w-full">{toolbar}</div>
       </div>
     </>
   );

@@ -12,6 +12,43 @@ export interface ToolWindowOptions {
   header?: () => ReactNode;
   /** the window body; canvases stretch to fill it */
   body: () => ReactNode;
+  /**
+   * What the view follows (the active well, the depth cursor), shown as a
+   * link chip in its header whose popover switches the channels it offers.
+   * Read when the window renders: bump `rev` when it changes.
+   */
+  links?: () => LinkState;
+}
+
+/** One thing a view can follow: the depth cursor, the marking, the selected formation. */
+export interface LinkChannel {
+  id: string;
+  /** the switch's label ("Follow the depth cursor") */
+  label: string;
+  /** a word or two for the chip ("depth cursor") */
+  short: string;
+  on: boolean;
+  /** omitted: the view always does this (shown, not switchable) */
+  set?: (on: boolean) => void;
+  /** why it cannot be switched now */
+  disabled?: string;
+}
+
+/**
+ * The links of a view, for its chip: the well it shows and the channels it
+ * follows. A view that can stay on one well while another is opened offers
+ * `pin`; `pinned` then names the well it stays on.
+ */
+export interface LinkState {
+  /** what it shows: a well's name, or "Logged wells" for a view of many */
+  subject: string;
+  channels: LinkChannel[];
+  /** it follows the active well (false: pinned, or a view of every well) */
+  followsWell: boolean;
+  /** pin it to the well it shows now (false: follow the active well again); omitted when it cannot be pinned */
+  pin?: (on: boolean) => void;
+  /** the well it is pinned to */
+  pinned?: string;
 }
 
 /** Every tool window a feature created; the dock shows the open ones as tabs. */
