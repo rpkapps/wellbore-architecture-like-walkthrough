@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "prepare-data": "python3 scripts/prepare_volve_data.py",
     "relay:build": "vite build --config relay/vite.config.ts",
-    "relay": "vite build --config relay/vite.config.ts && node relay/dist/relay.mjs"
+    "relay": "vite build --config relay/vite.config.ts && node relay/dist/relay.mjs",
+    "assistant:demo": "node scripts/assistant-mock-llm.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

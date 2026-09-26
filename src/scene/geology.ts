@@ -141,10 +141,12 @@ export class GeologyModel {
     this.onBoxChange?.(this.box);
   }
 
+  /** Changes a formation's layer state; fields left out (or undefined) keep their value, and opacity stays a number in 0–1. */
   setLayer(id: string, s: Partial<LayerState>) {
     const cur = this.state.get(id);
     if (!cur) return;
-    Object.assign(cur, s);
+    if (typeof s.visible === 'boolean') cur.visible = s.visible;
+    if (typeof s.opacity === 'number' && Number.isFinite(s.opacity)) cur.opacity = Math.min(1, Math.max(0, s.opacity));
     this.applyState();
   }
 

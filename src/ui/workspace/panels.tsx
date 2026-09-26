@@ -15,9 +15,11 @@ import {
   RulerIcon,
   ScissorsIcon,
   Settings2Icon,
+  SparklesIcon,
   SquareMousePointerIcon,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
+import { AssistantPanelBody } from '../../assistant-host/lazy';
 import { FEATURE_BY_ID, FEATURES, type FeatureId, type FeatureModule } from '../../features/registry';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
@@ -62,6 +64,7 @@ export const RAIL_ENTRIES: { id: string; short: string }[] = [
   { id: 'properties', short: 'Props.' },
   { id: 'interpretation', short: 'Interp.' },
   { id: 'logs', short: 'Logs' },
+  { id: 'assistant', short: 'AI' },
 ];
 
 /** The analysis and tool windows by workflow phase; a panel named nowhere here or on the rail goes under Other. */
@@ -137,6 +140,8 @@ export function builtinPanels(app: App): PanelDef[] {
     { id: 'logs', title: 'Well logs', icon: <LogCurveIcon />, actions: () => <LogsActions app={app} />, body: () => <LogsBody app={app} /> },
     { id: 'sources', title: 'Live data', icon: <RadioTowerIcon />, actions: () => <SourcesActions app={app} />, body: () => <SourcesBody app={app} /> },
     { id: 'live', title: 'Live charts', icon: <ActivityIcon />, actions: () => <LiveActions app={app} />, body: () => <LiveBody app={app} /> },
+    // the chat loads as its own chunk the first time the panel shows
+    { id: 'assistant', title: 'Assistant', icon: <SparklesIcon />, body: () => <AssistantPanelBody app={app} /> },
   ];
 }
 

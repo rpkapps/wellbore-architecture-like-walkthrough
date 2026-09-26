@@ -53,6 +53,42 @@ export const DEFAULT_PARAMS: PetroParams = {
   cutSw: 0.6,
 };
 
+/** The numeric parameters (the rest are choices). */
+export type NumericParam = { [K in keyof PetroParams]: PetroParams[K] extends number ? K : never }[keyof PetroParams];
+
+/**
+ * The values each numeric parameter may take: the Interpretation panel's
+ * sliders span them and `interp.set_parameter` refuses anything outside, so
+ * no one (a person or an assistant) can set a value the equations break on
+ * (an exponent of 0, a zero Rw, a clean-sand GR above the shale GR).
+ */
+export const PARAM_RANGES: Record<NumericParam, [number, number]> = {
+  grClean: [0, 80],
+  grShale: [50, 200],
+  rhoMa: [2.6, 2.75],
+  rhoFl: [0.8, 1.2],
+  phiShale: [0, 0.3],
+  a: [0.5, 1.5],
+  m: [1.5, 2.6],
+  n: [1.5, 3],
+  rw: [0.005, 0.5],
+  rwTemp: [20, 150],
+  rsh: [0.5, 10],
+  cutVsh: [0, 1],
+  cutPhi: [0, 0.3],
+  cutSw: [0, 1],
+};
+
+/** Why `value` cannot be used for `key` with the other parameters `p`, or null when it can. */
+export function paramProblem(p: PetroParams, key: NumericParam, value: number): string | null {
+  if (!Number.isFinite(value)) return `${key} must be a finite number.`;
+  const [lo, hi] = PARAM_RANGES[key];
+  if (value < lo || value > hi) return `${key} must be between ${lo} and ${hi} (got ${value}).`;
+  if (key === 'grClean' && value >= p.grShale) return `grClean (${value}) must be below grShale (${p.grShale}).`;
+  if (key === 'grShale' && value <= p.grClean) return `grShale (${value}) must be above grClean (${p.grClean}).`;
+  return null;
+}
+
 /** Where each default came from — surfaced in the UI next to the value. */
 export const PARAM_NOTES: Partial<Record<keyof PetroParams, string>> = {
   grClean: 'Auto: P5 of GR over the density-logged interval',
