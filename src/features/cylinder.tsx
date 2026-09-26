@@ -9,7 +9,7 @@ import { CompactSelect } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { Live, Signal } from '../ui/signal';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
-import { font, ink, textLen, wash } from '../ui/tokens';
+import { cssVar, font, ink, textLen, wash } from '../ui/tokens';
 import { BADGE, short, type AntiCollisionFeature } from './anticollision';
 import { type FeatureModule, windowClosed } from './registry';
 
@@ -267,8 +267,8 @@ export class CylinderFeature implements FeatureModule {
                 </ItemMedia>
                 <ItemContent className="min-w-0">
                   <ItemTitle className="truncate">{short(o.name)}</ItemTitle>
-                  <ItemDescription className="truncate">
-                    {fmt.n(o.dist, 1)} m · at its {fmt.n(o.offMD, 0)} m MD
+                  <ItemDescription className="truncate" title={`closest at its ${fmt.n(o.offMD, 0)} m MD`}>
+                    {fmt.n(o.dist, 1)} m
                   </ItemDescription>
                 </ItemContent>
                 <ItemActions>
@@ -317,13 +317,17 @@ export class CylinderFeature implements FeatureModule {
     g.font = font.sans(9.5, 400);
     g.textAlign = 'left';
     g.textBaseline = 'alphabetic';
-    for (const r of TC_RINGS) {
+    // a ring's distance only where it has room (from the outside in: the small plot keeps the outer ones)
+    let lastLabel = Infinity;
+    for (const r of [...TC_RINGS].reverse()) {
       if (r > range) continue;
       const rr = tcRadius(r, range) * RP;
       g.strokeStyle = wash(r === range ? 0.14 : 0.06);
       g.beginPath();
       g.arc(cx, cy, rr, 0, Math.PI * 2);
       g.stroke();
+      if (lastLabel - rr < textLen(13)) continue;
+      lastLabel = rr;
       g.fillStyle = ink.faint;
       g.fillText(`${r} m`, cx + 4, cy - rr + textLen(11));
     }
@@ -347,7 +351,8 @@ export class CylinderFeature implements FeatureModule {
     g.textBaseline = 'alphabetic';
     if (!tc) return;
     // the active well's own k·σ uncertainty
-    const acc = ink.primary;
+    // the accent, as the depth cursor elsewhere
+    const acc = cssVar('--ui-accent', '#b954fd');
     const rr = Math.max(3, tcRadius(tc.refRadius, range) * RP);
     g.fillStyle = acc;
     g.globalAlpha = 0.16;
@@ -362,7 +367,8 @@ export class CylinderFeature implements FeatureModule {
     g.font = font.sans(10, 500);
     g.textAlign = 'right';
     g.fillStyle = acc;
-    g.fillText(`${short(this.app.engine.activeWell.name)} ${tc.sigma}σ`, cx - rr * 0.72 - 4, cy - rr * 0.72);
+    // named where there is room for it
+    if (RP > textLen(110)) g.fillText(`${short(this.app.engine.activeWell.name)} ${tc.sigma}σ`, cx - rr * 0.72 - 4, cy - rr * 0.72);
     // the offset paths, the worst on top, clipped just outside the outer ring
     g.save();
     g.beginPath();
@@ -425,7 +431,8 @@ export class CylinderFeature implements FeatureModule {
         box = b;
         break;
       }
-      // nowhere free: the first place that fits
+      // nowhere free: a clear well goes without (the list names it), a risk still gets its label
+      if (!box && o.status === 'clear') continue;
       box ??= (() => {
         const x = grp.x + 9 + tw > W - 2 ? grp.x - 9 - tw : grp.x + 9;
         return { x0: x - 2, y0: grp.y + lh * 0.35 - lh * 0.8, x1: x + tw + 2, y1: grp.y + lh * 0.6 };
