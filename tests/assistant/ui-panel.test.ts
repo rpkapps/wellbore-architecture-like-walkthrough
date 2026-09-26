@@ -38,6 +38,23 @@ describe('ui: AssistantPanel', () => {
     expect(out).toContain('Allow “Delete formation top”?');
   });
 
+  it('groups the waiting calls of one step in one card, each described in words', () => {
+    const out = renderToStaticMarkup(createElement(AssistantPanel, { controller: createFakeController({ scenario: 'approvals' }) }));
+    expect(out.match(/data-slot="assistant-approval-group"/g)?.length).toBe(1);
+    expect(out).not.toContain('data-slot="assistant-approval"');
+    expect(out).toContain('Allow 3 changes?');
+    expect(out.match(/data-slot="assistant-approval-row"/g)?.length).toBe(3);
+    // the tool's own phrase, not its title and raw arguments
+    expect(out).toContain('Hide Log curtain');
+    expect(out).toContain('aria-label="Approve: Hide Oil–water contact"');
+    expect(out).toContain('aria-label="Deny: Hide Uncertainty cone"');
+    expect(out).not.toContain('Allow “Overlay”');
+    for (const label of ['Approve all', 'Deny all', 'Always allow these in this chat']) expect(out).toContain(label);
+    // the last turn holds the viewport's height; nothing is marked as a scroll anchor
+    expect(out).toContain('data-slot="assistant-turn"');
+    expect(out).not.toContain('data-scroll-anchor="true"');
+  });
+
   it('renders the empty state and the onboarding', () => {
     const empty = renderToStaticMarkup(createElement(AssistantPanel, { controller: createFakeController({ scenario: 'empty' }) }));
     expect(empty).toContain('Ask BoreWalk anything');

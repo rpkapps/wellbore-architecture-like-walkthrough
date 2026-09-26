@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { AssistantController } from '../core/types';
+import type { AssistantController, ToolCallPart } from '../core/types';
 
 /** What the settings dialog opens on. */
 export type SettingsTarget = { section: 'connection'; providerId?: string; presetId?: string } | { section: 'general' };
@@ -10,6 +10,8 @@ export interface PanelContextValue {
   openSettings: (target?: SettingsTarget) => void;
   /** a tool's title for people (the host's `title`, else the humanised name) */
   toolTitle: (name: string) => string;
+  /** what a call does in words (the tool's `describe`), fixed once its arguments are complete; undefined when the tool has none */
+  describeCall: (call: ToolCallPart) => string | undefined;
   /** hands text to the composer (the "edit" of a suggestion card, the /model command) and focuses it */
   focusComposer: () => void;
 }

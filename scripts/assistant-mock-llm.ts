@@ -79,6 +79,15 @@ function brain(req: MockRequest): MockTurn {
     return { reasoning: 'Write a long, structured answer.', text: ('## Reservoir overview\n\n' + para.repeat(6) + table + code + '### Notes\n\n' + '- ' + para + '\n').repeat(4) };
   }
 
+  // turning several features off in one go (many back-to-back tool calls)
+  if (/(disable|turn off|switch off).*features/.test(q)) {
+    if (req.stepIndex === 0) {
+      const on: string[] = (st.featuresOn ?? []).slice(0, 8);
+      return { text: `Turning off ${on.length} features.`, toolCalls: on.map((feature) => ({ name: tool(req, 'features.set'), args: { feature, on: false } })) };
+    }
+    return { text: 'Done — those features are off.' };
+  }
+
   // 1. what am I looking at → app.state, then a summary
   if (/looking at|what.*(screen|see)/.test(q)) {
     if (req.stepIndex === 0) return { reasoning: 'The person asks about the view. Read the app state first.', toolCalls: [{ name: tool(req, 'app.state'), args: {} }] };

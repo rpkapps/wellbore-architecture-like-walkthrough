@@ -27,7 +27,7 @@ import type {
   UIEventPart,
 } from '../../core/types';
 
-export type FakeScenario = 'empty' | 'onboarding' | 'conversation' | 'approval' | 'error' | 'compacted';
+export type FakeScenario = 'empty' | 'onboarding' | 'conversation' | 'approval' | 'approvals' | 'error' | 'compacted';
 
 export interface FakeControllerOptions {
   scenario?: FakeScenario;
@@ -53,6 +53,17 @@ const TOOLS: AssistantTool[] = [
   { name: 'view.color_by', description: 'Colours the wellbore tube by a curve', parameters: { type: 'object' }, execute: () => null },
   { name: 'camera.fly_to', title: 'Fly camera to', description: 'Moves the camera', parameters: { type: 'object' }, execute: () => null },
   { name: 'tops.delete', title: 'Delete formation top', description: 'Deletes an interpreted top', parameters: { type: 'object' }, needsApproval: true, execute: () => null },
+  {
+    name: 'overlays.set',
+    title: 'Overlay',
+    description: 'Shows or hides an overlay',
+    parameters: { type: 'object' },
+    describe: (args) => {
+      const { overlay, on } = (args ?? {}) as { overlay?: string; on?: boolean };
+      return overlay ? `${on ? 'Show' : 'Hide'} ${overlay}` : undefined;
+    },
+    execute: () => null,
+  },
 ];
 
 const ICONS: Record<string, typeof ActivityIcon> = { log: ActivityIcon, layers: LayersIcon, chart: ChartLineIcon, pin: MapPinIcon, book: BookOpenIcon };
@@ -261,6 +272,26 @@ function seedConversation(scenario: FakeScenario): ChatMessage[] {
       },
     );
   }
+  if (scenario === 'approvals') {
+    const overlay = (name: string, state: ToolCallPart['state']) => tool('overlays.set', { overlay: name, on: false }, state, { step: 0, endedAt: undefined });
+    messages.push(
+      { id: 'm7', role: 'user', createdAt: t(2), parts: [{ type: 'text', text: 'Hide every overlay.' }] },
+      {
+        id: 'm8',
+        role: 'assistant',
+        createdAt: t(2),
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        status: 'streaming',
+        parts: [
+          { type: 'text', text: 'Hiding the three overlays.' },
+          overlay('Log curtain', 'awaiting-approval'),
+          overlay('Oil–water contact', 'awaiting-approval'),
+          overlay('Uncertainty cone', 'awaiting-approval'),
+        ],
+      },
+    );
+  }
   if (scenario === 'error') {
     messages.push(
       { id: 'm7', role: 'user', createdAt: t(2), parts: [{ type: 'text', text: 'Now compare with all the other wells.' }] },
@@ -290,7 +321,7 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
   const host = fakeHost(options.host);
   const listeners = new Set<() => void>();
 
-  const seeded = scenario === 'conversation' || scenario === 'approval' || scenario === 'error' || scenario === 'compacted';
+  const seeded = scenario === 'conversation' || scenario === 'approval' || scenario === 'approvals' || scenario === 'error' || scenario === 'compacted';
   let threads: Thread[] = [
     {
       id: 't_main',
@@ -310,7 +341,7 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
       : []),
   ];
   let activeId = 't_main';
-  let status: ChatStatus = scenario === 'approval' ? 'streaming' : 'ready';
+  let status: ChatStatus = scenario === 'approval' || scenario === 'approvals' ? 'streaming' : 'ready';
   let error: ErrorPart | null = null;
   let settings: AssistantSettings = {
     providers: scenario === 'onboarding' ? [] : PROVIDERS,

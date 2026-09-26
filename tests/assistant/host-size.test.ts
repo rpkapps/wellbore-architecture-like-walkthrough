@@ -104,4 +104,16 @@ describe('the tool list sent to the model', () => {
     expect(tool('scene.formation').parameters).toMatchObject({ properties: { formation: { enum: expect.arrayContaining(['hugin']) } } });
     expect(JSON.stringify(tools.map((t) => t.parameters))).not.toContain('9007199254740991');
   });
+
+  it('describes a call in the app’s words, whatever state the app is in', () => {
+    const set = tool('features.set');
+    // the log curtain shows by default, the crossplots do not: both directions read the same either way
+    expect(set.describe?.({ feature: 'curtain', on: false })).toBe('Hide Log curtain');
+    expect(set.describe?.({ feature: 'curtain', on: true })).toBe('Show Log curtain');
+    expect(set.describe?.({ feature: 'crossplot', on: false })).toMatch(/^Close /);
+    expect(set.describe?.({ feature: 'nope', on: false })).toBeUndefined();
+    // any other action: the label of the choice the arguments match
+    expect(tool('panels.reveal').describe?.({ panel: 'logs' })).toMatch(/Well logs/);
+    expect(tool('nav.go_to_depth').describe?.({ md: 3000 })).toBeUndefined();
+  });
 });

@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef } from 'react';
 import { cn } from 'cn';
 import { RotateCcwIcon, SparklesIcon } from 'lucide-react';
 import { Bubble, BubbleContent } from '@tecton/react/components/bubble';
@@ -10,7 +10,7 @@ import type { ChatMessage, ErrorPart, ReasoningPart, TextPart, ToolCallPart, UIP
 import { usePanel } from '../context';
 import { formatUsage, messageText } from '../format';
 import { Markdown } from '../markdown/Markdown';
-import { ApprovalCard } from '../parts/ApprovalCard';
+import { ApprovalCard, ApprovalGroup } from '../parts/ApprovalCard';
 import { CompactingLine } from '../parts/Compaction';
 import { ErrorNotice } from '../parts/ErrorNotice';
 import { Reasoning } from '../parts/Reasoning';
@@ -25,13 +25,38 @@ type Item =
   | { k: 'text'; key: string; part: TextPart; live: boolean }
   | { k: 'tools'; key: string; calls: ToolCallPart[] }
   | { k: 'approval'; key: string; call: ToolCallPart }
+  | { k: 'approvals'; key: string; calls: ToolCallPart[] }
   | { k: 'ui'; key: string; part: UIPart }
   | { k: 'error'; key: string; part: ErrorPart };
 
-/** The parts of a reply as rows: consecutive tool calls grouped, render_ui calls hidden, waiting calls as approval cards. */
-function toItems(message: ChatMessage, showReasoning: boolean): Item[] {
+/** A call that has not finished: its approval card (or its step's) stays until it has. */
+const unsettled = (p: ToolCallPart) => p.state === 'awaiting-approval' || p.state === 'running' || p.state === 'streaming';
+
+/**
+ * The calls that show in a step's grouped approval card, by id: the calls of
+ * a step that asked for approval (`asked`), when more than one did and one of
+ * them has not finished yet. Once they all have, they join the activity rows
+ * together, in one change.
+ */
+function groupedApprovals(message: ChatMessage, asked: ReadonlySet<string>): Map<string, ToolCallPart[]> {
+  const bySteps = new Map<number | 'none', ToolCallPart[]>();
+  for (const p of message.parts)
+    if (p.type === 'tool-call' && asked.has(p.id)) {
+      const step = p.step ?? 'none';
+      const list = bySteps.get(step);
+      if (list) list.push(p);
+      else bySteps.set(step, [p]);
+    }
+  const out = new Map<string, ToolCallPart[]>();
+  for (const calls of bySteps.values()) if (calls.length > 1 && calls.some(unsettled)) for (const c of calls) out.set(c.id, calls);
+  return out;
+}
+
+/** The parts of a reply as rows: consecutive tool calls grouped, render_ui calls hidden, waiting calls as approval cards (one per step). */
+function toItems(message: ChatMessage, showReasoning: boolean, asked: ReadonlySet<string>): Item[] {
   const streaming = message.status === 'streaming';
   const items: Item[] = [];
+  const cards = groupedApprovals(message, asked);
   let group: ToolCallPart[] | null = null;
   const last = message.parts.length - 1;
   message.parts.forEach((part, i) => {
@@ -43,8 +68,12 @@ function toItems(message: ChatMessage, showReasoning: boolean): Item[] {
       case 'text':
         if (part.text) items.push({ k: 'text', key: `t${i}`, part, live: streaming && i === last });
         break;
-      case 'tool-call':
-        if (part.state === 'awaiting-approval') {
+      case 'tool-call': {
+        const card = cards.get(part.id);
+        if (card) {
+          if (card[0] === part) items.push({ k: 'approvals', key: `approvals:${part.id}`, calls: card });
+          group = null;
+        } else if (part.state === 'awaiting-approval') {
           items.push({ k: 'approval', key: part.id, call: part });
           group = null;
         } else if (part.name !== RENDER_UI_TOOL || part.state === 'error') {
@@ -55,6 +84,7 @@ function toItems(message: ChatMessage, showReasoning: boolean): Item[] {
           group.push(part);
         }
         break;
+      }
       case 'ui':
         items.push({ k: 'ui', key: part.id, part });
         break;
@@ -104,7 +134,10 @@ export interface AssistantMessageProps {
 export const AssistantMessage = memo(function AssistantMessage({ message, isLast, busy, showReasoning, compacting = false }: AssistantMessageProps) {
   const { controller } = usePanel();
   const streaming = message.status === 'streaming';
-  const items = toItems(message, showReasoning);
+  // every call that has asked for approval in this reply: a step's calls share one card while they run
+  const asked = useRef(new Set<string>()).current;
+  for (const p of message.parts) if (p.type === 'tool-call' && p.state === 'awaiting-approval') asked.add(p.id);
+  const items = toItems(message, showReasoning, asked);
   const lastPart = message.parts[message.parts.length - 1];
   const between =
     streaming &&
@@ -136,6 +169,8 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
               return <ToolGroup key={item.key} calls={item.calls} />;
             case 'approval':
               return <ApprovalCard key={item.key} call={item.call} />;
+            case 'approvals':
+              return <ApprovalGroup key={item.key} calls={item.calls} />;
             case 'ui':
               return <UISurface key={item.key} part={item.part} streaming={streaming} />;
             case 'error':

@@ -15,11 +15,11 @@ import { Dialog, DialogDescription, DialogHeader, DialogTitle } from '@tecton/re
 import { Kbd } from '@tecton/react/components/kbd';
 import { Panel, PanelFooter } from '@tecton/react/tecton/panel';
 import type { ComposerCommandItem } from '@tecton/react/tecton/composer';
-import type { AssistantController } from '../core/types';
+import type { AssistantController, AssistantTool } from '../core/types';
 import { AssistantComposer, type ComposerHandle } from './AssistantComposer';
 import { PanelContext, type PanelContextValue, type SettingsTarget } from './context';
 import { EmptyState, Onboarding } from './EmptyState';
-import { downloadText, slugFileName, toolTitle as titleOf } from './format';
+import { describeWith, downloadText, slugFileName, toolTitle as titleOf } from './format';
 import { Header } from './Header';
 import { SettingsDialog } from './settings/SettingsDialog';
 import { Transcript } from './Transcript';
@@ -82,6 +82,8 @@ export function AssistantPanel({ controller, onClose, className, title, focusReq
   }, [flash]);
 
   const titles = useRef(new Map<string, string>());
+  const described = useRef(new Map<string, string | null>());
+  const toolsByName = useRef(new Map<string, AssistantTool | null>());
   const context = useMemo<PanelContextValue>(
     () => ({
       controller,
@@ -93,6 +95,21 @@ export function AssistantPanel({ controller, onClose, className, title, focusReq
           titles.current.set(name, t);
         }
         return t;
+      },
+      // the first description of a call is kept: the app's state changes once it ran ("Hide Log curtain" would become "Show…")
+      describeCall: (call) => {
+        if (call.state === 'streaming') return undefined;
+        const hit = described.current.get(call.id);
+        if (hit !== undefined) return hit ?? undefined;
+        // the host may build its tools on each read: one read fills the map for every name
+        if (!toolsByName.current.has(call.name)) {
+          for (const t of controller.host.tools()) toolsByName.current.set(t.name, t);
+          if (!toolsByName.current.has(call.name)) toolsByName.current.set(call.name, null);
+        }
+        const tool = toolsByName.current.get(call.name);
+        const text = describeWith(tool, call.args);
+        described.current.set(call.id, text ?? null);
+        return text;
       },
       focusComposer: () => composer.current?.focus(),
     }),

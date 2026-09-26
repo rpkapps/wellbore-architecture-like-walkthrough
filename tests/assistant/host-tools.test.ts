@@ -171,6 +171,34 @@ describe('the app’s actions as tools', () => {
     expect(await go.execute({ md: 3200 }, ctx)).toEqual({ md: 3200 });
     await expect(go.execute({ md: -1 }, ctx)).rejects.toThrow(/Invalid input/);
     expect(by.has('data.log_samples') && by.has('ui.selection_details')).toBe(true);
+    // what a call does, in the words of the choice it matches; nothing when none does (the transcript shows title and arguments)
+    const show = by.get('panels.show')!;
+    expect(show.describe?.({ panel: 'logs' })).toBe('Well logs');
+    expect(show.describe?.({ panel: 'scene' })).toBeUndefined();
+    expect(show.describe?.({ panel: 'logs', extra: 1 })).toBeUndefined();
+    expect(go.describe?.({ md: 3200 })).toBeUndefined();
+    expect(go.describe?.(null)).toBeUndefined();
+  });
+
+  it('never lets describing a call throw', () => {
+    const reg = new ActionRegistry<object>({});
+    reg.register(
+      defineAction({
+        id: 'panels.broken',
+        title: 'Broken',
+        description: 'Choices that throw.',
+        category: 'Panels',
+        input: z.object({ id: z.string() }),
+        choices: () => {
+          throw new Error('no app yet');
+        },
+        run: () => null,
+      }),
+    );
+    const app = { actions: reg, field, engine: undefined, flags: undefined, feature: () => undefined, workspace: { isShown: () => false } } as unknown as App;
+    const broken = appTools(app).find((t) => t.name === 'panels.broken')!;
+    expect(() => broken.describe?.({ id: 'x' })).not.toThrow();
+    expect(broken.describe?.({ id: 'x' })).toBeUndefined();
   });
 });
 

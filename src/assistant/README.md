@@ -55,7 +55,7 @@ works well, and it still works at 320 px.
 |---|---|
 | `appName` | The assistant presents itself as "the assistant built into …". |
 | `instructions()` | Domain knowledge and house rules for the system prompt. Keep it stable: it is part of the cached prefix. |
-| `tools()` | `AssistantTool[]`: name, description, JSON Schema `parameters`, `kind: 'read' \| 'write'`, `needsApproval`, and `execute(args, ctx)`. Read at every step. |
+| `tools()` | `AssistantTool[]`: name, description, JSON Schema `parameters`, `kind: 'read' \| 'write'`, `needsApproval`, an optional `describe(args)` (what a call will do in words, for the approval card and the activity row), and `execute(args, ctx)`. Read at every step. |
 | `context()` / `subscribeContext()` | Chips attached to the next message, such as the selection. The person can remove them. |
 | `snapshot()` | A small JSON picture of the app, recorded with each message the person sends. |
 | `suggestions()` | Prompts for the empty state. |

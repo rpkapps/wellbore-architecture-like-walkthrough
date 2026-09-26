@@ -66,8 +66,8 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
 /** How each home names a feature in the palette. */
 const HOME_WORD: Record<FeatureDef['home'], string> = { view: 'view', overlay: 'overlay', colour: 'colour by', wells: 'wells', graphics: 'graphics', tool: 'tool' };
 
-/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells". */
-function featureChoice(f: FeatureDef, on: boolean): string {
+/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells" (`on`: the feature is on now, so the choice turns it off). */
+export function featureChoice(f: FeatureDef, on: boolean): string {
   switch (f.home) {
     case 'overlay':
       return `${on ? 'Hide' : 'Show'} ${labelOf(f.id)}`;

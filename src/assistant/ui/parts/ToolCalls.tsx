@@ -66,27 +66,29 @@ const interrupted = (call: ToolCallPart) => call.state === 'cancelled' && !!call
 const stateLabel = (call: ToolCallPart) => (interrupted(call) ? 'stopped while running' : STATE_LABEL[call.state]);
 const outcome = (call: ToolCallPart) => (call.state === 'denied' ? 'Denied' : interrupted(call) ? 'Interrupted' : call.state === 'cancelled' ? 'Cancelled' : duration(call));
 
-/** One call: state icon, title, a one-line summary of its arguments, duration; expands to the JSON. */
+/** One call: state icon, what it did (the tool's description of the call, else its title and a one-line summary of the arguments), duration; expands to the JSON. */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCallPart }) {
-  const { toolTitle } = usePanel();
+  const { toolTitle, describeCall } = usePanel();
   const [expanded, setExpanded] = useState(false);
-  const title = toolTitle(call.name);
+  const described = describeCall(call);
+  const title = described ?? toolTitle(call.name);
   const active = call.state === 'running' || call.state === 'streaming';
-  const summary = argsSummary(call.args);
+  const summary = described ? '' : argsSummary(call.args);
   return (
     <Collapsible data-slot="assistant-tool-row" data-state={call.state} className="group/tool min-w-0" isExpanded={expanded} onExpandedChange={setExpanded}>
       <CollapsibleTrigger className={TRIGGER_CLASS} aria-label={`${title}, ${stateLabel(call)}${summary ? `: ${summary}` : ''}`}>
         <ToolStateIcon state={call.state} interrupted={call.interrupted} />
         <span
           className={cn(
-            'shrink-0 truncate font-medium text-foreground',
+            'truncate font-medium text-foreground',
+            described ? 'min-w-0 flex-1' : 'shrink-0',
             active && 'shimmer motion-reduce:shimmer-none',
             (call.state === 'denied' || call.state === 'cancelled') && !interrupted(call) && 'text-muted-foreground line-through',
           )}
         >
           {title}
         </span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>
+        {!described && <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>}
         <span className="shrink-0 text-muted-foreground tabular-nums">{outcome(call)}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-expanded/tool:rotate-180 motion-reduce:transition-none" aria-hidden />
       </CollapsibleTrigger>
@@ -110,7 +112,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCallPart }) {
  * call runs and closes when they are done, unless the person toggled it.
  */
 export const ToolGroup = memo(function ToolGroup({ calls }: { calls: ToolCallPart[] }) {
-  const { toolTitle } = usePanel();
+  const { toolTitle, describeCall } = usePanel();
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const rows = calls.map((call) => <ToolRow key={call.id} call={call} />);
   if (calls.length <= 2) {
@@ -126,7 +128,7 @@ export const ToolGroup = memo(function ToolGroup({ calls }: { calls: ToolCallPar
   const start = Math.min(...calls.map((c) => c.startedAt ?? Infinity));
   const end = Math.max(...calls.map((c) => c.endedAt ?? 0));
   const total = !active && Number.isFinite(start) && end > start ? formatDuration(end - start) : '';
-  const names = [...new Set(calls.map((c) => toolTitle(c.name)))];
+  const names = [...new Set(calls.map((c) => describeCall(c) ?? toolTitle(c.name)))];
   return (
     <Collapsible data-slot="assistant-tool-group" className="group/tools -mx-2 min-w-0" isExpanded={expanded} onExpandedChange={setUserExpanded}>
       <CollapsibleTrigger className={TRIGGER_CLASS}>

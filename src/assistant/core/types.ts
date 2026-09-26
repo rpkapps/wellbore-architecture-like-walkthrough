@@ -265,6 +265,12 @@ export interface AssistantTool {
    */
   needsApproval?: boolean | ((args: unknown) => boolean);
   /**
+   * What a call will do, as a short phrase for people ("Hide Log curtain"):
+   * the approval card and the activity row show it instead of the title and
+   * the raw arguments. Undefined when it has nothing better to say.
+   */
+  describe?: (args: unknown) => string | undefined;
+  /**
    * Runs the tool. Return plain JSON, or a `ToolOutput` to hand over
    * datasets. Throw to report an error to the model (it can correct itself).
    */

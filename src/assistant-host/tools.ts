@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { AssistantTool, Json, JSONSchema } from '../assistant/core/types';
+import { featureChoice } from '../actions/appActions';
 import type { AnyAction } from '../actions/registry';
+import { FEATURE_BY_ID, type FeatureId } from '../features/registry';
 import type { ContactsFeature } from '../features/contacts';
 import type { SimulationFeature } from '../features/simulation';
 import type { App } from '../ui/app';
@@ -169,6 +171,49 @@ function titleAddsNothing(title: string, name: string, description: string): boo
     .every((w) => known.includes(w.replace(/s$/, '')));
 }
 
+/** Whether two JSON values are equal: objects key by key (an undefined value is a missing key), arrays item by item. */
+function same(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === (b as unknown[]).length && a.every((x, i) => same(x, (b as unknown[])[i]));
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)]);
+  for (const k of keys) if (!same(ra[k], rb[k])) return false;
+  return true;
+}
+
+/**
+ * Calls a choice's label cannot describe: a choice says what switching does
+ * from the app's current state ("Hide Log curtain" while it shows), so a call
+ * that asks for the state it already has matches none.
+ */
+const DESCRIBE: Record<string, (args: Record<string, unknown>) => string | undefined> = {
+  'features.set': ({ feature, on }) => {
+    const f = typeof feature === 'string' ? FEATURE_BY_ID.get(feature as FeatureId) : undefined;
+    return f && typeof on === 'boolean' ? featureChoice(f, !on) : undefined;
+  },
+};
+
+/**
+ * What a call of an action will do, in the app's words: the label of the
+ * choice whose input is the call's arguments ("Close Crossplot", "Well
+ * logs"), else the action's own phrase. Undefined when there is none: the
+ * transcript then shows the title and the arguments.
+ */
+function describeCall(app: App, a: AnyAction<App>, args: unknown): string | undefined {
+  try {
+    if (!a.input || !args || typeof args !== 'object' || Array.isArray(args)) return undefined;
+    const given = args as Record<string, unknown>;
+    const own = DESCRIBE[a.id]?.(given);
+    if (own) return own;
+    const hit = a.choices?.(app).find((c) => same(c.input ?? {}, given));
+    return hit?.label.replace(/^\d+\.\s+/, '') || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** One action as a tool. */
 function actionTool(app: App, a: AnyAction<App>): AssistantTool {
   const title = titleAddsNothing(a.title, a.id, a.description) ? '' : `${a.title.replace(/[.…]+$/, '')}. `;
@@ -183,6 +228,7 @@ function actionTool(app: App, a: AnyAction<App>): AssistantTool {
     parameters: schemaOf(a),
     kind: READS.has(a.id) ? 'read' : 'write',
     needsApproval: actionNeedsApproval(a),
+    describe: (args) => describeCall(app, a, args),
     execute: async (args) => {
       if (!app.actions.enabled(a)) throw new Error(`“${a.title}” (${a.id}) is not available right now. Read app.state to see why (e.g. no selection, the well has no logs, the feature is off).`);
       const r = await keepChatInView(app, () => app.actions.run(a.id, a.input ? (args ?? {}) : undefined));

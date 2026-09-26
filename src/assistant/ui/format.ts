@@ -16,6 +16,17 @@ export function toolTitle(name: string, tools: readonly Pick<AssistantTool, 'nam
   return tools.find((t) => t.name === name)?.title ?? humaniseToolName(name);
 }
 
+/** A tool's own phrase for a call (`AssistantTool.describe`), trimmed; undefined when it has none or it throws. */
+export function describeWith(tool: Pick<AssistantTool, 'describe'> | undefined | null, args: unknown): string | undefined {
+  if (!tool?.describe) return undefined;
+  try {
+    const text = tool.describe(args);
+    return typeof text === 'string' && text.trim() ? text.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function scalar(value: unknown): string {
   if (value === null || value === undefined) return String(value);
   if (typeof value === 'string') return value.length > 40 ? `${value.slice(0, 39)}…` : value;
