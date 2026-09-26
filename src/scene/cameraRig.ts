@@ -298,6 +298,12 @@ export class CameraRig {
     this.camera.lookAt(this.smoothedLook);
   }
 
+  /** The marker of the point Explore's view turns around (the engine puts it in the scene and redraws for it). */
+  pivotMarker(requestRender: () => void): THREE.Object3D {
+    this.nav.requestRender = requestRender;
+    return this.nav.marker;
+  }
+
   /** The orbit controls take the mouse everywhere but in Explore's orbit view, which navigates by itself. */
   private syncOrbitInput() {
     const own = this.mode === 'explore' && this.exploreView === 'orbit';

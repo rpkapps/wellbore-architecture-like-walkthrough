@@ -37,13 +37,20 @@ export class ExploreNav {
   /** the scene's extent (the model block, the platform) */
   bounds?: () => THREE.Box3 | null;
   onInput?: () => void;
+  /** the marker showed or hid: draw a frame */
+  requestRender?: () => void;
+  /**
+   * The pivot's marker, a dot of a fixed size on screen drawn in the scene
+   * itself (the engine adds it), so it moves in step with the frame and
+   * shows over everything.
+   */
+  readonly marker: THREE.Points;
 
   private drag: Drag | null = null;
   /** a released rotation still turning (rad / s), around `glidePivot` */
   private glide = { yaw: 0, pitch: 0, pivot: new THREE.Vector3() };
   private moveVel = { yaw: 0, pitch: 0 };
   private zoom = { pending: 0, anchor: new THREE.Vector3(), toward: false };
-  private dot: HTMLDivElement;
   private raycaster = new THREE.Raycaster();
 
   constructor(
@@ -52,9 +59,7 @@ export class ExploreNav {
     private dom: HTMLElement,
     private active: () => boolean,
   ) {
-    this.dot = document.createElement('div');
-    this.dot.className = 'nav-pivot';
-    this.dot.hidden = true;
+    this.marker = pivotMarker();
     dom.addEventListener('pointerdown', (e) => this.down(e));
     dom.addEventListener('pointermove', (e) => this.move(e));
     dom.addEventListener('pointerup', (e) => this.up(e));
@@ -67,7 +72,7 @@ export class ExploreNav {
     this.drag = null;
     this.glide.yaw = this.glide.pitch = 0;
     this.zoom.pending = 0;
-    this.dot.hidden = true;
+    this.showMarker(null);
   }
 
   // ------------------------------------------------------------------ input
@@ -97,7 +102,7 @@ export class ExploreNav {
     d.y = e.clientY;
     const now = performance.now();
     if (d.kind === 'rotate') {
-      if (this.dot.hidden) this.showDot(d.pivot);
+      if (!this.marker.visible) this.showMarker(d.pivot);
       const yaw = -dx * ROTATE_SPEED;
       const pitch = -dy * ROTATE_SPEED;
       this.rotate(d.pivot, yaw, pitch);
@@ -129,7 +134,7 @@ export class ExploreNav {
     // still turning as the button came up: a short glide
     if (d.kind === 'rotate' && performance.now() - d.t < 60 && Math.hypot(this.moveVel.yaw, this.moveVel.pitch) > 0.3) {
       this.glide = { yaw: this.moveVel.yaw, pitch: this.moveVel.pitch, pivot: d.pivot };
-    } else this.dot.hidden = true;
+    } else this.showMarker(null);
   }
 
   private wheel(e: WheelEvent) {
@@ -169,12 +174,11 @@ export class ExploreNav {
       g.pitch *= k;
       if (Math.hypot(g.yaw, g.pitch) < 0.02) {
         g.yaw = g.pitch = 0;
-        if (!this.drag) this.dot.hidden = true;
+        if (!this.drag) this.showMarker(null);
       }
       moved = true;
     }
     if (moved) this.keepInBounds();
-    if (!this.dot.hidden) this.placeDot();
   }
 
   // ------------------------------------------------------------------ moves
@@ -254,16 +258,43 @@ export class ExploreNav {
     return b && !b.isEmpty() ? this.ray(e).intersectBox(b, new THREE.Vector3()) : null;
   }
 
-  private showDot(p: THREE.Vector3) {
-    if (!this.dot.parentElement) this.dom.parentElement?.appendChild(this.dot);
-    this.dot.hidden = false;
-    this.placeDot(p);
+  private showMarker(p: THREE.Vector3 | null) {
+    if (p) this.marker.position.copy(p);
+    if (this.marker.visible === !!p) return;
+    this.marker.visible = !!p;
+    this.requestRender?.();
   }
+}
 
-  private placeDot(p = this.drag?.pivot ?? this.glide.pivot) {
-    const v = p.clone().project(this.camera);
-    const r = this.dom.getBoundingClientRect();
-    const pr = this.dom.parentElement?.getBoundingClientRect() ?? r;
-    this.dot.style.transform = `translate(${r.left - pr.left + ((v.x + 1) / 2) * r.width}px, ${r.top - pr.top + ((1 - v.y) / 2) * r.height}px)`;
+/** A ring-and-dot marker 14 px across, over everything, untouched by tone mapping. */
+function pivotMarker(): THREE.Points {
+  const n = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  const g = c.getContext('2d');
+  if (g) {
+    g.fillStyle = 'rgba(0,0,0,0.45)';
+    g.beginPath();
+    g.arc(n / 2, n / 2, n / 2 - 1, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = n * 0.11;
+    g.beginPath();
+    g.arc(n / 2, n / 2, n * 0.33, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = '#ffffff';
+    g.beginPath();
+    g.arc(n / 2, n / 2, n * 0.1, 0, Math.PI * 2);
+    g.fill();
   }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+  const mat = new THREE.PointsMaterial({ size: 14, sizeAttenuation: false, map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const m = new THREE.Points(geo, mat);
+  m.renderOrder = 1000;
+  m.frustumCulled = false;
+  m.visible = false;
+  // never a click target
+  m.raycast = () => {};
+  return m;
 }

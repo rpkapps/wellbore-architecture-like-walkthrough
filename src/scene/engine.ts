@@ -223,6 +223,7 @@ export class Engine {
     this.rig = new CameraRig(this.camera, this.renderer.domElement);
     // Explore turns around, zooms toward and drags what is under the pointer, and stays on the scene
     this.rig.pickPoint = (x, y) => this.pick(x, y)?.point ?? null;
+    this.scene.add(this.rig.pivotMarker(() => this.requestRender()));
     let bounds: THREE.Box3 | null = null;
     this.rig.sceneBounds = () => {
       // the model block (its full extent, whatever the section box) and the platform above it
