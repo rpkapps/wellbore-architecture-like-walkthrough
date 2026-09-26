@@ -22,8 +22,8 @@ type Drag = { kind: 'rotate' | 'pan'; id: number; x: number; y: number; pivot: T
  * - Right or middle drag (or Shift / Ctrl + left) pans: the point grabbed
  *   stays under the pointer.
  * - The wheel zooms toward the point under the pointer, a share of the
- *   distance per notch, so it slows as it nears a surface and never passes
- *   it; over empty space, and when zooming out, it moves straight along the
+ *   distance per notch, so it slows as it nears a surface; kept going, it
+ *   passes through at a steady pace instead of stalling; over empty space, and when zooming out, it moves straight along the
  *   view instead, so the scene never slides off the screen.
  * - The view's centre stays within the scene's extent and the camera within
  *   a few scene sizes of it: the scene cannot be lost.
@@ -199,13 +199,23 @@ export class ExploreNav {
     this.camera.lookAt(this.target);
   }
 
-  /** Scale the camera and the view's centre about a point (k < 1 nears it), never closer than MIN_ZOOM_DISTANCE. */
+  /**
+   * Scale the camera and the view's centre about a point (k < 1 nears it).
+   * Where that would bring the camera closer than MIN_ZOOM_DISTANCE, it goes
+   * on through instead, at the pace the view's size gives, rather than stop.
+   */
   private scaleAbout(a: THREE.Vector3, k: number) {
     const d = this.camera.position.distanceTo(a);
-    if (d < 1e-6) return;
-    const kk = Math.max(Math.min(1, MIN_ZOOM_DISTANCE / d), k);
-    this.camera.position.sub(a).multiplyScalar(kk).add(a);
-    this.target.sub(a).multiplyScalar(kk).add(a);
+    if (k < 1 && d * k < MIN_ZOOM_DISTANCE) {
+      const dir = a.clone().sub(this.camera.position);
+      if (dir.lengthSq() < 1e-8) this.camera.getWorldDirection(dir);
+      const step = dir.setLength(Math.max(1, this.camera.position.distanceTo(this.target)) * (1 - k) * 0.5);
+      this.camera.position.add(step);
+      this.target.add(step);
+      return;
+    }
+    this.camera.position.sub(a).multiplyScalar(k).add(a);
+    this.target.sub(a).multiplyScalar(k).add(a);
   }
 
   /** Move straight along the view, toward or away from its centre. */

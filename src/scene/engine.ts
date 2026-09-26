@@ -798,6 +798,8 @@ export class Engine {
       // a hidden part is not the thing drawn
       if (!h.object.visible) continue;
       const kind = o.userData.kind as string;
+      // rock dissolved around the camera (inside the model) is not there to click or zoom into
+      if (kind === 'formation' && FOCUS.uFocusOn.value > 0.5 && h.point.distanceTo(FOCUS.uFocus.value) < FOCUS.uFocusR.value * 0.8) continue;
       const glass = kind === 'formation' && ((h.object as THREE.Mesh).material as THREE.Material).opacity < 0.7;
       if (!soft && (glass || o.userData.soft)) {
         soft = { hit: { kind, point: h.point.clone(), object: o }, glass };
