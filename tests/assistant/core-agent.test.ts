@@ -384,7 +384,7 @@ describe('generated interfaces', () => {
     });
     engine.uiAction({ surfaceId: 's1', name: 'go_to_top', context: { md: 3050 }, label: 'Pressed “Go to top”' });
     const s = await settled(engine);
-    expect(s.thread.messages[0].parts[0]).toMatchObject({ type: 'ui-event', name: 'go_to_top' });
+    expect(s.thread.messages[0].parts.find((p) => p.type === 'ui-event')).toMatchObject({ type: 'ui-event', name: 'go_to_top' });
     expect(got).toContain('<ui_event>');
     expect(got).toContain('"action":"go_to_top"');
     expect(got).toContain('"md":3050');
@@ -404,7 +404,9 @@ describe('threads', () => {
     engine.editAndResend(s.thread.messages[0].id, 'Question two');
     s = await settled(engine);
     expect(s.thread.messages).toHaveLength(2);
-    expect(s.thread.messages[0].parts).toEqual([{ type: 'text', text: 'Question two' }]);
+    expect(s.thread.messages[0].parts.filter((p) => p.type !== 'context')).toEqual([{ type: 'text', text: 'Question two' }]);
+    // the edited message records the app's state anew
+    expect(s.thread.messages[0].parts[0]).toMatchObject({ type: 'context', items: [], state: expect.stringContaining('Date:') });
     expect(s.thread.title).toBe('Question two');
     expect(fetch.calls).toHaveLength(3);
   });
@@ -446,5 +448,24 @@ describe('threads', () => {
     expect(engine.getSnapshot().provider?.id).toBe('p2');
     const bad = setup(() => ({ error: { status: 404, body: { error: { message: 'model not found' } } } }));
     await expect(bad.engine.testProvider(bad.engine.getSnapshot().provider!)).rejects.toMatchObject({ name: 'ProviderError', config: true });
+  });
+});
+
+describe('stable system prompt', () => {
+  it('keeps the system prompt identical across turns and sends the app state with each user message', async () => {
+    let n = 0;
+    const { engine, fetch } = setup(() => ({ text: 'ok' }), { host: { snapshot: () => ({ md: ++n * 100 }) } });
+    engine.send({ text: 'first' });
+    await settled(engine);
+    engine.send({ text: 'second' });
+    await settled(engine);
+    const bodies = fetch.calls.map((c) => c.body as { messages: { role: string; content: unknown }[] });
+    const system = (b: { messages: { role: string; content: unknown }[] }) => JSON.stringify(b.messages.find((m) => m.role === 'system'));
+    expect(bodies).toHaveLength(2);
+    expect(system(bodies[0])).toBe(system(bodies[1]));
+    const sent = JSON.stringify(bodies[1].messages);
+    expect(sent).toContain('<app_state>');
+    expect(sent).toContain(String.raw`{\"md\":100}`);
+    expect(sent).toContain(String.raw`{\"md\":200}`);
   });
 });

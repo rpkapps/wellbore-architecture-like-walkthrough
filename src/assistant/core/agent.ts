@@ -217,14 +217,11 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
       guide = undefined;
     }
   }
-  const threadAtStart = opts.getThread();
   const system = buildSystemPrompt({
     host,
     autonomy: opts.settings.autonomy,
-    datasets: Object.values(threadAtStart.datasets),
     tools: initialTools.tools.length > 0,
     a2uiGuide: guide,
-    now: new Date(now()),
   });
 
   const history = (names: ToolNameMap): ChatMessage[] => {

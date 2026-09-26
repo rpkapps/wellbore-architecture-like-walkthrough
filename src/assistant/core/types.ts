@@ -74,6 +74,14 @@ export interface FilePart {
 export interface ContextPart {
   type: 'context';
   items: ContextItem[];
+  /**
+   * The app's state and the conversation's datasets when the message was
+   * sent (`core/systemPrompt.ts` → `buildTurnState`): sent to the model
+   * before the text, never shown. Kept with the message rather than in the
+   * system prompt, so the prompt stays the same from turn to turn and the
+   * transcript only ever grows (prompt caches and replayed thinking stay valid).
+   */
+  state?: string;
 }
 
 export type ToolCallState =

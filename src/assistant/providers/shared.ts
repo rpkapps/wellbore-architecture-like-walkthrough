@@ -70,8 +70,13 @@ const json = (v: unknown) => {
 
 /** The `<context>` block for a context part. */
 export function contextText(part: ContextPart): string {
-  const items = part.items.map((i) => ({ label: i.label, ...(i.description ? { description: i.description } : {}), data: i.data }));
-  return `<context>\n${json(items)}\n</context>`;
+  const out: string[] = [];
+  if (part.state) out.push(`<app_state>\n${part.state}\n</app_state>`);
+  if (part.items.length) {
+    const items = part.items.map((i) => ({ label: i.label, ...(i.description ? { description: i.description } : {}), data: i.data }));
+    out.push(`<context>\nWhat the person attached to this message:\n${json(items)}\n</context>`);
+  }
+  return out.join('\n');
 }
 
 /** A text file attachment, inlined. */
@@ -95,7 +100,7 @@ export function userPartText(part: Part): string | null {
     case 'text':
       return part.text;
     case 'context':
-      return part.items.length ? contextText(part) : null;
+      return part.items.length || part.state ? contextText(part) : null;
     case 'file':
       return fileText(part);
     case 'ui-event':

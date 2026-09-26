@@ -3,20 +3,21 @@ import { summariseDataset } from './datasets';
 import { safeJsonStringify } from './json';
 
 /*
- * The system prompt. Static text first and dynamic state last, so providers
- * that cache prompt prefixes reuse most of it from one turn to the next.
+ * The system prompt, and the state block each user message carries. The
+ * system prompt holds only what stays the same for the whole conversation
+ * (it changes only with the autonomy mode or the connection's tools), so
+ * providers that cache prompt prefixes reuse it, and Claude's replayed
+ * thinking stays bound to an unchanged prefix. What changes (the app's state,
+ * the datasets, the date) is recorded with each user message instead.
  */
 
 export interface SystemPromptInput {
   host: AssistantHost;
   autonomy: AutonomyMode;
-  /** the thread's datasets (summarised, newest last) */
-  datasets: Dataset[];
   /** tools are offered on this connection */
   tools: boolean;
   /** the A2UI guide (the generated-interface protocol), when `render_ui` is offered */
   a2uiGuide?: string;
-  now?: Date;
 }
 
 const AUTONOMY: Record<AutonomyMode, string> = {
@@ -64,7 +65,17 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 
   sections.push(`# Autonomy\n${AUTONOMY[input.autonomy]}`);
 
-  // --- dynamic state, last
+  return sections.join('\n\n');
+}
+
+/**
+ * What the model is told about the moment a message was sent: the app's
+ * snapshot, the datasets it can bind to or query, and the date.
+ */
+export function buildTurnState(input: { host: AssistantHost; datasets: Dataset[]; now?: Date }): string {
+  const sections: string[] = [];
+  const snapshot = input.host.snapshot ? safe(() => input.host.snapshot!()) : undefined;
+  if (snapshot !== undefined && snapshot !== null) sections.push(`App state when this message was sent (tool results are newer):\n${safeJsonStringify(snapshot, 6000)}`);
   if (input.datasets.length) {
     const recent = input.datasets.slice(-12);
     const lines = recent.map((d) => {
@@ -73,14 +84,9 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
       return `- ${s.id} “${s.title}”${s.source ? ` (${s.source})` : ''}: ${s.rowCount} rows; columns ${cols}`;
     });
     const older = input.datasets.length - recent.length;
-    sections.push(`# Datasets in this conversation\n${lines.join('\n')}${older > 0 ? `\n(${older} older datasets not listed; they can still be queried by id)` : ''}`);
+    sections.push(`Datasets in this conversation:\n${lines.join('\n')}${older > 0 ? `\n(${older} older datasets not listed; they can still be queried by id)` : ''}`);
   }
-
-  const snapshot = host.snapshot ? safe(() => host.snapshot!()) : undefined;
-  if (snapshot !== undefined && snapshot !== null) sections.push(`# Current app state (at the start of this turn; tool results are newer)\n${safeJsonStringify(snapshot, 6000)}`);
-
-  const now = input.now ?? new Date();
-  sections.push(`Today is ${now.toISOString().slice(0, 10)}.`);
+  sections.push(`Date: ${(input.now ?? new Date()).toISOString().slice(0, 10)}`);
   return sections.join('\n\n');
 }
 

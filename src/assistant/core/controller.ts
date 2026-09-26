@@ -7,6 +7,7 @@ import { newId } from './ids';
 import { safeJsonStringify } from './json';
 import { createPersistence, type ThreadMeta } from './persistence';
 import { createStore, threadMeta, titleFrom } from './store';
+import { buildTurnState } from './systemPrompt';
 import type {
   AssistantController,
   AssistantHost,
@@ -293,10 +294,18 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       });
   };
 
+  /** The parts with the app's state at this moment recorded in their context part (added when there is none). */
+  const withState = (parts: Part[], thread: Thread): Part[] => {
+    const state = buildTurnState({ host, datasets: Object.values(thread.datasets) });
+    const i = parts.findIndex((p) => p.type === 'context');
+    if (i < 0) return [{ type: 'context', items: [], state }, ...parts];
+    return parts.map((p, j) => (j === i && p.type === 'context' ? { ...p, state } : p));
+  };
+
   const appendUserMessage = (parts: Part[]) => {
     stopTurn();
     const thread = current;
-    const msg: ChatMessage = { id: newId('m'), role: 'user', parts, createdAt: Date.now() };
+    const msg: ChatMessage = { id: newId('m'), role: 'user', parts: withState(parts, thread), createdAt: Date.now() };
     const first = !thread.messages.some((m) => m.role === 'user');
     let title = thread.title;
     if (first) {
@@ -495,6 +504,7 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       if (!parts.length) return publish();
       const edited: ChatMessage = { ...old, parts, createdAt: Date.now() };
       const cut = truncate(thread, i);
+      edited.parts = withState(edited.parts, cut);
       const firstUser = thread.messages.findIndex((m) => m.role === 'user') === i;
       const title = firstUser && thread.title === titleFrom(oldText?.text ?? '') ? titleFrom(text) : thread.title;
       const next: Thread = { ...cut, title, messages: [...cut.messages, edited] };
