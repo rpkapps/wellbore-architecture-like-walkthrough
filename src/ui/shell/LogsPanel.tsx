@@ -1,12 +1,15 @@
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
 import { Popover, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { Skeleton } from '@tecton/react/components/skeleton';
+import { LogCurveIcon } from '@tecton/react/icons';
 import { MinusIcon, PlusIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import type { LogTracks } from '../logTracks';
 import { ProvBadge } from '../prov';
-import { useSignal } from '../signal';
+import { useRev, useSignal } from '../signal';
 import { TrackEditor } from './TrackEditor';
 
 /**
@@ -59,15 +62,38 @@ export function LogsBody({ app }: { app: App }) {
     return () => logs.attach(null);
   }, [logs]);
   const loading = useSignal(app.loadingWell);
+  useRev(app.wellRev);
+  const w = app.engine?.activeWell;
   return (
     <div className="relative min-h-0 flex-1">
       {loading && <LogsSkeleton name={loading} />}
+      {!loading && w && !w.logs && <NoLogs app={app} name={w.name} />}
       {/* the canvas keeps its own size (grown in steps while the panel resizes); this box clips it to the panel */}
       <div className="absolute inset-0 overflow-hidden">
         <canvas ref={canvas} aria-label="Log tracks: click to travel, scroll to move, Ctrl + scroll to zoom" className="absolute top-0 left-0 block cursor-crosshair" />
       </div>
       <LogReadout logs={logs} />
     </div>
+  );
+}
+
+/** The open well has no logs (a trajectory, or a live well before its first readings): say so, and offer the import. */
+function NoLogs({ app, name }: { app: App; name: string }) {
+  return (
+    <Empty className="absolute inset-2 z-10 w-auto border bg-panel">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <LogCurveIcon />
+        </EmptyMedia>
+        <EmptyTitle>{name} has no logs</EmptyTitle>
+        <EmptyDescription>Import LAS, CSV or XLSX logs for it, or open a well that has them.</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button size="sm" onPress={() => app.dataOpen.set(true)}>
+          Import logs…
+        </Button>
+      </EmptyContent>
+    </Empty>
   );
 }
 

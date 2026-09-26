@@ -14,6 +14,7 @@ import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
 import { Narrative } from './Narrative';
 import { SelectionContextMenu } from './SelectionMenu';
+import { TaskBar } from './TaskBar';
 import { Morph } from './overlay';
 import { Timeline, timelineHeight } from './Timeline';
 import { TopBar } from './TopBar';
@@ -106,6 +107,7 @@ function Viewport({ app }: { app: App }) {
  * what belongs to the view. The colour key (or the inspector, while something
  * is inspected) at the top right; at the bottom centre the toolbar, with a
  * tool's prompt above it and the chapter card above that, over its marker.
+ * The selection's task bar floats next to the selected object.
  * Where the camera is lives in the timeline.
  */
 function Overlays({ app }: { app: App }) {
@@ -120,6 +122,7 @@ function Overlays({ app }: { app: App }) {
   const narrative = useMemo(() => <Narrative app={app} />, [app]);
   const toolbar = useMemo(() => <ViewToolbar app={app} />, [app]);
   const prompts = useMemo(() => <HudPrompts app={app} />, [app]);
+  const taskbar = useMemo(() => <TaskBar app={app} />, [app]);
   if (presentation !== null)
     return (
       <div className="absolute inset-x-0 bottom-8 flex justify-center px-4">
@@ -136,6 +139,8 @@ function Overlays({ app }: { app: App }) {
       <div className="absolute inset-x-2 bottom-2 flex flex-col items-center gap-2">
         {narrative}
         {prompts}
+        {/* the selection's next steps: placed next to the object, or docked here above the toolbar */}
+        {taskbar}
         {/* positioned, so it paints over the chapter card's line */}
         <div className="pointer-events-auto relative max-w-full">{toolbar}</div>
       </div>

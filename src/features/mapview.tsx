@@ -115,6 +115,14 @@ export class MapViewFeature implements FeatureModule {
           />
         </>
       ),
+      links: () => ({
+        subject: 'All wells',
+        followsWell: false,
+        channels: [
+          { id: 'well', label: 'Highlight the open well', short: app.engine.activeWell.name.replace(/^15\/9-/, ''), on: true },
+          { id: 'cursor', label: 'Show the cursor and camera', short: 'cursor · camera', on: true },
+        ],
+      }),
       body: () => (
         <>
           <CanvasBox
@@ -174,6 +182,8 @@ export class MapViewFeature implements FeatureModule {
   onWell() {
     this.buildWells();
     this.map.invalidate();
+    // the link chip names the open well
+    this.panel.rev.bump();
   }
 
   frame(dt: number) {

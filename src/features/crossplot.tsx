@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { toCss } from '../data/colormap';
-import { CROSSPLOTS, bvwLine, crossplotPoints, matrixLine, mdIntervals, pickettLine, type Axis, type CrossplotKind, type XPoint } from '../data/crossplot';
+import { CROSSPLOTS, bvwLine, crossplotPoints, matrixLine, mdIntervals, missingCurves, pickettLine, type Axis, type CrossplotKind, type XPoint } from '../data/crossplot';
+import type { Well } from '../data/dataset';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
 import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { ChartScatterIcon } from 'lucide-react';
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, type Option } from '../ui/controls';
 import { fmt } from '../ui/dom';
+import { MARKING_COLOR } from '../ui/marking';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
 import { font, ink, textLen, wash } from '../ui/tokens';
@@ -15,7 +19,8 @@ import { type FeatureModule, windowClosed } from './registry';
 
 type ColourBy = 'formation' | 'gr' | 'sw' | 'md';
 
-const SEL_COLOR = '#ff5fd2';
+const SEL_COLOR = MARKING_COLOR;
+const MARK_SOURCE = 'Crossplot';
 /** plot margins; the ones holding labels grow with the density's text */
 const pads = () => ({ l: textLen(52), r: 14, t: 12, b: textLen(34) });
 /** select key for "all logged depths" */
@@ -49,6 +54,12 @@ export class CrossplotFeature implements FeatureModule {
   private down: { x: number; y: number } | null = null;
   private markers?: THREE.Points;
   private wellId = '';
+  /** the well it stays on whichever well is open (null: the open one) */
+  private pinned: Well | null = null;
+  /** curves this plot needs that the well lacks: it shows an empty state instead */
+  private missing: string[] = [];
+  /** the logged wells are being loaded, to suggest one that has the curves */
+  private scouting = false;
 
   constructor(private app: App) {
     // cached drawings: redraw when a colour they use changes
@@ -99,28 +110,45 @@ export class CrossplotFeature implements FeatureModule {
           />
         </>
       ),
-      body: () => (
-        <>
-          <CanvasBox
-            view={this.view}
-            aria-label="Crossplot of the active well: hover a point for its depth, click to travel, drag a box to select samples"
-            className="cursor-crosshair"
-            onPointerDown={(e) => this.pointerDown(e)}
-            onPointerMove={(e) => this.pointerMove(e.nativeEvent)}
-            onPointerUp={(e) => this.pointerUp(e.nativeEvent)}
-            onPointerCancel={() => this.pointerCancel()}
-            onPointerLeave={() => {
-              if (!this.down) this.hoverMd(null);
-            }}
-          />
-          <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
-            <Live s={this.readout} />
-          </p>
-          <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs">
-            <Live s={this.foot} />
-          </div>
-        </>
-      ),
+      links: () => {
+        const w = this.well();
+        const open = w === app.engine.activeWell;
+        return {
+          subject: w.name,
+          followsWell: !this.pinned,
+          pinned: this.pinned?.name,
+          pin: (on) => this.pinTo(on ? w : null),
+          channels: [
+            { id: 'cursor', label: 'Ring the cursor sample', short: 'depth cursor', on: open, disabled: open ? undefined : 'open well only' },
+            { id: 'marking', label: 'Mark selected samples in 3D', short: 'marking', on: this.selected.size > 0 },
+          ],
+        };
+      },
+      body: () =>
+        this.missing.length ? (
+          this.renderEmpty()
+        ) : (
+          <>
+            <CanvasBox
+              view={this.view}
+              aria-label="Crossplot of the active well: hover a point for its depth, click to travel, drag a box to select samples"
+              className="cursor-crosshair"
+              onPointerDown={(e) => this.pointerDown(e)}
+              onPointerMove={(e) => this.pointerMove(e.nativeEvent)}
+              onPointerUp={(e) => this.pointerUp(e.nativeEvent)}
+              onPointerCancel={() => this.pointerCancel()}
+              onPointerLeave={() => {
+                if (!this.down) this.hoverMd(null);
+              }}
+            />
+            <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
+              <Live s={this.readout} />
+            </p>
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs">
+              <Live s={this.foot} />
+            </div>
+          </>
+        ),
     });
   }
 
@@ -135,12 +163,47 @@ export class CrossplotFeature implements FeatureModule {
   disable() {
     this.panel.hide();
     this.setMarkers([]);
+    this.setMarking([]);
     this.hoverMd(null);
+  }
+
+  /** The well it plots: the open one, unless it is pinned to another. */
+  private well(): Well {
+    return this.pinned ?? this.app.engine.activeWell;
+  }
+
+  private isOpenWell() {
+    return this.well() === this.app.engine.activeWell;
+  }
+
+  /** Keep the plot on one well whichever well is open (null: follow the open well). */
+  pinTo(w: Well | null) {
+    this.pinned = w;
+    if (this.app.flags.on('crossplot')) this.onWell();
+    this.panel.rev.bump();
+  }
+
+  /** Does the well it plots have this formation (a depth interval it can plot)? */
+  hasZone(formationId: string) {
+    return this.well().zones.some((z) => z.formationId === formationId);
+  }
+
+  /** Plot one formation's samples (the task bar's "Crossplot zone"). */
+  showZone(formationId: string) {
+    if (!this.hasZone(formationId)) return false;
+    this.zone = formationId;
+    this.selected.clear();
+    if (this.app.flags.on('crossplot')) {
+      this.rebuild();
+      this.applySelection();
+    }
+    this.panel.rev.bump();
+    return true;
   }
 
   onWell() {
     // new well, or the interpretation changed (φ, Sw and the Pickett lines depend on it)
-    const same = this.app.engine.activeWell?.id === this.wellId;
+    const same = this.well().id === this.wellId;
     const keep = same ? this.selectedMds() : [];
     this.selected.clear();
     this.rebuild();
@@ -165,10 +228,12 @@ export class CrossplotFeature implements FeatureModule {
   }
 
   private rebuild() {
-    const w = this.app.engine.activeWell;
+    const w = this.well();
     this.wellId = w?.id ?? '';
     this.fillZones();
-    if (!w?.logs) {
+    this.missing = missingCurves(this.kind, w?.logs);
+    if (this.missing.length) this.scout();
+    if (!w?.logs || this.missing.length) {
       this.pts = [];
     } else {
       const zones = w.zones;
@@ -186,8 +251,79 @@ export class CrossplotFeature implements FeatureModule {
     this.view.invalidate();
   }
 
+  /** A logged well that has what this plot needs, to offer when this one does not. */
+  private suggestion(): Well | null {
+    const w = this.well();
+    return this.app.selectableWells().find((o) => o !== w && o.logs && !missingCurves(this.kind, o.logs).length) ?? null;
+  }
+
+  /** The crossplot kinds this well can plot. */
+  private possibleKinds(): CrossplotKind[] {
+    return (Object.keys(CROSSPLOTS) as CrossplotKind[]).filter((k) => !missingCurves(k, this.well().logs).length);
+  }
+
+  /** Load the other logged wells (once), so the empty state can name one that has the curves. */
+  private scout() {
+    if (this.scouting || this.suggestion()) return;
+    const todo = this.app.selectableWells().filter((o) => !o.loaded && o.lasFile);
+    if (!todo.length) return;
+    this.scouting = true;
+    void Promise.allSettled(todo.map((o) => this.app.field.ensureLoaded(o))).then(() => {
+      this.scouting = false;
+      this.panel.rev.bump();
+    });
+  }
+
+  /** Nothing to plot: the well lacks the curves. Name a well that has them, or another plot this one can make. */
+  private renderEmpty() {
+    const w = this.well();
+    const other = this.suggestion();
+    const alt = this.possibleKinds().find((k) => k !== this.kind);
+    const need = this.missing.join(' and ');
+    const them = this.missing.length > 1 ? 'them' : 'it';
+    const setKind = (k: CrossplotKind) => {
+      this.kind = k;
+      this.clearSelection();
+      this.rebuild();
+      this.panel.rev.bump();
+    };
+    return (
+      <Empty className="min-h-0 flex-1 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ChartScatterIcon />
+          </EmptyMedia>
+          <EmptyTitle>
+            {w.name} has no {need}
+          </EmptyTitle>
+          <EmptyDescription>
+            {CROSSPLOTS[this.kind].label} plots need {them}. {other ? `${other.name} has ${them}.` : this.scouting ? 'Looking for a well that has …' : 'Import logs that include them.'}
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent className="flex-row justify-center">
+          {other ? (
+            <Button size="sm" onPress={() => (this.pinned ? this.pinTo(other) : this.app.selectWell(other.id))}>
+              Switch to {other.name}
+            </Button>
+          ) : (
+            !this.scouting && (
+              <Button size="sm" onPress={() => this.app.dataOpen.set(true)}>
+                Import logs…
+              </Button>
+            )
+          )}
+          {alt && (
+            <Button size="sm" variant="ghost" onPress={() => setKind(alt)}>
+              {CROSSPLOTS[alt].label} instead
+            </Button>
+          )}
+        </EmptyContent>
+      </Empty>
+    );
+  }
+
   private fillZones() {
-    const w = this.app.engine.activeWell;
+    const w = this.well();
     const prev = this.zone;
     const opts: Option[] = [
       { id: 'reservoir', label: 'Reservoir' },
@@ -387,7 +523,7 @@ export class CrossplotFeature implements FeatureModule {
 
   /** the sample the camera is within a metre of, or -1 */
   private ringSample(md: number) {
-    if (!this.pts.length) return -1;
+    if (!this.pts.length || !this.isOpenWell()) return -1;
     const i = this.nearestMd(md);
     return Math.abs(this.pts[i].md - md) < 1 ? i : -1;
   }
@@ -466,7 +602,7 @@ export class CrossplotFeature implements FeatureModule {
     this.hoverMd(p.md);
     const def = CROSSPLOTS[this.kind];
     const fx = (v: number, a: Axis) => (a.log ? fmt.res(v) : fmt.n(v, 3));
-    const z = this.app.engine.activeWell.zoneAt(p.md);
+    const z = this.well().zoneAt(p.md);
     this.readout.set(`MD ${fmt.n(p.md, 1)} m · ${z?.name ?? ''} · x ${fx(p.x, def.x)} · y ${fx(p.y, def.y)}${Number.isFinite(p.gr) ? ` · GR ${fmt.n(p.gr, 0)}` : ''}${Number.isFinite(p.sw) ? ` · Sw ${fmt.n(p.sw, 2)}` : ''}`);
   }
 
@@ -487,7 +623,7 @@ export class CrossplotFeature implements FeatureModule {
       this.applySelection();
     } else {
       const i = this.nearest(e.offsetX, e.offsetY);
-      if (i >= 0) this.app.travelTo(this.pts[i].md);
+      if (i >= 0) this.travel(this.pts[i].md);
       else if (this.selected.size) this.clearSelection();
     }
     this.view.invalidateCursor();
@@ -499,7 +635,15 @@ export class CrossplotFeature implements FeatureModule {
     this.view.invalidateCursor();
   }
 
+  /** Travel to a depth of the plotted well (opening it first when it is pinned and not open). */
+  private travel(md: number) {
+    if (this.isOpenWell()) this.app.travelTo(md);
+    else void this.app.loadWellAsync(this.well().id, false).then(() => this.app.travelTo(md));
+  }
+
   private hoverMd(md: number | null) {
+    // the highlight is on the open well's wall
+    if (md !== null && !this.isOpenWell()) md = null;
     const wb = this.app.engine.wellbore;
     if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
     this.app.engine.requestRender();
@@ -515,9 +659,23 @@ export class CrossplotFeature implements FeatureModule {
   }
 
   private applySelection() {
-    this.setMarkers(this.selectedMds());
+    const mds = this.selectedMds();
+    this.setMarkers(mds);
+    this.setMarking(mds);
     this.renderFoot();
     this.view.invalidate();
+    // the link chip says whether it marks
+    this.panel.rev.bump();
+  }
+
+  /** Share the marked depths (the timeline shows them as ticks); clear only a marking this plot made. */
+  private setMarking(mds: number[]) {
+    const m = this.app.marking;
+    if (!mds.length) {
+      if (m.value?.source === MARK_SOURCE) m.set(null);
+      return;
+    }
+    m.set({ well: this.well().id, intervals: mdIntervals(mds).map((q) => [q.top, q.base]), source: MARK_SOURCE });
   }
 
   private renderFoot() {
@@ -540,7 +698,7 @@ export class CrossplotFeature implements FeatureModule {
         {iv.slice(0, 6).map((q) => {
           const text = q.base - q.top < 1 ? `${fmt.n(q.top, 0)}` : `${fmt.n(q.top, 0)}–${fmt.n(q.base, 0)}`;
           return (
-            <Button key={q.top} variant="ghost" size="xs" aria-label={`Travel to ${text} m MD`} onPress={() => this.app.travelTo((q.top + q.base) / 2)}>
+            <Button key={q.top} variant="ghost" size="xs" aria-label={`Travel to ${text} m MD`} onPress={() => this.travel((q.top + q.base) / 2)}>
               {text}
             </Button>
           );
@@ -562,7 +720,8 @@ export class CrossplotFeature implements FeatureModule {
       this.markers = undefined;
     }
     if (!mds.length || !e.activeWell) return;
-    const t = e.activeWell.trajectory;
+    // on the plotted well's path (a pinned plot marks its own well)
+    const t = this.well().trajectory;
     const pos = new Float32Array(mds.length * 3);
     const v = new THREE.Vector3();
     mds.forEach((md, i) => {

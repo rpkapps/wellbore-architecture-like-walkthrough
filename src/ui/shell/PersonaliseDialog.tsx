@@ -129,6 +129,7 @@ export function PersonaliseDialog({ app, isOpen, onOpenChange }: { app: App; isO
               { id: 'few', label: 'Only the essentials' },
             ]}
           />
+          <SwitchField label="Show the task bar for the selection" isSelected={p.taskBar} onChange={(v) => setPrefs({ taskBar: v })} />
         </Group>
         <Group title="Graphics">
           <Graphics app={app} />

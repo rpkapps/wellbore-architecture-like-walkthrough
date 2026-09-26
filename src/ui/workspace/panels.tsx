@@ -21,6 +21,7 @@ import { FEATURE_BY_ID, FEATURES, type FeatureId, type FeatureModule } from '../
 import type { App } from '../app';
 import { IconButton } from '../icon-button';
 import { ProvBadge } from '../prov';
+import { LinkChip } from './LinkChip';
 import { Rev, useRev, useSignal } from '../signal';
 import { toolWindows, type ToolWindow } from '../toolWindow';
 import { InterpretationPanel } from '../shell/InterpretationPanel';
@@ -220,14 +221,16 @@ export function usePanels(app: App): Map<string, PanelDef> {
 
 const toolDefs = new WeakMap<ToolWindow, PanelDef>();
 
-/** A tool window's content: its provenance and own controls on a row, then its body (its canvases observe their own size). */
+/** A tool window's content: its provenance, its link chip and own controls on a row, then its body (its canvases observe their own size). */
 function ToolBody({ win }: { win: ToolWindow }) {
   useRev(win.rev);
   return (
     <>
-      {(win.opts.badge || win.opts.header) && (
+      {(win.opts.badge || win.opts.header || win.opts.links) && (
         <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1 border-b border-border-subtle px-2 py-1">
           {win.opts.badge && <ProvBadge prov={win.opts.badge} />}
+          {/* what the view follows (the open well, the depth cursor): pressed, the switches for its links */}
+          {win.opts.links && <LinkChip state={win.opts.links()} />}
           {win.opts.header?.()}
         </div>
       )}
