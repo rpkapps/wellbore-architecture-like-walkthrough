@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { STATUS_COLOR, steerAt, steerProfile, type SteerProfile, type SurfaceSource } from '../data/geosteer';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { TrajectoryIcon } from '@tecton/react/icons';
 import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note } from '../ui/controls';
@@ -38,14 +41,16 @@ export class GeosteerFeature implements FeatureModule {
   private readoutAt = 0;
   private readoutTimer = 0;
   private view: 'window' | 'cursor' = 'window';
+  /** the formations it can steer in (a top and a base in the model) */
+  readonly targets: { id: string; label: string }[];
 
   constructor(private app: App) {
     // cached drawings: redraw when a colour they use changes
     app.paintRev.subscribe(() => this.strip.invalidate());
     this.group.name = 'geosteer';
-    const targets = app.field.horizons
+    const targets = (this.targets = app.field.horizons
       .filter((hz, i) => FORMATION_BY_ID.has(hz.id) && app.field.horizons[i + 1])
-      .map((hz) => ({ id: hz.id, label: FORMATION_BY_ID.get(hz.id)!.name }));
+      .map((hz) => ({ id: hz.id, label: FORMATION_BY_ID.get(hz.id)!.name })));
     this.panel = new ToolWindow({
       id: 'geosteer',
       title: 'Geosteering',
@@ -53,16 +58,7 @@ export class GeosteerFeature implements FeatureModule {
       onClose: () => app.flags.set('geosteer', false),
       header: () => (
         <>
-          <CompactSelect
-            label="Target formation"
-            value={this.target}
-            onChange={(v) => {
-              this.target = v;
-              this.rebuild();
-              this.panel.rev.bump();
-            }}
-            options={targets}
-          />
+          <CompactSelect label="Target formation" value={this.target} onChange={(v) => this.setTarget(v)} options={targets} />
           <CompactSelect
             label="Surfaces"
             value={this.source}
@@ -79,11 +75,7 @@ export class GeosteerFeature implements FeatureModule {
           <CompactSelect
             label="Strip extent"
             value={this.view}
-            onChange={(v) => {
-              this.view = v as 'window' | 'cursor';
-              this.strip.invalidate();
-              this.panel.rev.bump();
-            }}
+            onChange={(v) => this.setView(v as 'window' | 'cursor')}
             options={[
               { id: 'window', label: 'Whole lateral' },
               { id: 'cursor', label: '±250 m of cursor' },
@@ -91,22 +83,30 @@ export class GeosteerFeature implements FeatureModule {
           />
         </>
       ),
-      body: () => (
-        <>
-          <div className="flex flex-col gap-1 text-xs">
-            <Live s={this.readout} />
-          </div>
-          <CanvasBox
-            view={this.strip}
-            aria-label="Distance to the target boundaries along the well: click to travel"
-            className="cursor-pointer"
-            onClick={(e) => {
-              const md = this.mdAtX(e.nativeEvent.offsetX);
-              if (md !== null) app.travelTo(md);
-            }}
-          />
-        </>
-      ),
+      links: () => ({
+        subject: app.engine.activeWell.name,
+        followsWell: true,
+        channels: [{ id: 'cursor', label: 'Follow the depth cursor (±250 m)', short: 'depth cursor', on: this.view === 'cursor', set: (on) => this.setView(on ? 'cursor' : 'window') }],
+      }),
+      body: () =>
+        this.profile && !this.profile.window ? (
+          this.renderEmpty()
+        ) : (
+          <>
+            <div className="flex flex-col gap-1 text-xs">
+              <Live s={this.readout} />
+            </div>
+            <CanvasBox
+              view={this.strip}
+              aria-label="Distance to the target boundaries along the well: click to travel"
+              className="cursor-pointer"
+              onClick={(e) => {
+                const md = this.mdAtX(e.nativeEvent.offsetX);
+                if (md !== null) app.travelTo(md);
+              }}
+            />
+          </>
+        ),
     });
     app.addHud({ id: 'geosteer', render: () => <Live s={this.hud} />, chip: () => <Live s={this.chip} /> });
     // the strip draws the uncertainty band when that feature is on
@@ -130,6 +130,57 @@ export class GeosteerFeature implements FeatureModule {
 
   onWell() {
     this.rebuild();
+    // the link chip names the well; a well that misses the target shows why
+    this.panel.rev.bump();
+  }
+
+  /** Steer in another formation (its top and base become the boundaries). */
+  setTarget(id: string) {
+    if (!this.targets.some((t) => t.id === id)) return;
+    this.target = id;
+    if (this.app.flags.on('geosteer')) this.rebuild();
+    this.panel.rev.bump();
+  }
+
+  private setView(v: 'window' | 'cursor') {
+    this.view = v;
+    this.strip.invalidate();
+    this.panel.rev.bump();
+  }
+
+  /** The open well never reaches the target: say so, and offer the formation it does end in. */
+  private renderEmpty() {
+    const w = this.app.engine.activeWell;
+    const name = FORMATION_BY_ID.get(this.target)?.name ?? this.target;
+    const end = w.zoneAt(w.tdMD - 1)?.formationId;
+    const alt = end && end !== this.target ? this.targets.find((t) => t.id === end) : undefined;
+    const primary = this.app.field.primary;
+    return (
+      <Empty className="min-h-0 flex-1 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <TrajectoryIcon />
+          </EmptyMedia>
+          <EmptyTitle>
+            {w.name} does not reach the {name}
+          </EmptyTitle>
+          <EmptyDescription>{alt ? `It ends in the ${alt.label}: steer in that instead.` : primary !== w ? `${primary.name} lands in it.` : 'Pick another target formation above.'}</EmptyDescription>
+        </EmptyHeader>
+        {(alt || primary !== w) && (
+          <EmptyContent>
+            {alt ? (
+              <Button size="sm" onPress={() => this.setTarget(alt.id)}>
+                Steer in the {alt.label}
+              </Button>
+            ) : (
+              <Button size="sm" onPress={() => this.app.selectWell(primary.id)}>
+                Open {primary.name}
+              </Button>
+            )}
+          </EmptyContent>
+        )}
+      </Empty>
+    );
   }
 
   frame() {

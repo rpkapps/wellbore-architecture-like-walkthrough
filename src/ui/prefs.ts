@@ -23,6 +23,8 @@ export interface Prefs {
   labels: boolean;
   labelDensity: LabelDensity;
   reduceMotion: boolean;
+  /** the contextual task bar next to the selected object (its likely next steps) */
+  taskBar: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -35,6 +37,7 @@ export const DEFAULT_PREFS: Prefs = {
   labels: true,
   labelDensity: 'near',
   reduceMotion: false,
+  taskBar: true,
 };
 
 export const DENSITY_ROOT: Record<Density, number> = { compact: 13, default: 14, comfortable: 15 };

@@ -1,8 +1,14 @@
+import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
+import { ChartScatterIcon, ColumnsIcon, FocusIcon, FoldVerticalIcon, NavigationIcon, ScissorsIcon, TargetIcon } from 'lucide-react';
 import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
 import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
 import { FEATURES, type FeatureId } from '../features/registry';
+import { CorrelationFeature } from '../features/correlation';
+import type { CrossplotFeature } from '../features/crossplot';
+import type { GeosteerFeature } from '../features/geosteer';
+import type { SectionFeature } from '../features/section';
 import type { App } from '../ui/app';
 import type { ConnectionState } from '../connect/hub';
 import { REPLAY_OFFSETS } from '../connect/offsets';
@@ -14,7 +20,7 @@ import { locate, PRESETS } from '../ui/workspace/layout';
 import { atDefault, groupOf, maximised, place, toggleMaximised, type PanelRef, type Placement } from '../ui/workspace/ops';
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
-import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema } from '../ui/selection';
+import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema, type Selection } from '../ui/selection';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -94,6 +100,43 @@ function panelIds(): Record<string, string> {
   return out;
 }
 
+/**
+ * Bring a feature's window into view, set up: its feature turns on (which
+ * opens the window) or the open window comes to the front, with every panel
+ * shown again if they were hidden (Tab).
+ */
+function openView(app: App, id: FeatureId) {
+  const tool = toolWindows.value.find((w) => w.opts.id === id);
+  withTransition(() => {
+    if (app.workspace.hidden.value) app.workspace.hidden.set(false);
+    if (tool && app.flags.on(id)) tool.show();
+  });
+  if (!app.flags.on(id)) app.flags.set(id, true);
+}
+
+/** Bring a built-in panel into view (its tab to the front, its column unfolded). */
+function openPanel(app: App, id: string) {
+  withTransition(() => {
+    if (app.workspace.hidden.value) app.workspace.hidden.set(false);
+    app.workspace.open(id);
+  });
+}
+
+/** A well of the field (logs, survey) by id: the views work on these, not on context wellbores (a path only). */
+const fieldWell = (app: App, id: string) => app.selectableWells().find((w) => w.id === id);
+
+/** Make a well the open one, flying out to it as "Open well" does; resolves once its data is in. */
+async function openWell(app: App, id: string) {
+  if (!fieldWell(app, id)) throw new Error(`No well "${id}".`);
+  if (app.engine.activeWell.id !== id) await app.loadWellAsync(id, true);
+}
+
+/** The formation a selection is about, when the open well crosses it (a view of that zone has samples). */
+const zoneInOpenWell = (app: App, sel: Selection) => {
+  const id = formationOf(sel);
+  return id && app.engine.activeWell.zones.some((z) => z.formationId === id) ? id : null;
+};
+
 export function appActions(): AnyAction<App>[] {
   const A = <S extends z.ZodType = z.ZodUndefined>(a: Action<S, App>) => defineAction<App, S>(a);
   return [
@@ -116,6 +159,8 @@ export function appActions(): AnyAction<App>[] {
           isolatedFormation: e.geology.isolatedId,
           // what is selected (the Properties panel and the right-click menu follow it); actions with `appliesTo` act on it
           selection: app.selection.value ? { ...app.selection.value, name: app.inspector.value?.title } : null,
+          // depth intervals a view has marked (the crossplot's brushed samples); the timeline shows them
+          marking: app.marking.value,
           panels: Object.keys(panelIds()).filter((id) => app.workspace.isShown(id)),
           featuresOn: FEATURES.filter((f) => app.flags.on(f.id)).map((f) => f.id),
           workspace: app.workspace.current.value,
@@ -192,6 +237,7 @@ export function appActions(): AnyAction<App>[] {
       description: 'Travels the camera to a measured depth (MD, metres) along the active well.',
       category: 'Navigate',
       where: 'Timeline',
+      icon: <NavigationIcon />,
       keywords: ['md', 'jump', 'travel'],
       input: z.object({ md: z.number().min(0).meta({ description: 'Measured depth along the active well, in metres' }) }),
       prompt: {
@@ -370,6 +416,7 @@ export function appActions(): AnyAction<App>[] {
       description: 'Fades every other formation to a ghost so one stands alone; without a formation, shows them all again.',
       category: 'Scene',
       where: 'Scene › Layers › formation ⋯',
+      icon: <FocusIcon />,
       input: z.object({ formation: z.enum(FORMATIONS).nullable() }),
       choices: (app) => [
         ...(app.engine.geology.isolatedId ? [{ label: 'Show all formations', input: { formation: null } }] : []),
@@ -412,6 +459,155 @@ export function appActions(): AnyAction<App>[] {
         app.select(sel);
         if (show) withTransition(() => app.workspace.open('properties'));
         return { selection: app.selection.value, name: app.inspector.value?.title ?? null };
+      },
+    }),
+
+    A({
+      id: 'selection.clear',
+      title: 'Clear selection',
+      description: 'Deselects the selected object (Properties then shows the scene settings).',
+      category: 'Scene',
+      shortcut: 'Esc',
+      enabled: (app) => app.selection.value !== null,
+      run: (app) => app.select(null),
+    }),
+
+    // ------------------------------------------------------------------ views set up for an object (the task bar's steps)
+    A({
+      id: 'views.logs',
+      title: 'Show logs',
+      description: 'Brings up the Well logs panel for a well (opening it first), or at the depth of a formation top or an interval of the open well.',
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <LogCurveIcon />,
+      keywords: ['well logs', 'tracks', 'curves'],
+      input: z.object({ well: z.string().optional(), md: z.number().min(0).optional().meta({ description: 'A depth of the open well to centre the tracks on, m MD' }) }),
+      appliesTo: ['well', 'pick', 'interval'],
+      onSelection: (sel, app) => {
+        if (sel.kind === 'well') {
+          const w = fieldWell(app, sel.id);
+          return w && (w.logs || w.lasFile) ? { input: { well: sel.id }, label: 'Show logs' } : null;
+        }
+        const md = depthOf(sel);
+        return md !== null && sel.well === app.engine.activeWell.id ? { input: { md }, label: 'Show in logs' } : null;
+      },
+      run: async (app, { well, md }) => {
+        if (well) await openWell(app, well);
+        openPanel(app, 'logs');
+        if (md !== undefined) app.logs.setCursor(Math.min(md, app.engine.rig.mdMax));
+      },
+    }),
+    A({
+      id: 'views.correlate',
+      title: 'Correlate with the other wells',
+      description: "Opens the well correlation (every logged well's tracks side by side) with this well among them.",
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <ColumnsIcon />,
+      keywords: ['correlation', 'side by side', 'tops'],
+      input: z.object({ well: z.string() }),
+      appliesTo: ['well'],
+      onSelection: (sel, app) => {
+        const w = fieldWell(app, sel.id);
+        return w && (w.logs || w.lasFile) ? { label: 'Correlate' } : null;
+      },
+      run: (app, { well }) => {
+        if (!fieldWell(app, well)) throw new Error(`No well "${well}".`);
+        app.feature<CorrelationFeature>('correlation')?.include(well);
+        openView(app, 'correlation');
+      },
+    }),
+    A({
+      id: 'views.section',
+      title: 'Section along the well',
+      description: 'Opens the vertical section that follows a well path (opening the well first), with the formations it crosses.',
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <ScissorsIcon />,
+      keywords: ['cross-section', 'profile', 'curtain'],
+      input: z.object({ well: z.string() }),
+      appliesTo: ['well'],
+      onSelection: (sel, app) => (fieldWell(app, sel.id) ? { label: 'Section along the well' } : null),
+      run: async (app, { well }) => {
+        await openWell(app, well);
+        // a section pinned to another well comes back to this one
+        app.feature<SectionFeature>('section')?.pinTo(null);
+        openView(app, 'section');
+      },
+    }),
+    A({
+      id: 'views.geosteer',
+      title: 'Geosteer this well',
+      description: 'Opens geosteering for a well (opening it first): where it runs relative to the top and base of the target formation.',
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <TrajectoryIcon />,
+      keywords: ['geosteering', 'distance to boundary', 'landing'],
+      input: z.object({ well: z.string() }),
+      appliesTo: ['well'],
+      onSelection: (sel, app) => (fieldWell(app, sel.id) ? { label: 'Geosteer' } : null),
+      run: async (app, { well }) => {
+        await openWell(app, well);
+        openView(app, 'geosteer');
+      },
+    }),
+    A({
+      id: 'views.crossplot_zone',
+      title: 'Crossplot this zone',
+      description: "Opens the crossplot of the open well limited to one formation's samples.",
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <ChartScatterIcon />,
+      keywords: ['crossplot', 'porosity', 'pickett', 'density neutron', 'zone'],
+      input: z.object({ formation: z.enum(FORMATIONS) }),
+      appliesTo: ['formation', 'pick'],
+      onSelection: (sel, app) => {
+        const id = zoneInOpenWell(app, sel);
+        return id && app.engine.activeWell.logs ? { input: { formation: id }, label: 'Crossplot this zone' } : null;
+      },
+      run: (app, { formation }) => {
+        const x = app.feature<CrossplotFeature>('crossplot');
+        if (!x?.showZone(formation)) throw new Error(`${app.engine.activeWell.name} does not cross the ${formationName(formation)}.`);
+        openView(app, 'crossplot');
+      },
+    }),
+    A({
+      id: 'views.flatten_correlation',
+      title: 'Flatten the correlation on this top',
+      description: "Opens the well correlation flattened on a formation's top, so the wells line up on it.",
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <FoldVerticalIcon />,
+      keywords: ['flatten', 'datum', 'correlation', 'top'],
+      input: z.object({ formation: z.enum(FORMATIONS) }),
+      appliesTo: ['formation', 'pick'],
+      onSelection: (sel) => (CorrelationFeature.canFlatten(formationOf(sel)!) ? { input: { formation: formationOf(sel)! }, label: 'Flatten correlation on this top' } : null),
+      run: (app, { formation }) => {
+        if (!CorrelationFeature.canFlatten(formation)) throw new Error(`The correlation cannot flatten on the ${formationName(formation)}.`);
+        app.feature<CorrelationFeature>('correlation')?.flattenOn(formation);
+        openView(app, 'correlation');
+      },
+    }),
+    A({
+      id: 'views.geosteer_target',
+      title: 'Set as geosteering target',
+      description: 'Makes a formation the geosteering target (its top and base become the boundaries the well is measured against) and opens geosteering.',
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <TargetIcon />,
+      keywords: ['geosteering', 'target', 'boundary', 'landing'],
+      input: z.object({ formation: z.enum(FORMATIONS) }),
+      appliesTo: ['formation', 'pick'],
+      onSelection: (sel, app) => {
+        const id = formationOf(sel)!;
+        const g = app.feature<GeosteerFeature>('geosteer');
+        return g?.targets.some((t) => t.id === id) ? { input: { formation: id }, label: 'Set as geosteering target' } : null;
+      },
+      run: (app, { formation }) => {
+        const g = app.feature<GeosteerFeature>('geosteer');
+        if (!g?.targets.some((t) => t.id === formation)) throw new Error(`The ${formationName(formation)} cannot be a geosteering target.`);
+        g.setTarget(formation);
+        openView(app, 'geosteer');
       },
     }),
 
@@ -946,6 +1142,20 @@ export function appActions(): AnyAction<App>[] {
       input: z.object({ accent: z.enum(ACCENTS.map((a) => a.id) as [Accent, ...Accent[]]) }),
       choices: () => ACCENTS.map((a) => ({ label: a.label, input: { accent: a.id }, current: prefs.value.accent === a.id })),
       run: (_app, { accent }) => setPrefs({ accent }),
+    }),
+    A({
+      id: 'prefs.task_bar',
+      title: 'Task bar for the selection',
+      description: 'Shows or hides the small bar of likely next steps that appears next to the selected object in the 3D view.',
+      category: 'Preferences',
+      where: 'Personalise › 3D view',
+      keywords: ['contextual', 'next step', 'selection', 'toolbar'],
+      input: z.object({ on: z.boolean() }),
+      choices: () => [
+        { label: 'Show', input: { on: true }, current: prefs.value.taskBar },
+        { label: 'Hide', input: { on: false }, current: !prefs.value.taskBar },
+      ],
+      run: (_app, { on }) => setPrefs({ taskBar: on }),
     }),
     A({
       id: 'prefs.open',

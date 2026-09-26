@@ -7,6 +7,7 @@ import { FORMATION_BY_ID } from '../../data/stratigraphy';
 import type { App } from '../app';
 import { fmt } from '../dom';
 import { IconButton } from '../icon-button';
+import { MARKING_COLOR, markTicks, type MarkTick } from '../marking';
 import { useRev, useSignal } from '../signal';
 import { PoseReadout } from './Hud';
 import { SURFACE } from './overlay';
@@ -16,6 +17,7 @@ const SPEEDS = [15, 45, 120, 300];
 // vertical layout of the strip (px)
 const H = 56;
 const CH_Y = 7; // chapter markers
+const MARK_Y = 12; // marked intervals, between the chapters and the strip
 const S_TOP = 17; // formation strip
 const S_H = 20;
 const S_BOT = S_TOP + S_H;
@@ -25,7 +27,8 @@ const LABEL_Y = 51; // depth scale baseline
  * Play along the well and scrub the whole hole. Play, the speed and where
  * the camera is along the well (which opens the position details), then the
  * strip across the rest of the window: formations, inclination, pay, casing
- * shoes and the tour chapters, with a draggable playhead.
+ * shoes, the tour chapters and the intervals a view has marked, with a
+ * draggable playhead.
  */
 export function Timeline({ app }: { app: App }) {
   const playing = useSignal(app.playing);
@@ -78,6 +81,8 @@ interface Hover {
   x: number;
   md: number;
   chapter?: number;
+  /** a marked interval's tick */
+  mark?: MarkTick & { source: string };
 }
 
 /**
@@ -137,6 +142,7 @@ function Strip({ app }: { app: App }) {
     [app, td],
   );
   const onChapter = useCallback((i: number | null) => hover.set((h) => (h ? { ...h, chapter: i ?? undefined } : null)), [hover]);
+  const onMark = useCallback((m: Hover['mark'] | null) => hover.set((h) => (h ? { ...h, mark: m ?? undefined } : null)), [hover]);
 
   // the strip drawn in MD across 0..1 of the width, so it does not depend on the width
   const base = useMemo(() => <Base app={app} />, [app, rev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -158,12 +164,13 @@ function Strip({ app }: { app: App }) {
           onPointerMove={(e) => {
             const px = e.clientX - left.current;
             scrub(e, px);
-            hover.set((h) => ({ x: px, md: mdAt(px), chapter: h?.chapter }));
+            hover.set((h) => ({ x: px, md: mdAt(px), chapter: h?.chapter, mark: h?.mark }));
           }}
           onPointerLeave={() => hover.set(() => null)}
         >
           {base}
           <Chapters app={app} x={x} W={W} onHover={onChapter} />
+          <Marks app={app} W={W} td={td} onHover={onMark} />
           <HoverLine hover={hover} />
           <Playhead app={app} x={x} W={W} td={td} onKey={key} />
         </svg>
@@ -175,7 +182,7 @@ function Strip({ app }: { app: App }) {
 
 function HoverLine({ hover }: { hover: HoverStore }) {
   const h = useSyncExternalStore(hover.subscribe, hover.get);
-  if (!h || h.chapter !== undefined) return null;
+  if (!h || h.chapter !== undefined || h.mark) return null;
   return <line x1={h.x} x2={h.x} y1={S_TOP - 2} y2={S_BOT + 2} className="pointer-events-none stroke-foreground/50" strokeDasharray="2 2" />;
 }
 
@@ -269,6 +276,50 @@ function Chapters({ app, x, W, onHover }: { app: App; x: (md: number) => number;
                 {i + 1}
               </text>
             )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/**
+ * The intervals a view has marked on this well (the crossplot's brushed
+ * samples), as thin bars between the chapters and the strip, in the colour
+ * the 3D view marks them with. Intervals a few pixels apart share a bar, so
+ * hundreds of samples stay a readable handful; a click travels there.
+ */
+function Marks({ app, W, td, onHover }: { app: App; W: number; td: number; onHover: (m: Hover['mark'] | null) => void }) {
+  const marking = useSignal(app.marking);
+  const wellId = app.engine.activeWell.id;
+  const ticks = useMemo(() => (marking && marking.well === wellId ? markTicks(marking.intervals, td, W) : []), [marking, wellId, td, W]);
+  if (!ticks.length) return null;
+  const source = marking!.source;
+  return (
+    <g aria-label={`Marked by ${source}`} role="group">
+      {ticks.map((t) => {
+        const label = `${fmt.n(t.top, 0)}${t.base - t.top >= 1 ? `–${fmt.n(t.base, 0)}` : ''} m MD`;
+        return (
+          <g
+            key={t.x}
+            role="button"
+            tabIndex={0}
+            aria-label={`Marked interval ${label}: travel there`}
+            className="cursor-pointer outline-none [&:focus-visible>rect:last-child]:stroke-ring"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerEnter={() => onHover({ ...t, source })}
+            onPointerLeave={() => onHover(null)}
+            onClick={() => app.travelTo(t.md)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                app.travelTo(t.md);
+              }
+            }}
+          >
+            {/* a taller target than the bar, easy to hit */}
+            <rect x={t.x - 2} y={MARK_Y - 4} width={t.w + 4} height={9} fill="transparent" />
+            <rect x={t.x} y={MARK_Y} width={t.w} height={3} rx={1} fill={MARKING_COLOR} strokeWidth={1} style={{ filter: `drop-shadow(0 0 2px ${MARKING_COLOR})` }} />
           </g>
         );
       })}
@@ -382,6 +433,10 @@ function HoverCard({ app, hover: store, W }: { app: App; hover: HoverStore; W: n
     const c = app.chapters[hover.chapter];
     title = `${hover.chapter + 1}. ${c.title}`;
     sub = `${fmt.n(c.md, 0)} m MD · click to go`;
+  } else if (hover.mark) {
+    const m = hover.mark;
+    title = `Marked in the ${m.source.toLowerCase()}${m.count > 1 ? ` · ${m.count} intervals` : ''}`;
+    sub = `${fmt.n(m.top, 0)}${m.base - m.top >= 1 ? `–${fmt.n(m.base, 0)}` : ''} m MD · click to go`;
   } else {
     const z = w.zones.find((z) => hover.md >= z.topMD && hover.md < z.baseMD);
     const t = w.trajectory.at(Math.min(hover.md, w.trajectory.mdEnd));

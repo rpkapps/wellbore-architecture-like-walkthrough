@@ -134,6 +134,17 @@ export function bvwLine(bvw: number, phiMax = 0.4): [number, number][] {
   return out;
 }
 
+/**
+ * The log curves a crossplot is made from: density–neutron plots NPHI and
+ * RHOB; Pickett and Buckles need Rt and the density porosity (RHOB).
+ */
+export const CROSSPLOT_NEEDS: Record<CrossplotKind, string[]> = { nd: ['NPHI', 'RHOB'], pickett: ['RT', 'RHOB'], buckles: ['RT', 'RHOB'] };
+
+/** The curves a crossplot needs that a log set lacks (all of them without logs). */
+export function missingCurves(kind: CrossplotKind, logs: LogSet | undefined): string[] {
+  return CROSSPLOT_NEEDS[kind].filter((k) => !findCurve(logs, k)?.values.some((v) => Number.isFinite(v)));
+}
+
 /** Group selected sample depths into MD intervals (a gap wider than `gap` starts a new one). */
 export function mdIntervals(mds: number[], gap = 1.5): { top: number; base: number; n: number }[] {
   const s = [...mds].sort((a, b) => a - b);

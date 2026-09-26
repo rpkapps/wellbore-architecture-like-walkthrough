@@ -9,14 +9,14 @@ import type { Selection } from '../selection';
 import { useSignal } from '../signal';
 
 /** The menu parts a list of actions renders with: a dropdown's or a context menu's (the same React Aria menu, styled for each). */
-interface MenuKit {
+export interface MenuKit {
   Item: typeof DropdownMenuItem;
   Group: typeof DropdownMenuGroup;
   Label: typeof DropdownMenuLabel;
   Separator: typeof DropdownMenuSeparator;
 }
 
-const DROPDOWN: MenuKit = { Item: DropdownMenuItem, Group: DropdownMenuGroup, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator };
+export const DROPDOWN: MenuKit = { Item: DropdownMenuItem, Group: DropdownMenuGroup, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator };
 const CONTEXT: MenuKit = { Item: ContextMenuItem, Group: ContextMenuGroup, Label: ContextMenuLabel, Separator: ContextMenuSeparator };
 
 /**
@@ -25,7 +25,7 @@ const CONTEXT: MenuKit = { Item: ContextMenuItem, Group: ContextMenuGroup, Label
  * on), then the panels that show it. The palette, these menus and an
  * assistant therefore offer the same operations.
  */
-function actionItems(entries: SelectionEntry<App>[], title: string | undefined, kit: MenuKit): ReactNode {
+export function actionItems(entries: SelectionEntry<App>[], title: string | undefined, kit: MenuKit): ReactNode {
   const { Item, Group, Label, Separator } = kit;
   const panel = (e: SelectionEntry<App>) => e.action.category === 'Panels';
   const verbs = entries.filter((e) => e.checked === undefined && !panel(e));

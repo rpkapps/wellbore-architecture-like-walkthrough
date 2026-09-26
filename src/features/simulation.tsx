@@ -96,23 +96,26 @@ export class SimulationFeature implements FeatureModule {
           <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
             <div className="flex flex-col gap-3 pb-1">{this.renderControls()}</div>
           </ScrollArea>
-          <CanvasBox
-            view={this.chart}
-            box="h-32 w-full shrink-0"
-            aria-label="Field oil rate, measured and simulated: click to show that report date"
-            className="cursor-pointer"
-            onClick={(e) => {
-              const m = this.model;
-              if (!m || !m.header.dates.length) return;
-              const t = this.chartT(e.nativeEvent.offsetX);
-              if (t === null) return;
-              let best = 0;
-              m.header.dates.forEach((d, i) => {
-                if (Math.abs(Date.parse(d) - t) < Math.abs(Date.parse(m.header.dates[best]) - t)) best = i;
-              });
-              this.setStep(best);
-            }}
-          />
+          {/* the rate chart only with a model to compare (the empty state stands alone) */}
+          {this.model && (
+            <CanvasBox
+              view={this.chart}
+              box="h-32 w-full shrink-0"
+              aria-label="Field oil rate, measured and simulated: click to show that report date"
+              className="cursor-pointer"
+              onClick={(e) => {
+                const m = this.model;
+                if (!m || !m.header.dates.length) return;
+                const t = this.chartT(e.nativeEvent.offsetX);
+                if (t === null) return;
+                let best = 0;
+                m.header.dates.forEach((d, i) => {
+                  if (Math.abs(Date.parse(d) - t) < Math.abs(Date.parse(m.header.dates[best]) - t)) best = i;
+                });
+                this.setStep(best);
+              }}
+            />
+          )}
         </>
       ),
     });
@@ -408,7 +411,7 @@ void main(){
             <EmptyMedia variant="icon">
               <Grid3x3Icon />
             </EmptyMedia>
-            <EmptyTitle>No simulation grid loaded</EmptyTitle>
+            <EmptyTitle>Simulation needs the Eclipse files</EmptyTitle>
             <EmptyDescription>
               Import a <b>.bwsim</b> package in <b>Data</b>. Convert Eclipse or OPM Flow output (GRDECL / EGRID + INIT + UNRST + UNSMRY) with <code>scripts/prepare_sim.py</code>. The Volve Eclipse model is part of the{' '}
               <Link href="https://www.equinor.com/energy/volve-data-sharing" isExternal>
@@ -419,7 +422,7 @@ void main(){
           </EmptyHeader>
           <EmptyContent>
             <Button size="sm" onPress={() => this.app.dataOpen.set(true)}>
-              Import simulation
+              Import…
             </Button>
           </EmptyContent>
         </Empty>

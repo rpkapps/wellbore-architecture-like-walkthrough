@@ -22,6 +22,7 @@ import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/re
 import { createFeatureModules } from '../features';
 import { inspect, type InspectorView } from './inspect';
 import { sameSelection, type Selection } from './selection';
+import type { Marking } from './marking';
 import { DataImporter } from './dataImport';
 import { DataHub } from '../connect/hub';
 import type { ConnectRequest } from './shell/ConnectDialog';
@@ -162,6 +163,12 @@ export class App {
   readonly selection = new Signal<Selection | null>(null);
   /** Properties stays on this object (its pin) whatever is selected meanwhile */
   readonly pinned = new Signal<Selection | null>(null);
+  /**
+   * Depth intervals of a well a view has marked (the crossplot's brushed
+   * samples): the timeline shows them as ticks to travel to. The view that
+   * set it clears it.
+   */
+  readonly marking = new Signal<Marking | null>(null);
   /** a right-click menu of the selection's actions, open at this point of the window */
   readonly contextMenu = new Signal<{ x: number; y: number; selection: Selection } | null>(null);
   /**

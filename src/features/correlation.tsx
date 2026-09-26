@@ -1,6 +1,9 @@
 import { corrAxis, corrDatum, corrTrack, corrZones, type CorrAxis, type CorrDepthMode, type CorrZone } from '../data/correlation';
 import type { Well } from '../data/dataset';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
+import { Button } from '@tecton/react/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
+import { ColumnsIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { App } from '../ui/app';
 import { CompactSelect, Note, SelectField, SwitchField } from '../ui/controls';
@@ -26,6 +29,8 @@ interface Column {
 const OVERLAY_COLOR = '#ff8f9e';
 /** select key for the empty choice (no flattening, no overlay) */
 const NONE = '_none';
+/** the tops it can flatten on (the seabed unit has no top in the wells) */
+const FLATTEN_ON = MODEL_HORIZONS.filter((id) => !['nordland'].includes(id));
 
 /**
  * Multi-well correlation panel: log tracks of every logged well side by side,
@@ -67,13 +72,8 @@ export class CorrelationFeature implements FeatureModule {
           <CompactSelect
             label="Flatten on a formation top"
             value={this.datumId || NONE}
-            onChange={(v) => {
-              this.datumId = v === NONE ? '' : v;
-              this.win = null;
-              this.rebuild();
-              this.panel.rev.bump();
-            }}
-            options={[{ id: NONE, label: 'No flattening' }, ...MODEL_HORIZONS.filter((id) => !['nordland'].includes(id)).map((id) => ({ id, label: `Flatten: ${FORMATION_BY_ID.get(id)?.name ?? id}` }))]}
+            onChange={(v) => this.flattenOn(v === NONE ? '' : v)}
+            options={[{ id: NONE, label: 'No flattening' }, ...FLATTEN_ON.map((id) => ({ id, label: `Flatten: ${FORMATION_BY_ID.get(id)?.name ?? id}` }))]}
           />
           <CompactSelect
             label="Vertical axis"
@@ -111,22 +111,33 @@ export class CorrelationFeature implements FeatureModule {
           />
         </>
       ),
-      body: () => (
-        <>
-          <CanvasBox
-            view={this.view}
-            aria-label="Log tracks of the logged wells side by side: click a track to travel there"
-            className="cursor-pointer"
-            onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
-            onPointerMove={(e) => this.hover(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
-            onPointerLeave={() => this.hover(-1, -1)}
-            onDoubleClick={() => ((this.win = null), this.view.invalidate())}
-          />
-          <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
-            <Live s={this.readout} />
-          </p>
-        </>
-      ),
+      links: () => ({
+        subject: 'Logged wells',
+        followsWell: false,
+        channels: [
+          { id: 'well', label: 'Highlight the open well', short: app.engine.activeWell.name.replace(/^15\/9-/, ''), on: true },
+          { id: 'cursor', label: 'Show the depth cursor on it', short: 'depth cursor', on: true },
+        ],
+      }),
+      body: () =>
+        !this.loading && this.cols.length < 2 ? (
+          this.renderEmpty()
+        ) : (
+          <>
+            <CanvasBox
+              view={this.view}
+              aria-label="Log tracks of the logged wells side by side: click a track to travel there"
+              className="cursor-pointer"
+              onClick={(e) => this.click(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
+              onPointerMove={(e) => this.hover(e.nativeEvent.offsetX, e.nativeEvent.offsetY)}
+              onPointerLeave={() => this.hover(-1, -1)}
+              onDoubleClick={() => ((this.win = null), this.view.invalidate())}
+            />
+            <p className="min-h-4 shrink-0 truncate font-mono text-xs text-muted-foreground">
+              <Live s={this.readout} />
+            </p>
+          </>
+        ),
     });
     // the well list follows the "More Volve wells" feature (skip the immediate call from watch)
     let first = true;
@@ -168,6 +179,64 @@ export class CorrelationFeature implements FeatureModule {
   onWell() {
     // interpretation parameters or uploads may have changed calculated curves and zones
     void this.load();
+    // the link chip names the open well
+    this.panel.rev.bump();
+  }
+
+  /** Can the tracks be flattened on this formation's top? */
+  static canFlatten(id: string) {
+    return FLATTEN_ON.includes(id);
+  }
+
+  /** Flatten the tracks on a formation top ('' for none): the task bar's "Flatten on top". */
+  flattenOn(id: string) {
+    if (id && !CorrelationFeature.canFlatten(id)) return;
+    this.datumId = id;
+    this.win = null;
+    if (this.app.flags.on('correlation')) this.rebuild();
+    this.panel.rev.bump();
+  }
+
+  /** Show a well's track again if it was left out (the task bar's "Correlate"). */
+  include(wellId: string) {
+    if (!this.hidden.delete(wellId)) return;
+    if (this.app.flags.on('correlation')) this.rebuild();
+    this.rev.bump();
+  }
+
+  /** Fewer than two wells to correlate: say why, and offer what adds one. */
+  private renderEmpty() {
+    const extra = this.app.flags.on('extraWells');
+    const left = this.hidden.size > 0;
+    return (
+      <Empty className="min-h-0 flex-1 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ColumnsIcon />
+          </EmptyMedia>
+          <EmptyTitle>Correlation needs two wells with logs</EmptyTitle>
+          <EmptyDescription>
+            {this.cols.length ? `Only ${this.cols[0].well.name} has logs here.` : 'No well shown here has logs.'}{' '}
+            {left ? 'Some wells are left out in its settings.' : extra ? 'Import the logs of another well.' : 'More Volve wells adds wells with full log suites.'}
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          {left ? (
+            <Button size="sm" onPress={() => (this.hidden.clear(), this.rebuild(), this.rev.bump(), this.panel.rev.bump())}>
+              Show every logged well
+            </Button>
+          ) : extra ? (
+            <Button size="sm" onPress={() => this.app.dataOpen.set(true)}>
+              Import logs…
+            </Button>
+          ) : (
+            <Button size="sm" onPress={() => this.app.flags.set('extraWells', true)}>
+              Add more Volve wells
+            </Button>
+          )}
+        </EmptyContent>
+      </Empty>
+    );
   }
 
   frame() {
@@ -204,6 +273,7 @@ export class CorrelationFeature implements FeatureModule {
               else this.hidden.add(w.id);
               this.rebuild();
               this.rev.bump();
+              this.panel.rev.bump();
             }}
           />
         ))}
@@ -231,6 +301,7 @@ export class CorrelationFeature implements FeatureModule {
     if (this.app.flags.on('correlation')) this.rebuild();
     // uploads may have added logged wells to the settings list
     this.rev.bump();
+    this.panel.rev.bump();
   }
 
   private rebuild() {
