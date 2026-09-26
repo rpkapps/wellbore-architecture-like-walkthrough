@@ -11,6 +11,8 @@ import { Live, Signal } from '../ui/signal';
 import { font, ink, textLen, textScale, wash } from '../ui/tokens';
 import { type FeatureModule, windowClosed } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
+import type { InspectorRow } from '../ui/inspect';
+import { mdNear } from './identify';
 
 /**
  * Geosteering: where is the well relative to the top and base of the target
@@ -43,6 +45,9 @@ export class GeosteerFeature implements FeatureModule {
     // cached drawings: redraw when a colour they use changes
     app.paintRev.subscribe(() => this.strip.invalidate());
     this.group.name = 'geosteer';
+    // a click on it selects the overlay (its details and settings in Properties)
+    this.group.userData = { kind: 'feature', featureId: this.id };
+    app.engine.pickables.add(this.group);
     const targets = app.field.horizons
       .filter((hz, i) => FORMATION_BY_ID.has(hz.id) && app.field.horizons[i + 1])
       .map((hz) => ({ id: hz.id, label: FORMATION_BY_ID.get(hz.id)!.name }));
@@ -126,6 +131,20 @@ export class GeosteerFeature implements FeatureModule {
     this.readoutTimer = 0;
     this.hud.set(null);
     this.chip.set(null);
+  }
+
+  identify(point: { x: number; y: number; z: number }): InspectorRow[] {
+    const md = mdNear(this.app, point);
+    const s = md !== null && this.profile ? steerAt(this.profile, md) : null;
+    if (!s) return [];
+    const name = FORMATION_BY_ID.get(this.target)?.name ?? this.target;
+    return [
+      { h: 'Where you clicked' },
+      ['Depth', `${fmt.n(s.md, 1)} m MD`, 'measured'],
+      ['Status', s.status === 'in' ? `in the ${name}` : s.status === 'above' ? `above the ${name} top` : `below the ${name} base`, 'calculated'],
+      ['To the top', s.dTop >= 0 ? `${fmt.n(s.dTop, 1)} m below it` : `${fmt.n(-s.dTop, 1)} m above it`, 'calculated'],
+      ['To the base', s.dBase >= 0 ? `${fmt.n(s.dBase, 1)} m above it` : `${fmt.n(-s.dBase, 1)} m below it`, 'calculated'],
+    ];
   }
 
   onWell() {

@@ -994,6 +994,15 @@ export class App {
       if (sel) this.openContextMenu(sel, e.clientX, e.clientY);
     });
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    // The app's own right-click menus stand in for the browser's everywhere: on some systems the
+    // browser's arrives after ours opened, aimed at our menu rather than the view, so it is turned
+    // off for the whole page. Text fields and selected text keep it (copy, paste, spelling).
+    document.addEventListener('contextmenu', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('input, textarea, [contenteditable=""], [contenteditable="true"]')) return;
+      if (String(window.getSelection() ?? '').trim()) return;
+      e.preventDefault();
+    });
     cv.addEventListener('dblclick', (e) => {
       const p = this.engine.pick(e.clientX, e.clientY);
       if (!p) return;

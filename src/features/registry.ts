@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { InspectorRow } from '../ui/inspect';
 import type { Rev } from '../ui/signal';
 
 /**
@@ -58,6 +59,8 @@ export interface FeatureDef {
   home: FeatureHome;
   /** its name where it lives, when that differs from `name` (the Overlays row, the Graphics switch) */
   label?: string;
+  /** how to read what it draws: Properties shows it when the overlay is clicked in 3D or selected in the tree */
+  read?: string;
 }
 
 export const FEATURES: FeatureDef[] = [
@@ -70,6 +73,7 @@ export const FEATURES: FeatureDef[] = [
     prov: 'calculated',
     default: true,
     desc: 'Vertical distance from the well to the top and base of the target formation at every depth: status band and drop-lines along the well in 3D, plus a distance-to-boundary strip.',
+    read: 'The band rides on top of the well: green where the well is inside the target formation, amber above its top, red below its base. The drop-lines join the well to the top and base surfaces; the shorter the line, the closer the boundary.',
   },
   {
     id: 'curtain',
@@ -79,6 +83,7 @@ export const FEATURES: FeatureDef[] = [
     prov: 'measured',
     default: true,
     desc: 'A ribbon hanging off the trajectory with a log drawn as a filled curve, so logs can be read in 3D from the field view.',
+    read: 'The filled curve reaches further from the well, and its colour changes, as the log value rises. Choose the log in its settings.',
   },
   {
     id: 'section',
@@ -115,6 +120,7 @@ export const FEATURES: FeatureDef[] = [
     prov: 'calculated',
     default: true,
     desc: 'Contact depth found from the calculated water saturation in the clean Hugin sands of every logged well, drawn as a labelled plane with its uncertainty band.',
+    read: 'The flat plane is the estimated depth where oil gives way to water; the discs on the wells are the depth found in each well, and the band is its uncertainty.',
   },
   {
     id: 'rop',
@@ -134,6 +140,7 @@ export const FEATURES: FeatureDef[] = [
     prov: 'calculated',
     default: false,
     desc: 'Position-uncertainty ellipses that widen with depth (simplified MWD error model), with a larger allowance where the path is reconstructed from picks.',
+    read: 'Each ellipse is where the well could be at that depth, at the chosen confidence. They widen with depth as the survey errors add up; wider where the path is reconstructed from picks.',
   },
   {
     id: 'extraWells',
@@ -370,4 +377,6 @@ export interface FeatureModule {
   settings?(): ReactNode;
   /** bump to re-render the settings */
   readonly rev?: Rev;
+  /** what it shows at a point clicked on it in 3D (scene coordinates): rows for Properties */
+  identify?(point: { x: number; y: number; z: number }): InspectorRow[];
 }

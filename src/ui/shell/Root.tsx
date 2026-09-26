@@ -9,6 +9,9 @@ import { useSignal } from '../signal';
 import { Loader } from './Loader';
 import { Workspace } from './Workspace';
 
+/** The loader stays at least this long before it starts to leave, so a fast load never flashes it. */
+const LOADER_MIN_MS = 2000;
+
 type Boot = { stage: 'loading'; msg: string; f: number } | { stage: 'failed'; msg: string } | { stage: 'running'; app: App };
 
 /**
@@ -22,6 +25,7 @@ export function Root() {
 
   useEffect(() => {
     let cancelled = false;
+    const shownAt = performance.now();
     loadVolve('./data/volve/', (msg, f) => setProgress({ msg, f }))
       .then((field) => {
         if (cancelled) return;
@@ -63,7 +67,7 @@ export function Root() {
               } else done();
               e.rig.flyTo(o.pos, o.target, 3.2);
             }, 520);
-          }, 300);
+          }, Math.max(300, LOADER_MIN_MS - (performance.now() - shownAt)));
         });
         setBoot({ stage: 'running', app });
       })

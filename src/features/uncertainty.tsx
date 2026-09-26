@@ -5,6 +5,8 @@ import type { App } from '../ui/app';
 import { Note, SelectField } from '../ui/controls';
 import { fmt } from '../ui/dom';
 import { Rev, SCENE } from '../ui/signal';
+import type { InspectorRow } from '../ui/inspect';
+import { mdNear } from './identify';
 import type { FeatureModule } from './registry';
 
 /** Position-uncertainty ellipses swept along the active trajectory. */
@@ -17,6 +19,9 @@ export class UncertaintyFeature implements FeatureModule {
 
   constructor(private app: App) {
     this.group.name = 'uncertainty';
+    // a click on it selects the overlay (its details and settings in Properties); the well inside its cones still wins
+    this.group.userData = { kind: 'feature', featureId: this.id, soft: true };
+    app.engine.pickables.add(this.group);
   }
 
   enable() {
@@ -31,6 +36,18 @@ export class UncertaintyFeature implements FeatureModule {
 
   onWell() {
     this.rebuild();
+  }
+
+  identify(point: { x: number; y: number; z: number }): InspectorRow[] {
+    const md = mdNear(this.app, point);
+    const e = md !== null ? ellipseAt(this.ellipses, md) : null;
+    if (md === null || !e) return [];
+    return [
+      { h: 'Where you clicked' },
+      ['Depth', `${fmt.n(md, 1)} m MD`, 'measured'],
+      [`Across the hole (${this.sigma}σ)`, `${fmt.n(e.major * this.sigma, 1)} × ${fmt.n(e.minor * this.sigma, 1)} m`, 'calculated'],
+      [`Vertical (${this.sigma}σ)`, `±${fmt.n(e.vertical * this.sigma, 1)} m`, 'calculated'],
+    ];
   }
 
   /** k·σ vertical (TVD) uncertainty at md, metres. */

@@ -7,7 +7,7 @@ import { Trajectory } from '../data/trajectory';
 import type { HorizonGrid, Zone } from '../data/types';
 import type { PickResult } from '../scene/engine';
 import type { Fracture } from '../scene/wellbore';
-import { FEATURE_BY_ID, labelOf, type FeatureId } from '../features/registry';
+import { FEATURE_BY_ID, featuresAt, labelOf, type FeatureId } from '../features/registry';
 import type { App } from './app';
 import { fmt } from './dom';
 import type { Provenance } from './prov';
@@ -78,7 +78,15 @@ class Inspect {
       case 'detailWell':
         return { kind: 'well', id: d.wellId as string };
       case 'platform':
+      case 'sea':
         return { kind: 'overlay', id: 'sea' };
+      // an overlay feature's drawing (the log curtain, the geosteering band, the uncertainty cones…)
+      case 'feature':
+        return { kind: 'overlay', id: d.featureId as string, point: pt };
+      case 'owc':
+        return { kind: 'contact', id: 'owc', point: pt };
+      case 'simCell':
+        return { kind: 'overlay', id: 'simulation', point: pt };
       default:
         return null;
     }
@@ -112,7 +120,7 @@ class Inspect {
         return sel.top !== undefined && sel.base !== undefined && w.petro && w.logs ? this.pay({ top: sel.top, base: sel.base }) : null;
       case 'overlay':
       case 'contact':
-        return this.overlay(sel.id);
+        return this.overlay(sel.id, sel.point);
     }
   }
 
@@ -149,10 +157,46 @@ class Inspect {
     );
   }
 
-  /** A scene layer (the near-well geometry, labels, sea…) or an optional overlay feature. */
-  overlay(id: string): InspectorView | null {
+  /**
+   * A scene layer (the near-well geometry, labels, sea…) or an optional
+   * overlay feature: what it is, how to read it and, for a click on it in 3D
+   * (`point`), what it shows there.
+   */
+  overlay(id: string, point?: { x: number; y: number; z: number }): InspectorView | null {
     const f = FEATURE_BY_ID.get(id as FeatureId);
-    if (f) return view(labelOf(f.id), `Overlay · ${f.group}`, '#7fe3ff', [], f.desc, [], f.prov ? { prov: f.prov } : undefined);
+    if (f) {
+      const app = this.app;
+      const m = app.modules.get(f.id);
+      const rows = point && m?.identify && app.flags.on(f.id) ? m.identify(point) : [];
+      // the other overlays showing, for "Show only this"
+      const others = featuresAt('overlay').filter((o) => o.id !== f.id && app.flags.on(o.id));
+      return view(
+        labelOf(f.id),
+        `${f.home === 'overlay' ? 'Overlay' : 'View'} · ${f.group}`,
+        '#7fe3ff',
+        rows,
+        <>
+          <p>{f.desc}</p>
+          {f.read && (
+            <p className="mt-1">
+              <b>How to read it:</b> {f.read}
+            </p>
+          )}
+        </>,
+        [
+          {
+            label: 'Hide',
+            setting: true,
+            onPress: () => {
+              app.flags.set(f.id, false);
+              app.select(null);
+            },
+          },
+          ...(f.home === 'overlay' && others.length ? [{ label: 'Show only this', onPress: () => others.forEach((o) => app.flags.set(o.id, false)) }] : []),
+        ],
+        f.prov ? { prov: f.prov } : undefined,
+      );
+    }
     if (id === 'sea') {
       const m = this.app.field.meta;
       return view(

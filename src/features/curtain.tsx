@@ -4,7 +4,11 @@ import type { App } from '../ui/app';
 import { Note, SelectField, SliderField } from '../ui/controls';
 import { ProvBadge } from '../ui/prov';
 import { Rev, SCENE } from '../ui/signal';
+import { sampleCurve } from '../data/las';
+import { fmt } from '../ui/dom';
+import type { InspectorRow } from '../ui/inspect';
 import { CURVES, CURVE_BY_KEY, resample } from './curves';
+import { mdNear } from './identify';
 import type { FeatureModule } from './registry';
 
 /**
@@ -22,6 +26,9 @@ export class CurtainFeature implements FeatureModule {
 
   constructor(private app: App) {
     this.group.name = 'log-curtain';
+    // a click on it selects the overlay (its details and settings in Properties)
+    this.group.userData = { kind: 'feature', featureId: this.id };
+    app.engine.pickables.add(this.group);
   }
 
   enable() {
@@ -36,6 +43,19 @@ export class CurtainFeature implements FeatureModule {
 
   onWell() {
     this.rebuild();
+  }
+
+  identify(point: { x: number; y: number; z: number }): InspectorRow[] {
+    const w = this.app.engine.activeWell;
+    const md = mdNear(this.app, point);
+    const def = CURVE_BY_KEY.get(this.curve);
+    const c = def && w ? def.get(w) : null;
+    if (md === null || !def) return [];
+    return [
+      { h: 'Where you clicked' },
+      ['Depth', `${fmt.n(md, 1)} m MD`, 'measured'],
+      [def.label, c ? `${fmt.n(sampleCurve(c.depth, c.values, md), 2)} ${def.unit}` : '—', def.prov],
+    ];
   }
 
   settings() {

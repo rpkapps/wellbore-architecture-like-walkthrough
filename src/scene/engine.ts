@@ -124,6 +124,14 @@ export class Engine {
   private glow: GlowPass;
   private final: FinalPass;
   private raycaster = new THREE.Raycaster();
+  /**
+   * Objects drawn by the overlay features (the log curtain, the geosteering
+   * band…) that a click can pick: each is tagged `userData.kind = 'feature'`
+   * with its `featureId`. A feature adds its group while it is on. One marked
+   * `userData.soft` (a see-through envelope around the well) gives way to
+   * the well when the same click also hits the well behind it.
+   */
+  readonly pickables = new Set<THREE.Object3D>();
   private lutTex: THREE.DataTexture;
   mode: PropertyMode = 'resistivity';
   tunnel = false;
@@ -747,14 +755,25 @@ export class Engine {
       for (const m of this.geology.meshes.values()) if (m.visible && (m.material as THREE.Material).opacity > 0.15) targets.push(m);
       if (this.paths.group.visible) targets.push(...this.paths.group.children.filter((c) => c.type === 'Mesh'));
       targets.push(this.env.platform);
+      for (const o of this.pickables) if (o.visible && o.parent) targets.push(o);
     }
     ensureBVHFor(targets);
     const hits = this.raycaster.intersectObjects(targets, true);
+    const WELL_PARTS = new Set(['wall', 'casing', 'cement', 'fracture', 'top', 'pay']);
+    let soft: PickResult | null = null;
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;
       while (o && !o.userData?.kind) o = o.parent;
       if (!o) continue;
+      // a hidden part is not the thing drawn
+      if (!h.object.visible) continue;
       const kind = o.userData.kind as string;
+      // a see-through envelope around the well: the well wins if the ray goes on to hit it
+      if (!soft && o.userData.soft) {
+        soft = { kind, point: h.point.clone(), object: o };
+        continue;
+      }
+      if (soft && !WELL_PARTS.has(kind)) return soft;
       // respect the wall cutaway: skip hits on the removed wedge
       if ((kind === 'wall' || kind === 'casing') && wb && wb.uniforms.uCut.value > 0.5) {
         const md = h.uv ? h.uv.y : undefined;
@@ -768,7 +787,7 @@ export class Engine {
       }
       return { kind, point: h.point.clone(), md: h.uv && (kind === 'wall' || kind === 'casing') ? h.uv.y : undefined, object: o };
     }
-    return null;
+    return soft;
   }
 
   /** Viewpoint that frames the whole model. */
