@@ -240,7 +240,7 @@ export function WorkspaceFrame({
     <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden">
       <div className="absolute inset-0">{viewport}</div>
       {/* the area the panels leave free: overlays are laid out in it */}
-      <div ref={freeEl} className="pointer-events-none absolute @container [contain:size_layout_style]" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
+      <div ref={freeEl} data-chrome className="pointer-events-none absolute @container [contain:size_layout_style]" style={{ left: geo.free.left, right: geo.free.right, top: 0, bottom: geo.free.bottom }}>
         {overlay}
       </div>
       {!hidden && (
@@ -272,7 +272,7 @@ export function WorkspaceFrame({
           })}
           {/* in a fixed order, stacked by z-index: raising a window must not move its
               element in the document, which would drop the pointer capture of its drag */}
-          <div className="pointer-events-none absolute inset-0 z-20">
+          <div data-chrome className="pointer-events-none absolute inset-0 z-20">
             {[...L.floating]
               .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
               .map((f) => (
@@ -297,7 +297,7 @@ export function WorkspaceFrame({
       )}
       <Activity mode={hidden ? 'hidden' : 'visible'}>
         <ViewTransition default="none" enter="ws-enter" exit="ws-exit">
-          <div className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
+          <div data-chrome className="absolute" style={{ left: G, right: G, bottom: G, height: timelineHeight }}>
             {timeline}
           </div>
         </ViewTransition>

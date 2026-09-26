@@ -17,6 +17,8 @@ interface Flight {
   t: number;
   dur: number;
   done?: () => void;
+  /** sweep around the destination's centre (distance, heading and height eased apart) rather than along a line */
+  around?: boolean;
 }
 
 /**
@@ -192,13 +194,13 @@ export class CameraRig {
   /** reduce motion: camera moves become (almost) instant */
   instantMoves = false;
 
-  flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void) {
+  flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void, opts: { around?: boolean } = {}) {
     this.nav.stop();
     if (this.instantMoves) dur = 0.01;
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
     const curTarget = this.orbit.enabled ? this.orbit.target.clone() : this.camera.position.clone().addScaledVector(dir, pos.distanceTo(target));
-    this.flight = { fromPos: this.camera.position.clone(), fromTarget: curTarget, toPos: pos.clone(), toTarget: target.clone(), t: 0, dur, done };
+    this.flight = { fromPos: this.camera.position.clone(), fromTarget: curTarget, toPos: pos.clone(), toTarget: target.clone(), t: 0, dur, done, around: opts.around };
   }
 
   get isFlying() {
@@ -210,10 +212,22 @@ export class CameraRig {
       const f = this.flight;
       f.t += dt / f.dur;
       const k = easeInOut(Math.min(1, f.t));
-      // arc the path slightly upward for long flights
-      const lift = Math.sin(k * Math.PI) * Math.min(600, f.fromPos.distanceTo(f.toPos) * 0.18);
-      this.camera.position.lerpVectors(f.fromPos, f.toPos, k).y += lift;
       this.lookTarget.lerpVectors(f.fromTarget, f.toTarget, k);
+      if (f.around) {
+        // a descending sweep around the destination's centre: the distance eases geometrically,
+        // the heading turns the short way round and the height angle eases between the two
+        const a = new THREE.Spherical().setFromVector3(f.fromPos.clone().sub(f.toTarget));
+        const b = new THREE.Spherical().setFromVector3(f.toPos.clone().sub(f.toTarget));
+        let dTheta = b.theta - a.theta;
+        if (dTheta > Math.PI) dTheta -= Math.PI * 2;
+        if (dTheta < -Math.PI) dTheta += Math.PI * 2;
+        const s = new THREE.Spherical(a.radius * Math.pow(b.radius / a.radius, k), a.phi + (b.phi - a.phi) * k, a.theta + dTheta * k);
+        this.camera.position.setFromSpherical(s).add(this.lookTarget);
+      } else {
+        // arc the path slightly upward for long flights
+        const lift = Math.sin(k * Math.PI) * Math.min(600, f.fromPos.distanceTo(f.toPos) * 0.18);
+        this.camera.position.lerpVectors(f.fromPos, f.toPos, k).y += lift;
+      }
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(this.lookTarget);
       if (f.t >= 1) {

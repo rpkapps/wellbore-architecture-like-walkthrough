@@ -48,7 +48,7 @@ function GroupDivider() {
 export function TopBar({ app }: { app: App }) {
   const ready = useSignal(app.ready);
   return (
-    <AppShellHeader className="gap-2 px-2 sm:px-3">
+    <AppShellHeader data-chrome className="gap-2 px-2 sm:px-3">
       <AppShellBrand className="shrink-0">
         <span className="flex">
           <Logo />
