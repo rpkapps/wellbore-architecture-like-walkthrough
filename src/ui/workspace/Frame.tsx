@@ -808,7 +808,7 @@ function StackView({
             </IconButton>
           )}
           {onDockBack ? (
-            <IconButton label="Dock back" size="icon-xs" onPress={onDockBack}>
+            <IconButton label={group.panels.length > 1 ? 'Dock back the window (all its tabs)' : def ? `Dock back ${def.title}` : 'Dock back'} size="icon-xs" onPress={onDockBack}>
               <ArrowDownLeftIcon />
             </IconButton>
           ) : (
@@ -818,7 +818,7 @@ function StackView({
               </IconButton>
             )
           )}
-          {def && <PanelMenu ws={ws} def={def} zone={zone} maxed={maxed} onMaximise={toggleMax} />}
+          {def && <PanelMenu ws={ws} def={def} zone={zone} tabs={group.panels.length} maxed={maxed} onMaximise={toggleMax} onDockBack={onDockBack} />}
         </div>
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -925,14 +925,18 @@ function AddViewItems({ ws, panels }: { ws: Workspace; panels: Map<string, Panel
   );
 }
 
+const ZONE_TITLE: Record<Zone, string> = { left: 'left sidebar', right: 'right sidebar', bottom: 'bottom panel' };
+
 /**
- * The group header's ⋯ menu for the panel showing in it: where it goes (the
- * other slot of its sidebar, the other regions, undock or dock back, reset),
- * maximise, fold and close. Read as the menu opens.
+ * The group header's ⋯ menu, in headed parts so it says what each item acts
+ * on: the panel showing (headed with its name: where it goes, reset, close),
+ * the group when it has several tabs (maximise, dock back a floating window)
+ * and the sidebar or bottom panel (fold). Read as the menu opens.
  */
-function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: PanelDef; zone: Zone | null; maxed: boolean; onMaximise: () => void }) {
+function PanelMenu({ ws, def, zone, tabs, maxed, onMaximise, onDockBack }: { ws: Workspace; def: PanelDef; zone: Zone | null; tabs: number; maxed: boolean; onMaximise: () => void; onDockBack?: () => void }) {
   const act = (k: string) => {
     if (k === 'max') return onMaximise();
+    if (k === 'dock-window') return onDockBack?.();
     withTransition(() => {
       if (k === 'fold' && zone) ws.change(null, () => ws.setCollapsed(zone, true));
       else if (k === 'close') closePanel(ws, def);
@@ -940,38 +944,66 @@ function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: P
     });
   };
   const FoldIcon = zone === 'right' ? PanelRightCloseIcon : zone === 'bottom' ? PanelBottomCloseIcon : PanelLeftCloseIcon;
+  // with one tab the group is the panel: its part needs no separate heading
+  const several = tabs > 1;
+  const maxItem = (
+    <DropdownMenuItem id="max">
+      {maxed ? <Minimize2Icon /> : <Maximize2Icon />}
+      {maxed ? 'Restore' : several ? 'Maximise the group' : 'Maximise'}
+      <DropdownMenuShortcut>{maxed ? 'Esc' : 'Ctrl Space'}</DropdownMenuShortcut>
+    </DropdownMenuItem>
+  );
   return (
     <DropdownMenuTrigger>
-      <IconButton label="Panel options" size="icon-xs">
+      <IconButton label={`${def.title} options`} size="icon-xs">
         <EllipsisIcon />
       </IconButton>
-      <DropdownMenu placement="bottom end" className="w-max min-w-48" onAction={(k) => act(String(k))}>
-        <MoveItems ws={ws} id={def.id} />
-        <DropdownMenuSeparator />
-        <DropdownMenuItem id="max">
-          {maxed ? <Minimize2Icon /> : <Maximize2Icon />}
-          {maxed ? 'Restore' : 'Maximise'}
-          <DropdownMenuShortcut>{maxed ? 'Esc' : 'Ctrl Space'}</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        {zone && !maxed && (
-          <DropdownMenuItem id="fold">
-            <FoldIcon />
-            Fold to icons
+      <DropdownMenu placement="bottom end" className="w-max min-w-52" onAction={(k) => act(String(k))}>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{several ? `${def.title} (this tab)` : def.title}</DropdownMenuLabel>
+          <MoveItems ws={ws} id={def.id} />
+          {!several && maxItem}
+          <DropdownMenuItem id="close">
+            <XIcon />
+            Close {def.title}
           </DropdownMenuItem>
+        </DropdownMenuGroup>
+        {several && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{tabs === 2 ? 'Both tabs' : `All ${tabs} tabs`} in this group</DropdownMenuLabel>
+              {maxItem}
+              {onDockBack && (
+                <DropdownMenuItem id="dock-window">
+                  <ArrowDownLeftIcon />
+                  Dock back the window
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuGroup>
+          </>
         )}
-        <DropdownMenuItem id="close">
-          <XIcon />
-          Close
-        </DropdownMenuItem>
+        {zone && !maxed && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>The {ZONE_TITLE[zone]}</DropdownMenuLabel>
+              <DropdownMenuItem id="fold">
+                <FoldIcon />
+                Fold to icons
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </>
+        )}
       </DropdownMenu>
     </DropdownMenuTrigger>
   );
 }
 
-/** The ⋯ menu's placements for a panel where it is now (the rail's right-click menu lists the same). */
+/** The ⋯ menu's placements for a panel where it is now (the rail's right-click menu lists the same); items of the menu's panel part. */
 function MoveItems({ ws, id }: { ws: Workspace; id: string }) {
   return (
-    <DropdownMenuGroup>
+    <>
       {placements(ws, id, true).map((p) => (
         <DropdownMenuItem key={p} id={p} textValue={placementLabel(ws, id, p)}>
           {p === 'float' ? <ArrowUpRightIcon /> : p === 'dock' ? <ArrowDownLeftIcon /> : null}
@@ -982,7 +1014,7 @@ function MoveItems({ ws, id }: { ws: Workspace; id: string }) {
         <RotateCcwIcon />
         Reset location
       </DropdownMenuItem>
-    </DropdownMenuGroup>
+    </>
   );
 }
 
