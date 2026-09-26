@@ -103,8 +103,9 @@ function supportsReversedDepth(): boolean {
   }
 }
 
-/** Seconds over which the near-rock fade's reach blends from one mode or view to the next. */
-const FADE_BLEND_S = 0.6;
+/** Time constants (s) of the near-rock fade's reach: growing (rock fading away), and shrinking (rock coming back). */
+const FADE_AWAY_S = 0.18;
+const FADE_BACK_S = 0.1;
 
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
@@ -687,8 +688,8 @@ export class Engine {
   }
 
   /** Per-frame scene state that depends on the camera, the cursor and the time: only when a frame is drawn. */
-  /** The near-rock fade: the view it was set for, the reach it blends from, and how far the blend is (0–1). */
-  private fade: { view: string; from: number; k: number } = { view: '', from: 0, k: 1 };
+  /** The near-rock fade: whether its reach has been set yet, and when it last eased. */
+  private fadeStarted = false;
   private fadeAt = 0;
 
   private updateScene(t: number, inside: boolean, tfx: boolean) {
@@ -711,17 +712,21 @@ export class Engine {
       if (this.geology.stepOpacity(dt)) this.requestRender();
       // Rock close to the camera fades, out to just short of what is being looked at (Guided: a
       // little past the well, so the rock around it thins too), so it thins steadily while zooming
-      // rather than switch. A change of mode or view blends the reach over FADE_BLEND_S.
+      // rather than switch. What is looked at can change in a step (the next thing under the
+      // pointer, a change of mode or view), so the reach eases toward it, never jumps: rock fades
+      // away over about half a second and comes back a little faster.
       const view = guided ? 'guided' : this.rig.exploreView;
       const reach = guided ? cam.distanceTo(f.pos) * 1.3 + 20 : view === 'fly' ? 250 : Math.min(0.9 * this.rig.lookDistance(), 800);
-      if (view !== this.fade.view) this.fade = { view, from: FOCUS.uFocusR.value, k: this.fade.view ? 0 : 1 };
-      if (this.fade.k < 1) {
-        this.fade.k = Math.min(1, this.fade.k + dt / FADE_BLEND_S);
+      const R = FOCUS.uFocusR.value;
+      if (!this.fadeStarted) {
+        this.fadeStarted = true;
+        FOCUS.uFocusR.value = reach;
+      } else if (Math.abs(reach - R) > 0.05) {
+        const tau = reach > R ? FADE_AWAY_S : FADE_BACK_S;
+        FOCUS.uFocusR.value = reach + (R - reach) * Math.exp(-dt / tau);
         this.requestRender();
       }
-      const e = this.fade.k * this.fade.k * (3 - 2 * this.fade.k);
       FOCUS.uFocus.value.copy(cam);
-      FOCUS.uFocusR.value = this.fade.from + (reach - this.fade.from) * e;
       FOCUS.uFocusOn.value = 1;
     }
     this.paths.update(this.camera, this.contextVisible && this.labelsVisible);
