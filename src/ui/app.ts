@@ -1,148 +1,381 @@
+import type { ReactNode } from 'react';
+import { toast } from 'sonner';
 import * as THREE from 'three';
 import type { FieldModel } from '../data/dataset';
 import { summariseZones, type ZoneSummary } from '../data/petro';
 import { FORMATION_BY_ID } from '../data/stratigraphy';
-import { colormap, toCss, RES_RANGE, type ColormapName } from '../data/colormap';
+import type { ColormapName } from '../data/colormap';
 import { Trajectory } from '../data/trajectory';
-import type { Engine } from '../scene/engine';
+import type { Engine, PickResult } from '../scene/engine';
 import type { GuidedView, NavMode } from '../scene/cameraRig';
 import type { PropertyMode } from '../scene/wellbore';
-import { chip, fmt, h } from './dom';
-import { I, LOGO } from './icons';
-import { LeftPanel } from './leftPanel';
+import type { SectionBox } from '../scene/geology';
 import { LogTracks } from './logTracks';
-import { Inspector } from './inspector';
-import { InterpretationDrawer } from './interpretation';
-import { ProductionDrawer } from './production';
-import { DataManager } from './dataManager';
+import { onAnyChange, Rev, SCENE, Signal } from './signal';
+import { DOCK_PANELS, Workspace, type WorkspaceContext } from './workspace/layout';
+import { openWindows } from './toolWindow';
+import { prefs, themeRev } from './prefs';
+import { ActionRegistry } from '../actions/registry';
+import { withTransition } from './transition';
 import { buildChapters, type Chapter } from './tour';
 import { FeatureFlags, type FeatureId, type FeatureModule } from '../features/registry';
-import { FeaturesPanel } from './featuresPanel';
 import { createFeatureModules } from '../features';
-import { ropByZone, ROP_RANGE } from '../data/drilling';
+import { inspect, type InspectorView } from './inspect';
+import { sameSelection, type Selection } from './selection';
+import type { Marking } from './marking';
+import { DataImporter } from './dataImport';
+import { DataHub } from '../connect/hub';
+import type { ConnectRequest } from './shell/ConnectDialog';
 
-const mix = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+/** Position read-out along the active well (timeline, log cursor). */
+export interface Pose {
+  md: number;
+  tvdss: number;
+  inc: number;
+  azi: number;
+  zone: string;
+  section: string;
+}
 
-export class App {
-  readonly root: HTMLElement;
-  left!: LeftPanel;
-  logs!: LogTracks;
-  inspector!: Inspector;
-  interp!: InterpretationDrawer;
-  prod!: ProductionDrawer;
-  data!: DataManager;
-  flags!: FeatureFlags;
-  modules = new Map<FeatureId, FeatureModule>();
-  featuresPanel!: FeaturesPanel;
-  /** slot in the top bar where tool features add their buttons */
-  toolSlot!: HTMLElement;
-  /** slot under the compass HUD for feature read-outs */
-  hudSlot!: HTMLElement;
-  /** click interceptors (e.g. the measure tool); returning true consumes the click */
-  clickHandlers: ((p: ReturnType<Engine['pick']>, ev: PointerEvent) => boolean)[] = [];
-  chapters: Chapter[] = [];
-  private zoneCache: ZoneSummary[] | null = null;
-  private tl!: { canvas: HTMLCanvasElement; head: HTMLElement; marks: HTMLElement; scale: HTMLElement; wrap: HTMLElement };
-  private readout!: Record<string, HTMLElement>;
-  private narrative!: HTMLElement;
-  private legend!: HTMLElement;
-  private hud!: { el: HTMLElement; needle: SVGElement; loc: HTMLElement };
-  private toastEl!: HTMLElement;
-  private help!: HTMLElement;
-  private playBtn!: HTMLButtonElement;
-  private navSeg!: HTMLElement;
-  private propSeg!: HTMLElement;
-  private viewSeg!: HTMLElement;
-  private wellSelect!: HTMLSelectElement;
-  private chapterIdx = -1;
-  private tourTimer: number | null = null;
-  private lastHover = 0;
-  onSectionPreset?: (b: { xMin: number; xMax: number; nMin: number; nMax: number; stripTo: number }) => void;
-  onWallOpacity?: (v: number) => void;
-  onColormap?: (n: ColormapName) => void;
-  onTexturesChanged?: (on: boolean) => void;
-  colormapName: ColormapName = 'resistivity';
+/** Compass and camera read-out over the 3D view. */
+export interface Hud {
+  heading: number;
+  where: string;
+  nav: string;
+  camY: number;
+}
 
-  constructor(
-    readonly field: FieldModel,
-    readonly engine: Engine,
-    container: HTMLElement,
-  ) {
-    this.root = container;
+/** A command a feature adds to the viewport toolbar (measure, snapshot, saved views). */
+export interface ToolEntry {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  /** a plain action; omit it when the tool opens a menu */
+  onAction?: () => void;
+  /** pressed state of a toggle tool */
+  isActive?: () => boolean;
+  /** a tool with choices opens a menu of these */
+  menu?: { id: string; label: string; onAction: () => void; isSelected?: () => boolean }[];
+  /** re-render the tool when this changes */
+  watch?: Signal<unknown>;
+}
+
+/** A read-out a feature adds to the position details (geosteering status, measuring hint). */
+export interface HudEntry {
+  id: string;
+  render: () => ReactNode;
+  /** a few words for the timeline's position read-out, beside the depth (geosteering: IN ZONE) */
+  chip?: () => ReactNode;
+  /** an instruction for what the next click does (measuring): shown over the 3D view, above its toolbar, not tucked into the details */
+  prompt?: boolean;
+}
+
+/** Near-well display options that belong to the wellbore, reapplied whenever it is rebuilt. */
+export interface WellboreDisplay {
+  casingOpacity: number;
+  wallOpacity: number;
+  shellOpacity: number;
+  casing: boolean;
+  fractures: boolean;
+  markers: boolean;
+}
+
+export interface SceneDisplay {
+  labels: boolean;
+  otherWells: boolean;
+  sea: boolean;
+  contours: boolean;
+  postFx: boolean;
+}
+
+export type LayerPreset = 'default' | 'solid' | 'reservoir' | 'pay';
+
+/**
+ * A number that changes every frame (the camera heading). Unlike a Signal it
+ * renders nothing and asks for no redraw: subscribers write it straight to
+ * the DOM (the compass needle turns with the camera without a React render).
+ */
+export class FrameValue {
+  private listeners: ((v: number) => void)[] = [];
+  value = 0;
+
+  set(v: number) {
+    if (v === this.value) return;
+    this.value = v;
+    for (let i = 0; i < this.listeners.length; i++) this.listeners[i](v);
   }
 
-  ready!: Promise<void>;
+  subscribe(l: (v: number) => void): () => void {
+    this.listeners = [...this.listeners, l];
+    return () => (this.listeners = this.listeners.filter((x) => x !== l));
+  }
+}
 
-  init() {
-    const e = this.engine;
+/**
+ * The application controller. It owns the engine, the feature modules and the
+ * state the React chrome renders; the chrome subscribes to its signals and
+ * calls its methods. Nothing here builds DOM.
+ */
+export class App {
+  engine!: Engine;
+  flags!: FeatureFlags;
+  readonly logs = new LogTracks();
+  modules = new Map<FeatureId, FeatureModule>();
+  chapters: Chapter[] = [];
+  colormapName: ColormapName = 'resistivity';
+  /** click interceptors (e.g. the measure tool); returning true consumes the click */
+  clickHandlers: ((p: PickResult | null, ev: PointerEvent) => boolean)[] = [];
+
+  // ------------------------------------------------------------------ state the chrome renders
+  /** the engine exists and the first well is loaded */
+  readonly ready = new Signal(false);
+  /** active well, its data or its interpretation changed */
+  readonly wellRev = new Rev(SCENE);
+  /** bumped while an interpretation parameter is being dragged (the live results only) */
+  readonly interpRev = new Rev(SCENE);
+  /** geology layers, section box or scene display options changed */
+  readonly sceneRev = new Rev(SCENE);
+  /** navigation mode, camera view, property mode or colour map changed */
+  readonly viewRev = new Rev(SCENE);
+  /** a colour the tool-window canvases draw with changed (colour map, formation colour, uncertainty band): they redraw */
+  readonly paintRev = new Rev();
+  /** the same position, updated at most ~15 times a second: for text read-outs that need not follow every frame */
+  readonly poseText = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
+  private poseTextAt = 0;
+  readonly pose = new Signal<Pose>({ md: 0, tvdss: 0, inc: 0, azi: 0, zone: '—', section: '' });
+  /** camera read-out text, updated at most ~15 times a second (and at once when the place or the mode changes) */
+  readonly hud = new Signal<Hud>({ heading: 0, where: '', nav: '', camY: 0 });
+  /** the camera heading in degrees, every frame it turns: for the compass needle */
+  readonly heading = new FrameValue();
+  readonly playing = new Signal(false);
+  readonly chapter = new Signal<{ index: number; touring: boolean } | null>(null);
+  /**
+   * The chapter card shows over the timeline (guided mode only): going to a
+   * chapter (a marker, N / P, the tour) or playing opens it; its close
+   * button, pausing and Explore put it away, leaving the numbered markers.
+   */
+  readonly chapterCard = new Signal(false);
+  /**
+   * The selected object (a click in the 3D view or the Scene tree, an
+   * action): Properties, the details card and the right-click menus follow it.
+   * Set it with `select`.
+   */
+  readonly selection = new Signal<Selection | null>(null);
+  /** Properties stays on this object (its pin) whatever is selected meanwhile */
+  readonly pinned = new Signal<Selection | null>(null);
+  /**
+   * Depth intervals of a well a view has marked (the crossplot's brushed
+   * samples): the timeline shows them as ticks to travel to. The view that
+   * set it clears it.
+   */
+  readonly marking = new Signal<Marking | null>(null);
+  /** a right-click menu of the selection's actions, open at this point of the window */
+  readonly contextMenu = new Signal<{ x: number; y: number; selection: Selection } | null>(null);
+  /**
+   * The details of the selection, derived from it (and rebuilt when the well
+   * or its interpretation changes): the floating details card shows these.
+   * Read-only for the chrome; change the selection instead.
+   */
+  readonly inspector = new Signal<InspectorView | null>(null);
+  readonly tools = new Signal<ToolEntry[]>([]);
+  readonly huds = new Signal<HudEntry[]>([]);
+  /** the panels over the 3D view: docked columns, groups of tabs, floating windows */
+  readonly workspace = new Workspace();
+  readonly productionOpen = new Signal(false);
+  readonly dataOpen = new Signal(false);
+  readonly helpOpen = new Signal(false);
+  /** the Well logs track editor: a popover on the logs header, so the tracks redraw beside it as they change */
+  readonly tracksOpen = new Signal(false);
+  readonly personaliseOpen = new Signal(false);
+  readonly paletteOpen = new Signal(false);
+  /** every operation as a typed action: the command palette runs these, and an assistant can (actions/tanstack.ts) */
+  readonly actions = new ActionRegistry<App>(this);
+  /** name of the well whose files are loading (panels show placeholders) */
+  readonly loadingWell = new Signal<string | null>(null);
+  /**
+   * Full-screen presentation (saved views): while set, the chrome is hidden,
+   * the 3D view fills the window and this caption sits over it.
+   */
+  readonly presentation = new Signal<ReactNode>(null);
+  /** property modes features offer (ROP, when the well has the log) */
+  readonly optionalModes = new Signal<ReadonlySet<PropertyMode>>(new Set());
+
+  readonly wellbore: WellboreDisplay = { casingOpacity: 0.42, wallOpacity: 1, shellOpacity: 1, casing: true, fractures: true, markers: true };
+  readonly display: SceneDisplay = { labels: true, otherWells: true, sea: true, contours: true, postFx: true };
+
+  private zoneCache: ZoneSummary[] | null = null;
+  private tourTimer: number | null = null;
+  private chapterIdx = -1;
+  private resolveReady!: () => void;
+  /** resolves once the first well is on screen */
+  readonly whenReady = new Promise<void>((r) => (this.resolveReady = r));
+  /** The page loader's progress line: each step of the start-up after the data has loaded (set by the loader). */
+  onBootStep?: (msg: string, f: number) => void;
+
+  readonly importer: DataImporter;
+  /** live and streamed data: the connectors (src/connect) */
+  readonly hub: DataHub;
+  /** the connect dialog: open with a draft, or to edit a connection */
+  readonly connectRequest = new Signal<ConnectRequest | null>(null);
+
+  constructor(readonly field: FieldModel) {
+    this.importer = new DataImporter(this);
+    this.hub = new DataHub(this);
+    // a layout change made from a panel's menu or buttons is announced, with Undo (one toast at a time)
+    this.workspace.changes.subscribe(() => {
+      const c = this.workspace.changes.value;
+      // (it stays a little longer than a plain message: time to reach Undo)
+      if (c) this.toast(`${c.label}.`, 'info', { id: 'layout-change', duration: 8000, action: { label: 'Undo', onClick: () => void this.actions.run('panels.undo_layout', { change: c.n }) } });
+    });
+    // the details follow the selection, and the data they read out
+    const details = () => this.inspector.set(this.selection.value && this.engine ? this.inspectorFor(this.selection.value) : null);
+    this.selection.subscribe(details);
+    this.wellRev.subscribe(() => this.selection.value && details());
+    // formation colours the user picked, before the geology is built from them
+    try {
+      const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
+      for (const [id, hex] of Object.entries(saved)) {
+        const f = FORMATION_BY_ID.get(id);
+        if (f && /^#[0-9a-f]{6}$/i.test(hex)) f.color = hex;
+      }
+    } catch {
+      /* storage blocked or malformed */
+    }
+  }
+
+  /** Create the 3D engine in the work area and load the first well. */
+  mount(engine: Engine) {
+    this.engine = engine;
+    const e = engine;
     this.flags = new FeatureFlags(e.quality === 'low');
-    this.toolSlot = h('div', { class: 'tool-slot' });
-    this.hudSlot = h('div', { class: 'hud-slot' });
-    this.left = new LeftPanel(this);
-    this.logs = new LogTracks();
-    this.inspector = new Inspector(this);
-    this.interp = new InterpretationDrawer(this);
-    this.prod = new ProductionDrawer(this);
-    this.data = new DataManager(this);
-    this.root.append(
-      this.buildTopBar(),
-      this.left.el,
-      this.logs.el,
-      this.buildTimeline(),
-      this.buildNarrative(),
-      this.buildLegend(),
-      this.buildHud(),
-      this.inspector.el,
-      this.interp.el,
-      this.prod.el,
-      this.data.el,
-      this.buildHelp(),
-      (this.toastEl = h('div', { class: 'toast glass hidden' })),
-    );
-
+    this.display.postFx = e.quality !== 'low';
+    // the 3D view draws on demand: only signals marked SCENE redraw it (chrome state such as
+    // drags, layout and read-outs never does); the engine's setters request their own frames
+    onAnyChange.hook = () => e.requestRender(100);
+    // personal settings that reach into the scene
+    const personal = () => {
+      e.rig.instantMoves = prefs.value.reduceMotion;
+      // the labels are placed again (panel opacity or blur scrubs leave the view alone)
+      if (e.labelDensity !== prefs.value.labelDensity) e.requestRender();
+      e.labelDensity = prefs.value.labelDensity;
+    };
+    personal();
+    prefs.subscribe(personal);
+    // a new theme, accent or density: every canvas redraws with its colours and text sizes
+    themeRev.subscribe(() => {
+      this.logs.invalidate();
+      this.paintRev.bump();
+      this.notifyFeatures();
+      this.viewRev.bump();
+      this.sceneRev.bump();
+      this.wellRev.bump();
+    });
     this.logs.onPick = (md) => this.travelTo(md);
+    // the engine redraws when the hover depth changes (a pointer crossing the tracks costs nothing)
     this.logs.onHover = (md) => {
       if (e.wellbore) e.wellbore.uniforms.uHoverMd.value = md ?? -1e6;
     };
     this.logs.onScroll = (md) => {
+      this.stopFollowing();
       e.rig.playing = false;
       e.rig.targetMd = null;
       e.rig.setMd(md);
     };
-    e.rig.onUserInput = () => this.stopTour();
+    e.rig.onUserInput = () => {
+      this.stopTour();
+      // orbiting the view in Explore keeps following (the camera moves with the bit); travelling along the well stops it
+      if (e.rig.mode !== 'explore') this.stopFollowing();
+    };
+    // the Follow the bit toggle is the one switch: on goes to the bit now, off stops where the view is
+    this.hub.followBit.subscribe(() => (this.hub.followBit.value ? this.goToBit() : this.letGoOfBit()));
     e.onFrame = (dt) => this.frame(dt);
     this.bindPicking();
     this.bindKeys();
     for (const m of createFeatureModules(this)) this.modules.set(m.id, m);
-    this.featuresPanel = new FeaturesPanel(this.flags, this.modules, e.quality === 'low');
-    document.body.append(this.featuresPanel.el);
-    this.ready = this.loadWell(this.field.primary.id, false).then(() => {
-      const w = this.engine.activeWell;
-      const hug = w.zones.find((z) => z.formationId === 'hugin');
-      this.engine.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
-      this.chapterIdx = -1;
-      this.sectionAlongWell();
-      // features start once the first well is on screen
-      for (const m of this.modules.values())
-        this.flags.watch(m.id, (on) => {
-          try {
-            if (on) m.enable();
-            else m.disable();
-          } catch (err) {
-            console.error(`feature ${m.id}`, err);
-            this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`);
-          }
-        });
-    });
-    this.applyInsets();
-    window.addEventListener('resize', () => this.applyInsets());
+    this.frameModules = [...this.modules.values()].filter((m) => m.frame);
+    void this.boot();
   }
 
-  /** Keep the 3D subject centred in the free area between the side panels. */
-  applyInsets() {
-    const left = this.left.el.classList.contains('collapsed') ? 0 : this.left.el.offsetWidth + 12;
-    const right = this.logs.el.classList.contains('collapsed') ? 0 : this.logs.el.offsetWidth + 12;
-    this.engine.setInsets(left, right);
+  /**
+   * Start-up after the data has loaded, in steps the loader reports, each
+   * given a frame to paint before its work runs: the first well's geometry,
+   * the log tracks, the overlays, then the shaders, compiled before the first
+   * frame so the loader does not leave onto a stall.
+   */
+  private async boot() {
+    const step = async (msg: string, f: number) => {
+      this.onBootStep?.(msg, f);
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    };
+    // (the loader sets its hook once the app is constructed)
+    await Promise.resolve();
+    const e = this.engine;
+    await step(`Building the ${this.field.primary.name} wellbore`, 0.88);
+    await this.loadWell(this.field.primary.id, false);
+    const w = e.activeWell;
+    const hug = w.zones.find((z) => z.formationId === 'hugin');
+    e.rig.setMd(hug ? hug.topMD + 25 : w.tdMD * 0.7);
+    this.chapterIdx = -1;
+    this.sectionAlongWell();
+    await step('Starting the overlays', 0.92);
+    // features start once the first well is on screen
+    for (const m of this.modules.values())
+      this.flags.watch(m.id, (on) => {
+        try {
+          if (on) m.enable();
+          else m.disable();
+          e.requestRender();
+        } catch (err) {
+          console.error(`feature ${m.id}`, err);
+          this.toast(`Feature “${m.id}” failed: ${(err as Error).message}`, 'error');
+        }
+      });
+    if (!prefs.value.labels) this.setDisplay({ labels: false });
+    await step('Preparing the shaders', 0.95);
+    try {
+      await e.renderer.compileAsync(e.scene, e.camera);
+    } catch {
+      /* compiled on the first frame instead */
+    }
+    this.ready.set(true);
+    this.resolveReady();
+  }
+
+  /**
+   * Show a message. `opts.id` replaces an earlier toast with the same id
+   * instead of stacking another; `opts.action` adds a button (Undo).
+   */
+  /** Toasts made while the page loader shows wait for it to go (`releaseToasts`); null once released. */
+  private heldToasts: (() => void)[] | null = [];
+
+  /** The loader has gone: show the toasts it held back, and every later one at once. */
+  releaseToasts() {
+    const held = this.heldToasts ?? [];
+    this.heldToasts = null;
+    for (const t of held) t();
+  }
+
+  toast(msg: string, kind: 'info' | 'error' = 'info', opts?: { id?: string; duration?: number; action?: { label: string; onClick: () => void } }) {
+    if (this.heldToasts) return void this.heldToasts.push(() => this.toast(msg, kind, opts));
+    if (kind === 'error') toast.error(msg, opts);
+    else toast(msg, opts);
+  }
+
+  // ------------------------------------------------------------------ viewport toolbar and HUD slots
+  addTool(t: ToolEntry) {
+    this.tools.update((l) => [...l.filter((x) => x.id !== t.id), t]);
+  }
+
+  removeTool(id: string) {
+    this.tools.update((l) => l.filter((x) => x.id !== id));
+  }
+
+  addHud(t: HudEntry) {
+    this.huds.update((l) => [...l.filter((x) => x.id !== t.id), t]);
+  }
+
+  removeHud(id: string) {
+    this.huds.update((l) => l.filter((x) => x.id !== id));
   }
 
   // ------------------------------------------------------------------ well management
@@ -150,25 +383,32 @@ export class App {
     const w = this.field.wells.find((x) => x.id === id);
     if (!w) return;
     if (!w.loaded) {
-      this.toast(`Loading ${w.name} …`);
-      await this.field.ensureLoaded(w);
+      this.loadingWell.set(w.name);
+      try {
+        await this.field.ensureLoaded(w);
+      } finally {
+        this.loadingWell.set(null);
+      }
     }
     this.engine.setActiveWell(w);
+    this.applyWellboreDisplay();
     this.zoneCache = null;
     this.logs.setWell(w);
     this.chapters = buildChapters(w, this.field);
-    this.wellSelect.value = w.id;
-    this.renderTimelineStatic();
-    this.updateLegend();
-    this.inspector.hide();
-    if (this.interp.open) this.interp.render();
-    if (this.prod.open) this.prod.render();
+    // a point, a pick or an interval of the previous well no longer exists
+    if (this.selection.value?.well && this.selection.value.well !== w.id) this.select(null);
+    if (this.pinned.value?.well && this.pinned.value.well !== w.id) this.pinned.set(null);
     this.notifyFeatures();
+    this.wellRev.bump();
     if (fly) {
       this.engine.rig.setMd(0);
       this.overview();
     }
-    this.toast(`${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`);
+    // (the first well opens behind the loader: nothing to announce)
+    if (this.ready.value)
+      this.toast(
+        `${w.name} — ${w.trajectory.status === 'reconstructed' ? 'trajectory reconstructed from pick coordinates' : 'definitive survey'} · ${w.logs ? `${w.logs.curves.size} log curves` : 'no logs'}`,
+      );
   }
 
   selectWell(id: string) {
@@ -179,17 +419,20 @@ export class App {
     return this.loadWell(id, fly);
   }
 
+  /** Wells offered in the selector: the extra Volve wells only once their feature is on. */
+  selectableWells() {
+    return this.field.wells.filter((w) => !w.extra || this.flags?.on('extraWells') || w === this.engine?.activeWell);
+  }
+
   /** Called after uploads change the active well's data. */
   onDataChanged() {
     this.zoneCache = null;
     this.engine.refreshWellData();
+    this.applyWellboreDisplay();
     this.logs.setWell(this.engine.activeWell);
     this.chapters = buildChapters(this.engine.activeWell, this.field);
-    this.renderTimelineStatic();
-    this.refreshWellOptions();
-    if (this.interp.open) this.interp.render();
-    if (this.prod.open) this.prod.render();
     this.notifyFeatures();
+    this.wellRev.bump();
   }
 
   /** Tell enabled features that the active well or its data changed. */
@@ -207,21 +450,149 @@ export class App {
     return this.modules.get(id) as T | undefined;
   }
 
+  /**
+   * The cheap part of a re-interpretation, run while a parameter is dragged:
+   * the curves, the 3D colouring, the log tracks and the headline numbers.
+   * `reinterpret` (features, every panel) follows when the drag settles.
+   */
+  reinterpretLive() {
+    const w = this.engine.activeWell;
+    w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
+    this.zoneCache = null;
+    this.engine.refreshInterpretation();
+    this.logs.invalidate();
+    this.interpRev.bump();
+  }
+
+  /**
+   * Streamed data changed the active well. The cheap path re-runs the
+   * interpretation and re-uploads the wellbore's data textures; `rebuild`
+   * rebuilds its geometry too (the well got deeper or its path changed).
+   * The hub decides which, and how often, from what each costs.
+   */
+  liveRefresh(o: { rebuild: boolean; curves: boolean; features: boolean; fromMd?: number; panels?: boolean }) {
+    const w = this.engine.activeWell;
+    w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
+    this.zoneCache = null;
+    if (o.rebuild) {
+      this.engine.refreshWellData();
+      this.applyWellboreDisplay();
+      this.chapters = buildChapters(w, this.field);
+    } else this.engine.refreshFrom(o.fromMd ?? 0);
+    this.engine.wellbore?.setClip(w.tdMD);
+    this.engine.rig.mdMax = w.tdMD;
+    if (o.curves) this.logs.setWell(w);
+    else this.logs.invalidate();
+    if (o.features) this.notifyFeatures();
+    // the panels' numbers follow at their own, slower pace
+    if (o.panels !== false) this.interpRev.bump();
+    this.engine.requestRender(300);
+  }
+
+  /** the well the Live charts panel shows (null: the active well, or the first with readings) */
+  readonly liveWell = new Signal<string | null>(null);
+
+  /** Show the live charts (of a well). */
+  openLive(wellId?: string) {
+    if (wellId) this.liveWell.set(wellId);
+    withTransition(() => this.workspace.open('live'));
+  }
+
+  /** Show the live data panel (and, with an id, that connection in it). */
+  openSources(id?: string) {
+    withTransition(() => this.workspace.open('sources'));
+    if (id) this.hub.focus.set(id);
+  }
+
+  /**
+   * Following the bit of a well being drilled. The Follow the bit toggle
+   * (`hub.followBit`) is the one switch, and it always tells the truth: on,
+   * the view goes to the bit and stays with it; off, it stops where it is;
+   * and taking the view over (scrolling the logs, travelling along the well)
+   * turns the toggle off. Following never changes Guided / Explore: Guided
+   * travels along the well to the bit, Explore moves the free camera with it.
+   */
+  private followingBit = false;
+  /** the travel target that following set, so letting go stops that travel and nothing else */
+  private followTarget: number | null = null;
+  private followPos: THREE.Vector3 | null = null;
+
+  /** Start keeping the view at the bit (the hub calls this when it opens a well being drilled). */
+  startFollowing() {
+    this.followingBit = true;
+    this.followPos = null;
+    if (!this.hub.followBit.value) this.hub.followBit.set(true);
+  }
+
+  /** The user took the view over: stop following, and show it on the toggle. */
+  stopFollowing() {
+    if (this.hub.followBit.value) this.hub.followBit.set(false);
+    else this.letGoOfBit();
+  }
+
+  /** The toggle went on: follow from wherever the view is, going to the bit now. */
+  private goToBit() {
+    this.startFollowing();
+    const md = this.hub.bitDepth(this.engine.activeWell.id);
+    if (md !== null) this.followDepth(md);
+  }
+
+  /** The toggle went off: stop where the view is (a travel that following started stops too). */
+  private letGoOfBit() {
+    this.followingBit = false;
+    this.followPos = null;
+    const rig = this.engine.rig;
+    if (this.followTarget !== null && rig.targetMd === this.followTarget) rig.targetMd = null;
+    this.followTarget = null;
+  }
+
+  /** Keep the view at the bit of a well being drilled, while following. */
+  followDepth(md: number) {
+    const rig = this.engine.rig;
+    if (!this.followingBit || rig.playing || this.chapter.value?.touring) return;
+    const at = Math.min(md, rig.mdMax);
+    if (rig.mode === 'explore') {
+      // the free camera keeps its angle and distance, and moves with the bit
+      const p = this.engine.wellbore?.frameAt(at).pos;
+      if (!p) return;
+      if (this.followPos) {
+        const d = p.clone().sub(this.followPos);
+        rig.camera.position.add(d);
+        rig.orbit.target.add(d);
+      } else if (Math.abs(rig.md - at) > 60) {
+        // the camera is elsewhere: bring it beside the bit first, then move with it
+        this.travelTo(at);
+      }
+      this.followPos = p.clone();
+      rig.md = at;
+      this.engine.requestRender(300);
+      return;
+    }
+    this.followPos = null;
+    if (Math.abs(rig.md - at) < 0.05) return;
+    rig.targetMd = at;
+    this.followTarget = at;
+  }
+
   reinterpret() {
     const w = this.engine.activeWell;
     w.refresh(this.field.meta.datumElevation, this.field.meta.waterDepth);
     this.zoneCache = null;
     this.engine.refreshInterpretation();
     this.logs.invalidate();
-    this.renderTimelineStatic();
-    this.updateLegend();
     this.notifyFeatures();
+    this.wellRev.bump();
   }
 
   zoneSummaries(): ZoneSummary[] {
     const w = this.engine.activeWell;
     if (!w.logs || !w.petro) return [];
-    if (!this.zoneCache) this.zoneCache = summariseZones(w.logs, w.petro, w.zones.filter((z) => z.formationId !== 'air' && z.formationId !== 'sea'));
+    if (!this.zoneCache)
+      this.zoneCache = summariseZones(
+        w.logs,
+        w.petro,
+        w.zones.filter((z) => z.formationId !== 'air' && z.formationId !== 'sea'),
+      );
     return this.zoneCache;
   }
 
@@ -229,41 +600,41 @@ export class App {
   setNav(mode: NavMode) {
     const rig = this.engine.rig;
     rig.setMode(mode);
-    this.navSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
-    this.updateViewSeg();
-    this.narrative.classList.toggle('hidden', mode !== 'guided');
     if (mode === 'explore') {
       this.stopTour();
       rig.playing = false;
+      this.chapterCard.set(false);
       this.toast('Explore — drag to look · WASD / QE to fly · Shift to boost · wheel sets speed · double-click to focus');
     }
+    this.viewRev.bump();
   }
 
   setGuidedView(v: GuidedView) {
     this.engine.rig.setGuidedView(v);
-    this.updateViewSeg();
     if (v === 'tunnel') {
       if (this.engine.mode === 'hydrocarbon') this.setWallOpacity(0.55);
     } else this.setWallOpacity(1);
+    this.viewRev.bump();
   }
 
-  private setWallOpacity(v: number) {
-    this.engine.wellbore?.setWallOpacity(v);
-    this.onWallOpacity?.(v);
+  setExploreView(v: 'fly' | 'orbit') {
+    this.engine.rig.setExploreView(v);
+    this.viewRev.bump();
   }
 
   setProperty(m: PropertyMode) {
     this.engine.setMode(m);
-    this.propSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === m));
     if (m === 'hydrocarbon' && this.engine.rig.guidedView === 'tunnel' && this.engine.rig.mode === 'guided') this.setWallOpacity(0.55);
     else if (m !== 'hydrocarbon') this.setWallOpacity(1);
-    this.updateLegend();
+    this.viewRev.bump();
   }
 
-  /** Show or hide an optional property button (e.g. ROP from the Features panel). */
+  /** Offer or withdraw an optional property mode (ROP, while the active well has an ROP log). */
   setPropertyAvailable(m: PropertyMode, on: boolean) {
-    const b = this.propSeg.querySelector(`button[data-v="${m}"]`) as HTMLElement | null;
-    if (b) b.style.display = on ? '' : 'none';
+    const next = new Set(this.optionalModes.value);
+    if (on) next.add(m);
+    else next.delete(m);
+    this.optionalModes.set(next);
   }
 
   setColormap(n: ColormapName) {
@@ -271,15 +642,167 @@ export class App {
     this.engine.setColormap(n);
     this.logs.colormap = n;
     this.logs.invalidate();
-    this.onColormap?.(n);
-    this.updateLegend();
+    this.paintRev.bump();
+    this.viewRev.bump();
   }
 
   setRadialScale(s: number) {
     this.engine.setRadialScale(s);
-    this.updateLegend();
+    this.viewRev.bump();
   }
 
+  // ------------------------------------------------------------------ near-well and scene display
+  setWallOpacity(v: number) {
+    this.setWellboreDisplay({ wallOpacity: v });
+  }
+
+  setWellboreDisplay(d: Partial<WellboreDisplay>) {
+    Object.assign(this.wellbore, d);
+    this.applyWellboreDisplay();
+    this.sceneRev.bump();
+  }
+
+  private applyWellboreDisplay() {
+    const wb = this.engine.wellbore;
+    if (!wb) return;
+    const d = this.wellbore;
+    wb.setCasingOpacity(d.casingOpacity);
+    wb.setWallOpacity(d.wallOpacity);
+    wb.uniforms.uShellOpacity.value = d.shellOpacity;
+    wb.casings.forEach((m) => (m.visible = d.casing));
+    wb.cements.forEach((m) => (m.visible = d.casing));
+    wb.fractureGroup.visible = d.fractures;
+    wb.uniforms.uShowFractures.value = d.fractures ? 1 : 0;
+    wb.markers.visible = d.markers;
+  }
+
+  setDisplay(d: Partial<SceneDisplay>) {
+    Object.assign(this.display, d);
+    const e = this.engine;
+    const s = this.display;
+    if (d.labels !== undefined) {
+      e.labelsVisible = s.labels;
+      e.env.platform.children.forEach((c) => {
+        if ((c as { isCSS2DObject?: boolean }).isCSS2DObject) c.visible = s.labels;
+      });
+    }
+    if (d.otherWells !== undefined) e.contextVisible = s.otherWells;
+    if (d.sea !== undefined) {
+      e.env.seaVisible = s.sea;
+      e.env.sea.visible = s.sea;
+      e.env.waterColumn.visible = s.sea;
+      e.env.platform.visible = s.sea;
+    }
+    if (d.contours !== undefined) e.geology.setContours(s.contours);
+    if (d.postFx !== undefined) e.setPostFx(s.postFx);
+    this.sceneRev.bump();
+  }
+
+  // ------------------------------------------------------------------ geology
+  private pendingBox: Partial<SectionBox> | null = null;
+  private pendingPreview = false;
+
+  /**
+   * Section box edits from sliders: coalesced to one rebuild per frame.
+   * `preview` marks the steps of a drag, which update the slabs' buffers in
+   * place at the grid resolution the drag started with; the drag's last call
+   * (without it) rebuilds at the box's own resolution.
+   */
+  setBox(b: Partial<SectionBox>, immediate = false, preview = false) {
+    const geo = this.engine.geology;
+    if (immediate) {
+      this.pendingBox = null;
+      geo.setBox(b);
+      this.sceneRev.bump();
+      return;
+    }
+    const first = !this.pendingBox;
+    this.pendingBox = { ...this.pendingBox, ...b };
+    this.pendingPreview = preview;
+    if (first)
+      requestAnimationFrame(() => {
+        const p = this.pendingBox;
+        this.pendingBox = null;
+        if (p) geo.setBox(p, this.pendingPreview);
+      });
+  }
+
+  setLayer(id: string, s: { visible?: boolean; opacity?: number }) {
+    this.engine.geology.setLayer(id, s);
+    this.sceneRev.bump();
+  }
+
+  /** A formation's colour, everywhere it is drawn; remembered in this browser. */
+  setFormationColor(id: string, hex: string) {
+    const f = FORMATION_BY_ID.get(id);
+    if (!f) return;
+    f.color = hex;
+    this.engine.geology.setColor(id, hex);
+    this.logs.invalidate();
+    try {
+      const saved = JSON.parse(localStorage.getItem('bw.formationColors') ?? '{}') as Record<string, string>;
+      saved[id] = hex;
+      localStorage.setItem('bw.formationColors', JSON.stringify(saved));
+    } catch {
+      /* storage blocked */
+    }
+    this.paintRev.bump();
+    this.sceneRev.bump();
+    this.wellRev.bump();
+  }
+
+  isolate(id: string | null) {
+    this.engine.geology.isolate(id);
+    this.sceneRev.bump();
+  }
+
+  preset(kind: LayerPreset) {
+    const geo = this.engine.geology;
+    geo.isolate(null);
+    const defaults: Record<string, number> = {
+      nordland: 0.2,
+      utsira: 0.22,
+      hordaland: 0.14,
+      ty: 0.18,
+      ekofisk: 0.3,
+      hod: 0.26,
+      draupne: 0.55,
+      heather: 0.5,
+      hugin: 0.92,
+      sleipner: 0.75,
+      skagerrak: 0.8,
+      smithbank: 0.85,
+    };
+    for (const id of geo.state.keys()) {
+      if (kind === 'default') geo.setLayer(id, { visible: true, opacity: defaults[id] ?? 1 });
+      else if (kind === 'solid') geo.setLayer(id, { visible: true, opacity: 1 });
+      else if (kind === 'reservoir') geo.setLayer(id, { visible: ['draupne', 'heather', 'hugin', 'sleipner'].includes(id), opacity: id === 'hugin' ? 0.85 : 0.25 });
+      else geo.setLayer(id, { visible: id === 'hugin', opacity: 0.35 });
+    }
+    const wb = this.engine.wellbore;
+    if (wb) wb.uniforms.uPayOnly.value = kind === 'pay' ? 1 : 0;
+    if (kind === 'pay') {
+      this.setProperty('hydrocarbon');
+      this.toast('Pay isolated — only intervals passing the Vsh / φ / Sw cut-offs are shown, inside a ghosted Hugin Fm.');
+    }
+    this.sceneRev.bump();
+  }
+
+  /** Section box trimmed to a corridor that hugs the active well, cut through its centre. */
+  sectionAlongWell() {
+    const t = this.engine.activeWell.trajectory;
+    let n0 = Infinity;
+    let n1 = -Infinity;
+    for (let i = 0; i < t.md.length; i++) {
+      n0 = Math.min(n0, t.ns[i]);
+      n1 = Math.max(n1, t.ns[i]);
+    }
+    const fb = this.engine.geology.fullBox;
+    const midN = (n0 + n1) / 2;
+    this.setBox({ xMin: fb.xMin, xMax: fb.xMax, nMin: Math.max(fb.nMin, midN), nMax: fb.nMax, stripTo: 0 }, true);
+  }
+
+  // ------------------------------------------------------------------ camera
   travelTo(md: number) {
     const rig = this.engine.rig;
     if (rig.mode === 'explore') {
@@ -289,7 +812,10 @@ export class App {
       const side = new THREE.Vector3().crossVectors(f.tan, new THREE.Vector3(0, 1, 0));
       if (side.lengthSq() < 1e-3) side.set(1, 0, 0);
       side.normalize();
-      const pos = f.pos.clone().addScaledVector(side, d).add(new THREE.Vector3(0, d * 0.35, 0));
+      const pos = f.pos
+        .clone()
+        .addScaledVector(side, d)
+        .add(new THREE.Vector3(0, d * 0.35, 0));
       rig.setMd(md);
       rig.flyTo(pos, f.pos, 1.8);
     } else {
@@ -307,54 +833,130 @@ export class App {
     this.logs.setCursor(md);
   }
 
+  /** Scrub the camera to a depth without flying (timeline, log wheel). */
+  scrubTo(md: number) {
+    const rig = this.engine.rig;
+    rig.playing = false;
+    rig.targetMd = null;
+    rig.setMd(md);
+  }
+
   overview() {
     const o = this.engine.overviewPose();
     const rig = this.engine.rig;
     if (rig.mode === 'guided') this.setNav('explore');
     rig.setExploreView('orbit');
-    this.updateViewSeg();
+    this.viewRev.bump();
     rig.flyTo(o.pos, o.target, 2.6);
   }
 
-  preset(kind: 'default' | 'solid' | 'reservoir' | 'pay') {
-    const geo = this.engine.geology;
-    geo.isolate(null);
-    const defaults: Record<string, number> = { nordland: 0.2, utsira: 0.22, hordaland: 0.14, ty: 0.18, ekofisk: 0.3, hod: 0.26, draupne: 0.55, heather: 0.5, hugin: 0.92, sleipner: 0.75, skagerrak: 0.8, smithbank: 0.85 };
-    for (const id of geo.state.keys()) {
-      if (kind === 'default') geo.setLayer(id, { visible: true, opacity: defaults[id] ?? 1 });
-      else if (kind === 'solid') geo.setLayer(id, { visible: true, opacity: 1 });
-      else if (kind === 'reservoir') geo.setLayer(id, { visible: ['draupne', 'heather', 'hugin', 'sleipner'].includes(id), opacity: id === 'hugin' ? 0.85 : 0.25 });
-      else geo.setLayer(id, { visible: id === 'hugin', opacity: 0.35 });
+  togglePlay() {
+    const rig = this.engine.rig;
+    if (rig.mode !== 'guided') {
+      this.setNav('guided');
+      this.setGuidedView('chase');
     }
-    const wb = this.engine.wellbore;
-    if (wb) wb.uniforms.uPayOnly.value = kind === 'pay' ? 1 : 0;
-    if (kind === 'pay') {
-      this.setProperty('hydrocarbon');
-      this.toast('Pay isolated — only intervals passing the Vsh / φ / Sw cut-offs are shown, inside a ghosted Hugin Fm.');
-    }
-    this.left.sync();
+    if (rig.md >= rig.mdMax - 1) rig.setMd(0);
+    rig.playing = !rig.playing;
+    rig.targetMd = null;
+    this.chapterCard.set(rig.playing);
   }
 
-  /** Section box trimmed to a corridor that hugs the active well, cut through its centre. */
-  sectionAlongWell() {
-    const t = this.engine.activeWell.trajectory;
-    let x0 = Infinity, x1 = -Infinity, n0 = Infinity, n1 = -Infinity;
-    for (let i = 0; i < t.md.length; i++) {
-      x0 = Math.min(x0, t.ew[i]);
-      x1 = Math.max(x1, t.ew[i]);
-      n0 = Math.min(n0, t.ns[i]);
-      n1 = Math.max(n1, t.ns[i]);
+  setSpeed(v: number) {
+    this.engine.rig.speed = v;
+    this.viewRev.bump();
+  }
+
+  // ------------------------------------------------------------------ panels
+  /** The Interpretation panel is brought up (from the rail or a menu): its parameters redraw the Hydrocarbons view, so show that. */
+  interpretationShown() {
+    if (this.engine.mode === 'hydrocarbon') return;
+    this.setProperty('hydrocarbon');
+    this.toast('Showing the Hydrocarbons view: it redraws live as you change parameters.');
+  }
+
+  /**
+   * Can a workspace show this panel now? The app's own panels always; a tool
+   * window only while it is open, since its feature decides that: switching
+   * workspace moves the open ones to that workspace's places for them and
+   * never opens or closes one.
+   */
+  readonly hasPanel = (id: string) => DOCK_PANELS.has(id) || openWindows.value.some((w) => w.opts.id === id);
+
+  /**
+   * Switch workspace (its tab, Ctrl PgUp / PgDn, the palette). Its layout
+   * comes back as it was left, animated, and its task context (the colouring,
+   * the navigation mode) is set through the same calls the top bar makes.
+   * Returns false for an unknown workspace.
+   */
+  switchWorkspace(id: string) {
+    const ws = this.workspace;
+    if (!ws.has(id)) return false;
+    if (id === this.targetWorkspace) return true;
+    const ctx = ws.info(id)?.context;
+    // before the transition: a toast (Explore's hint) would otherwise cut its animation short
+    if (ctx && this.ready.value) this.applyContext(ctx);
+    this.pendingWorkspace = id;
+    withTransition(() => {
+      ws.switchTo(id, this.hasPanel);
+      if (this.pendingWorkspace === id) this.pendingWorkspace = null;
+    });
+    return true;
+  }
+
+  /** a switch waiting for its transition to start */
+  private pendingWorkspace: string | null = null;
+
+  /** The workspace being switched to, or the active one: Ctrl PgDn pressed twice quickly steps twice. */
+  get targetWorkspace() {
+    return this.pendingWorkspace ?? this.workspace.current.value;
+  }
+
+  private applyContext(ctx: WorkspaceContext) {
+    const rig = this.engine.rig;
+    // an optional mode (ROP) is only set while a feature offers it
+    if (ctx.colour && ctx.colour !== this.engine.mode && (ctx.colour !== 'rop' || this.optionalModes.value.has('rop'))) this.setProperty(ctx.colour);
+    if (ctx.nav && ctx.nav !== rig.mode) this.setNav(ctx.nav);
+    if (ctx.nav === 'guided' && ctx.guidedView && ctx.guidedView !== rig.guidedView) this.setGuidedView(ctx.guidedView);
+  }
+
+  /** Reset a workspace's layout to where it started (the active one animates). */
+  resetWorkspace(id = this.workspace.current.value) {
+    withTransition(() => this.workspace.reset(id, this.hasPanel));
+  }
+
+  // ------------------------------------------------------------------ selection
+  /** Select an object (null clears the selection); selecting what is already selected changes nothing. */
+  select(sel: Selection | null) {
+    if (sameSelection(sel, this.selection.value)) return;
+    this.selection.set(sel);
+    const md = sel?.md;
+    if (md !== undefined && sel?.well === this.engine?.activeWell.id) this.logs.setCursor(md);
+  }
+
+  /** The details of a selected object: its title, read-outs and quick actions (null when it no longer exists). */
+  inspectorFor(sel: Selection): InspectorView | null {
+    try {
+      return inspect.view(this, sel);
+    } catch (err) {
+      console.error('inspect', err);
+      return null;
     }
-    const fb = this.engine.geology.fullBox;
-    const midN = (n0 + n1) / 2;
-    void x0;
-    void x1;
-    const b = { xMin: fb.xMin, xMax: fb.xMax, nMin: Math.max(fb.nMin, midN), nMax: fb.nMax, stripTo: 0 };
-    this.onSectionPreset?.(b);
+  }
+
+  /** Open the right-click menu of an object at a point of the window, selecting it. */
+  openContextMenu(sel: Selection, x: number, y: number) {
+    this.select(sel);
+    this.contextMenu.set({ x, y, selection: this.selection.value! });
   }
 
   inspectFormation(id: string) {
-    this.inspector.formation(id);
+    this.select({ kind: 'formation', id });
+  }
+
+  inspectAt(md: number) {
+    const id = this.engine.activeWell.id;
+    this.select({ kind: 'well', id, well: id, md });
   }
 
   // ------------------------------------------------------------------ tour
@@ -367,7 +969,8 @@ export class App {
     if (c.mode) this.setProperty(c.mode);
     this.setGuidedView(c.view);
     this.travelTo(c.md);
-    this.renderNarrative(c, k);
+    this.chapter.set({ index: k, touring: this.tourTimer !== null });
+    this.chapterCard.set(true);
   }
 
   startTour() {
@@ -378,431 +981,38 @@ export class App {
       i++;
       if (i < this.chapters.length) this.tourTimer = window.setTimeout(step, 9000);
       else this.tourTimer = null;
+      this.chapter.set({ index: this.chapterIdx, touring: this.tourTimer !== null });
     };
+    this.tourTimer = 0;
     step();
     this.toast('Auto tour — any interaction pauses it');
-    this.renderNarrative(this.chapters[0], 0);
   }
 
   stopTour() {
-    if (this.tourTimer) {
+    if (this.tourTimer !== null) {
       clearTimeout(this.tourTimer);
       this.tourTimer = null;
-      this.renderNarrative(this.chapters[this.chapterIdx] ?? this.chapters[0], Math.max(0, this.chapterIdx));
+      this.chapter.set({ index: Math.max(0, this.chapterIdx), touring: false });
     }
   }
 
-  // ------------------------------------------------------------------ UI builders
-  private buildTopBar(): HTMLElement {
-    this.wellSelect = h('select', { title: 'Active wellbore' }) as HTMLSelectElement;
-    this.wellSelect.onchange = () => this.selectWell(this.wellSelect.value);
-    this.refreshWellOptions();
-    const seg = (items: [string, string, string?][], on: string, cb: (v: string) => void, cls = 'seg') => {
-      const s = h('div', { class: cls });
-      for (const [v, label, dot] of items) {
-        const b = h('button', { class: v === on ? 'on' : '', 'data-v': v, html: `${dot ? `<span class="dot" style="background:${dot}"></span>` : ''}${label}` });
-        b.onclick = () => cb(v);
-        s.append(b);
-      }
-      return s;
-    };
-    this.navSeg = seg(
-      [
-        ['guided', 'Guided'],
-        ['explore', 'Explore'],
-      ],
-      'explore',
-      (v) => this.setNav(v as NavMode),
-    );
-    this.propSeg = seg(
-      [
-        ['resistivity', 'Resistivity<small class="seg-sub">measured</small>', '#7fe3ff'],
-        ['hydrocarbon', 'Hydrocarbons<small class="seg-sub">calculated</small>', '#ffb547'],
-        ['lithology', 'Lithology', '#a28e67'],
-        ['rop', 'ROP<small class="seg-sub">drilling</small>', '#f28a3c'],
-      ],
-      'resistivity',
-      (v) => this.setProperty(v as PropertyMode),
-    );
-    this.setPropertyAvailable('rop', false);
-    const btn = (icon: string, title: string, fn: () => void, label?: string) =>
-      h('button', { class: `btn ${label ? 'lbl' : 'icon'} ghost`, title, html: `${icon}${label ? `<span class="hide-md">${label}</span>` : ''}`, onclick: fn });
-    return h(
-      'div',
-      { class: 'topbar glass' },
-      h(
-        'div',
-        { class: 'brand' },
-        h('div', { class: 'brand-mark', html: LOGO }),
-        h('div', {}, h('div', { class: 'brand-title' }, 'BoreWalk'), h('div', { class: 'brand-sub' }, `3D wellbore walkthrough · ${this.field.meta.name} open data`)),
-      ),
-      h('div', { class: 'divider' }),
-      h('div', { class: 'well-select' }, this.wellSelect),
-      h('div', { class: 'spacer' }),
-      this.navSeg,
-      this.propSeg,
-      h('div', { class: 'spacer' }),
-      btn(I.flask, 'Petrophysical interpretation', () => {
-        this.prod.hide();
-        this.interp.toggle();
-      }, 'Interpretation'),
-      btn(I.chart, 'Production history', () => {
-        this.interp.hide();
-        this.prod.toggle();
-      }, 'Production'),
-      btn(I.upload, 'Data manager & uploads', () => this.data.show(), 'Data'),
-      btn(I.sliders, 'Switch features on and off', () => this.featuresPanel.toggle(), 'Features'),
-      h('div', { class: 'divider' }),
-      this.toolSlot,
-      btn(I.panelLeft, 'Toggle scene panel', () => this.togglePanel('left')),
-      btn(I.panelRight, 'Toggle log tracks', () => this.togglePanel('right')),
-      btn(I.home, 'Field overview', () => this.overview()),
-      btn(I.help, 'Controls & data notes', () => this.help.classList.remove('hidden')),
-      btn(I.expand, 'Fullscreen', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())),
-    );
-  }
-
-  refreshWellOptions() {
-    this.wellSelect.innerHTML = '';
-    for (const w of this.field.wells) {
-      if (w.extra && !this.flags?.on('extraWells') && w !== this.engine.activeWell) continue;
-      const tag = w.userAdded ? ' · uploaded' : w.lasFile ? '' : ' · survey + production';
-      this.wellSelect.append(h('option', { value: w.id }, `${w.name}${tag}`));
-    }
-    if (this.engine.activeWell) this.wellSelect.value = this.engine.activeWell.id;
-  }
-
-  togglePanel(side: 'left' | 'right') {
-    const el = side === 'left' ? this.left.el : this.logs.el;
-    el.classList.toggle('collapsed');
-    document.body.classList.toggle(`${side}-collapsed`, el.classList.contains('collapsed'));
-    this.applyInsets();
-  }
-
-  private buildTimeline(): HTMLElement {
-    this.playBtn = h('button', { class: 'play', title: 'Play along the well (Space)', html: I.play }) as HTMLButtonElement;
-    this.playBtn.onclick = () => this.togglePlay();
-    const speed = h('select', { class: 'select', title: 'Travel speed', style: 'width:78px' }) as HTMLSelectElement;
-    for (const [v, l] of [
-      ['15', '15 m/s'],
-      ['45', '45 m/s'],
-      ['120', '120 m/s'],
-      ['300', '300 m/s'],
-    ])
-      speed.append(h('option', { value: v }, l));
-    speed.value = '45';
-    speed.onchange = () => (this.engine.rig.speed = +speed.value);
-    this.viewSeg = h('div', { class: 'seg small' });
-    const canvas = h('canvas');
-    const marks = h('div', { class: 'track-marks' });
-    const scale = h('div', { class: 'track-scale' });
-    const head = h('div', { class: 'playhead' });
-    const track = h('div', { class: 'track' }, canvas);
-    const wrap = h('div', { class: 'track-wrap' }, marks, track, scale, head);
-    this.tl = { canvas, head, marks, scale, wrap };
-    const scrub = (ev: PointerEvent) => {
-      const r = track.getBoundingClientRect();
-      const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
-      const md = f * this.engine.activeWell.tdMD;
-      this.engine.rig.playing = false;
-      this.engine.rig.targetMd = null;
-      this.engine.rig.setMd(md);
-    };
-    track.addEventListener('pointerdown', (ev) => {
-      track.setPointerCapture(ev.pointerId);
-      scrub(ev);
-      const mv = (e2: PointerEvent) => scrub(e2);
-      track.addEventListener('pointermove', mv);
-      track.addEventListener('pointerup', () => track.removeEventListener('pointermove', mv), { once: true });
-    });
-    new ResizeObserver(() => this.renderTimelineStatic()).observe(track);
-    const rd = (k: string, cls = '') => {
-      const v = h('div', { class: `v ${cls}` });
-      return [h('div', { class: 'k' }, k), v] as const;
-    };
-    const [kMd, vMd] = rd('MD', 'hero');
-    const [kTvd, vTvd] = rd('TVDSS');
-    const [kInc, vInc] = rd('Inc · Azi');
-    const [kZ, vZ] = rd('Zone');
-    this.readout = { md: vMd, tvd: vTvd, inc: vInc, zone: vZ };
-    vZ.style.cssText = 'font-family:var(--sans);font-size:12px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    return h(
-      'div',
-      { class: 'timeline glass' },
-      h('div', { class: 'tl-controls' }, this.playBtn, h('div', { style: 'display:flex;flex-direction:column;gap:5px' }, this.viewSeg, speed)),
-      wrap,
-      h('div', { class: 'depth-readout' }, kMd, kTvd, kInc, kZ, vMd, vTvd, vInc, vZ),
-    );
-  }
-
-  private updateViewSeg() {
-    const rig = this.engine.rig;
-    const items: [string, string, string][] =
-      rig.mode === 'guided'
-        ? [
-            ['tunnel', 'Inside', I.tunnel],
-            ['chase', 'Chase', I.chase],
-            ['orbit', 'Orbit', I.orbit],
-          ]
-        : [
-            ['fly', 'Fly', I.fly],
-            ['orbit', 'Orbit', I.orbit],
-          ];
-    const cur = rig.mode === 'guided' ? rig.guidedView : rig.exploreView;
-    this.viewSeg.innerHTML = '';
-    for (const [v, l, ic] of items) {
-      const b = h('button', { class: v === cur ? 'on' : '', html: `${ic.replace('<svg', '<svg width="12" height="12"')}${l}` });
-      b.onclick = () => {
-        if (rig.mode === 'guided') this.setGuidedView(v as GuidedView);
-        else {
-          rig.setExploreView(v as 'fly' | 'orbit');
-          this.updateViewSeg();
-        }
-      };
-      this.viewSeg.append(b);
-    }
-  }
-
-  togglePlay() {
-    const rig = this.engine.rig;
-    if (rig.mode !== 'guided') {
-      this.setNav('guided');
-      this.setGuidedView('chase');
-    }
-    if (rig.md >= rig.mdMax - 1) rig.setMd(0);
-    rig.playing = !rig.playing;
-    rig.targetMd = null;
-  }
-
-  private renderTimelineStatic() {
-    const w = this.engine.activeWell;
-    if (!w || !this.tl) return;
-    const cv = this.tl.canvas;
-    const W = cv.clientWidth;
-    const H = cv.clientHeight;
-    if (!W) return;
-    const dpr = Math.min(2, devicePixelRatio || 1);
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    const g = cv.getContext('2d')!;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const td = w.tdMD;
-    const x = (md: number) => (md / td) * W;
-    for (const z of w.zones) {
-      g.fillStyle = z.formationId === 'sea' ? '#1d4e6b' : z.formationId === 'air' ? '#1a2029' : FORMATION_BY_ID.get(z.formationId)?.color ?? '#555';
-      g.fillRect(x(z.topMD), 0, Math.max(1, x(z.baseMD) - x(z.topMD)), H);
-    }
-    // inclination profile
-    g.strokeStyle = 'rgba(255,255,255,0.55)';
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let px = 0; px < W; px++) {
-      const md = (px / W) * td;
-      const inc = w.trajectory.at(Math.min(md, w.trajectory.mdEnd)).inc;
-      const y = H - 2 - (inc / 95) * (H - 4);
-      if (px === 0) g.moveTo(px, y);
-      else g.lineTo(px, y);
-    }
-    g.stroke();
-    // pay
-    if (w.petro && w.logs) {
-      g.fillStyle = '#ffb547';
-      const d = w.logs.depth;
-      for (let i = 0; i < d.length; i += 3) if (w.petro.pay[i]) g.fillRect(x(d[i]), H - 3, Math.max(1, x(3 * 0.1)), 3);
-    }
-    // casing shoes
-    g.fillStyle = '#dfe6ec';
-    for (const c of w.casing) g.fillRect(x(c.shoeMD) - 0.5, 0, 1.5, H);
-    // chapter marks
-    this.tl.marks.innerHTML = '';
-    let prevLeft = -10;
-    this.chapters.forEach((c, i) => {
-      const left = (c.md / td) * 100;
-      const crowded = left - prevLeft < 1.4;
-      prevLeft = left;
-      const m = h('div', { class: 'track-mark', style: `left:${left}%;${crowded ? 'margin-left:9px' : ''}`, title: c.title }, String(i + 1));
-      m.onclick = () => this.goChapter(i);
-      this.tl.marks.append(m);
-    });
-    this.tl.scale.innerHTML = '';
-    const step = td > 3000 ? 500 : 250;
-    for (let md = 0; md <= td; md += step) this.tl.scale.append(h('span', { style: `left:${(md / td) * 100}%` }, md === 0 ? '0 m' : String(md)));
-    this.tl.scale.append(h('span', { style: 'left:100%;transform:translateX(-100%);color:var(--text-3)' }, `TD ${td.toFixed(0)}`));
-  }
-
-  private buildNarrative(): HTMLElement {
-    this.narrative = h('div', { class: 'narrative glass hidden' });
-    return this.narrative;
-  }
-
-  private renderNarrative(c: Chapter | undefined, i: number) {
-    if (!c) return;
-    const n = this.narrative;
-    n.innerHTML = '';
-    const facts = h('div', { class: 'facts' });
-    const pc: Record<string, string> = { measured: 'var(--measured)', calculated: 'var(--calculated)', interpreted: 'var(--interpreted)', reconstructed: 'var(--reconstructed)' };
-    for (const f of c.facts) facts.append(h('div', { class: 'fact', title: f.prov }, h('div', { class: 'k' }, h('i', { style: `background:${pc[f.prov]}` }), f.k), h('div', { class: 'v' }, f.v)));
-    const touring = this.tourTimer !== null;
-    n.append(
-      h('div', { class: 'step' }, `CHAPTER ${String(i + 1).padStart(2, '0')} / ${String(this.chapters.length).padStart(2, '0')}`),
-      h('h2', {}, c.title),
-      h('p', {}, c.text),
-      facts,
-      h(
-        'div',
-        { class: 'nav' },
-        h('div', { style: 'display:flex;gap:4px' }, h('button', { class: 'btn icon', html: I.prev, title: 'Previous chapter', onclick: () => { this.stopTour(); this.goChapter(i - 1); } }), h('button', { class: 'btn icon', html: I.next, title: 'Next chapter', onclick: () => { this.stopTour(); this.goChapter(i + 1); } })),
-        h('button', { class: `btn ${touring ? '' : 'primary'}`, html: touring ? `${I.pause} Pause tour` : `${I.play} Auto tour`, onclick: () => (touring ? this.stopTour() : this.startTour()) }),
-      ),
-    );
-  }
-
-  private buildLegend(): HTMLElement {
-    this.legend = h('div', { class: 'legend glass' });
-    return this.legend;
-  }
-
-  updateLegend() {
-    const L = this.legend;
-    const m = this.engine.mode;
-    const w = this.engine.activeWell;
-    L.innerHTML = '';
-    if (m === 'resistivity') {
-      const stops = Array.from({ length: 24 }, (_, i) => `${toCss(colormap(this.colormapName, i / 23))} ${((i / 23) * 100).toFixed(1)}%`).join(',');
-      const ticks = h('div', { class: 'ticks' });
-      const lmin = Math.log10(RES_RANGE.min);
-      const lmax = Math.log10(RES_RANGE.max);
-      for (const v of [0.2, 1, 10, 100, 1000]) ticks.append(h('span', { style: `left:${((Math.log10(v) - lmin) / (lmax - lmin)) * 100}%` }, String(v)));
-      L.append(
-        h('div', { class: 'row', style: 'min-height:0' }, h('b', { style: 'font-size:12px' }, 'Formation resistivity · Ω·m'), h('span', { html: chip('measured') })),
-        h('div', { class: 'bar', style: `background:linear-gradient(90deg,${stops})` }),
-        ticks,
-        h('div', { class: 'note' }, `Log scale ${RES_RANGE.min}–${RES_RANGE.max} Ω·m. Borehole wall shows the shallow reading; the halo grades outward to the deep reading (RT). Radial scale ×${this.engine.radialScale}; investigation depth schematic.`),
-      );
-    } else if (m === 'rop') {
-      const stops = Array.from({ length: 16 }, (_, i) => {
-        const t = i / 15;
-        const c = t < 0.33 ? mix([0.13, 0.04, 0.32], [0.72, 0.16, 0.42], t / 0.33) : t < 0.66 ? mix([0.72, 0.16, 0.42], [0.98, 0.55, 0.2], (t - 0.33) / 0.33) : mix([0.98, 0.55, 0.2], [0.99, 0.95, 0.62], (t - 0.66) / 0.34);
-        return `${toCss(c)} ${(t * 100).toFixed(1)}%`;
-      }).join(',');
-      const ticks = h('div', { class: 'ticks' });
-      for (const v of [1, 3, 10, 30, 100]) ticks.append(h('span', { style: `left:${(Math.log10(v) / Math.log10(ROP_RANGE.max)) * 100}%` }, String(v)));
-      const zones = w.logs ? ropByZone(w.logs, w.zones) : [];
-      const byF = new Map<string, { name: string; h: number; f: number }>();
-      for (const z of zones) {
-        const a = byF.get(z.formationId) ?? { name: z.name, h: 0, f: 0 };
-        a.h += z.hours;
-        a.f += z.footage;
-        byF.set(z.formationId, a);
-      }
-      const tbl = h('div', { class: 'rop-table' });
-      let tot = 0;
-      for (const [id, a] of byF) {
-        tot += a.h;
-        tbl.append(h('div', {}, h('i', { style: `background:${FORMATION_BY_ID.get(id)?.color ?? '#666'}` }), h('span', {}, a.name.replace(/ \(.*\)| –.*/, '')), h('b', {}, `${(a.f / a.h).toFixed(0)} m/h`), h('small', {}, `${a.h.toFixed(0)} h`)));
-      }
-      L.append(
-        h('div', { class: 'row', style: 'min-height:0' }, h('b', { style: 'font-size:12px' }, 'Rate of penetration · m/h'), h('span', { html: chip('measured') })),
-        h('div', { class: 'bar', style: `background:linear-gradient(90deg,${stops})` }),
-        ticks,
-        zones.length ? tbl : h('div', { class: 'note' }, 'No ROP curve in this well’s logs.'),
-        h('div', { class: 'note' }, zones.length ? `On-bottom drilling time Σ ΔMD / ROP ≈ ${tot.toFixed(0)} h for the logged footage (connections, trips and casing runs excluded). Averages are footage-weighted.` : ''),
-      );
-    } else if (m === 'hydrocarbon') {
-      const p = w.params;
-      L.append(
-        h('div', { class: 'row', style: 'min-height:0' }, h('b', { style: 'font-size:12px' }, 'Interpreted pore fluids'), h('span', { html: chip('calculated') })),
-        h(
-          'div',
-          { class: 'swatches' },
-          h('div', {}, h('i', { style: 'background:linear-gradient(90deg,#8a520e,#e0932a)' }), 'Oil-filled pore space (So)'),
-          h('div', {}, h('i', { style: 'background:linear-gradient(90deg,#1b4d7a,#3f86c4)' }), 'Water-filled pore space (Sw)'),
-          h('div', {}, h('i', { style: 'background:#5b4a35' }), 'Oil-stained borehole wall'),
-          h('div', {}, h('i', { style: 'background:#ffc35a;height:3px' }), 'Net pay boundaries'),
-        ),
-        h(
-          'div',
-          { class: 'note' },
-          `${p.satModel === 'archie' ? 'Archie' : 'Simandoux'} Sw from measured RT & RHOB · a ${p.a}, m ${p.m}, n ${p.n}, Rw ${p.rw} Ω·m @ ${p.rwTemp} °C. Pore size tracks φ; drawn only where density and resistivity logs exist.`,
-        ),
-      );
-    } else {
-      const sw = h('div', { class: 'swatches' });
-      const seen = new Set<string>();
-      for (const z of w.zones) {
-        const f = FORMATION_BY_ID.get(z.formationId);
-        if (!f || seen.has(f.id)) continue;
-        seen.add(f.id);
-        sw.append(h('div', {}, h('i', { style: `background:${f.color}` }), f.name));
-      }
-      L.append(h('div', { class: 'row', style: 'min-height:0' }, h('b', { style: 'font-size:12px' }, 'Formations along the well'), h('span', { html: chip('interpreted') })), sw);
-    }
-  }
-
-  private buildHud(): HTMLElement {
-    const svgNs = 'http://www.w3.org/2000/svg';
-    const wrap = h('div', {
-      class: 'compass',
-      html: `<svg viewBox="0 0 42 42"><circle cx="21" cy="21" r="19" fill="rgba(0,0,0,.25)" stroke="rgba(255,255,255,.12)"/><g id="needle"><path d="M21 5 L24.5 21 L21 19 L17.5 21 Z" fill="#ff8a65"/><path d="M21 37 L24.5 21 L21 23 L17.5 21 Z" fill="rgba(255,255,255,.35)"/><text x="21" y="4.2" text-anchor="middle" font-size="6" fill="#e7ecf1" font-family="Inter Variable" font-weight="600">N</text></g></svg>`,
-    });
-    const needle = wrap.querySelector('#needle') as SVGElement;
-    void svgNs;
-    const loc = h('div', { class: 'loc' });
-    const el = h('div', { class: 'hud glass' }, h('div', { class: 'hud-row' }, wrap, loc), this.hudSlot);
-    this.hud = { el, needle, loc };
-    return el;
-  }
-
-  private buildHelp(): HTMLElement {
-    const k = (s: string) => `<span class="kbd">${s}</span>`;
-    const r = (a: string, b: string) => h('div', { class: 'row', html: `<span>${a}</span><span>${b}</span>` });
-    const m = this.field.meta;
-    this.help = h(
-      'div',
-      { class: 'modal-back hidden', onclick: (e: Event) => e.target === this.help && this.help.classList.add('hidden') },
-      h(
-        'div',
-        { class: 'modal glass' },
-        h('div', { class: 'panel-head' }, h('h3', {}, 'Controls & data notes'), h('button', { class: 'btn icon ghost', html: I.close, onclick: () => this.help.classList.add('hidden') })),
-        h(
-          'div',
-          { class: 'panel-body' },
-          h(
-            'div',
-            { class: 'help-grid' },
-            h('div', {}, h('h5', { class: 'micro' }, 'Guided walkthrough'), r('Play / pause', k('Space')), r('Step along hole', `${k('Wheel')} ${k('[')} ${k(']')}`), r('Next / previous chapter', `${k('N')} ${k('P')}`), r('Inside · Chase · Orbit', `${k('1')} ${k('2')} ${k('3')}`), r('Toggle property view', k('V'))),
-            h('div', {}, h('h5', { class: 'micro' }, 'Free explore'), r('Look (Fly)', 'drag'), r('Move', `${k('W')}${k('A')}${k('S')}${k('D')}`), r('Up / down', `${k('E')} ${k('Q')}`), r('Boost', k('Shift')), r('Focus point', 'double-click'), r('Inspect', 'click anything')),
-          ),
-          h(
-            'div',
-            { class: 'section', style: 'font-size:12px;color:var(--text-2);line-height:1.6' },
-            h('div', { class: 'micro', style: 'margin-bottom:8px' }, 'Provenance legend'),
-            h('div', { html: `${chip('measured')} acquired by logging / survey tools or gauges, as delivered by ${m.operator}.` }),
-            h('div', { html: `${chip('interpreted')} operator interpretation: formation picks, Equinor CPI.` }),
-            h('div', { html: `${chip('calculated')} computed live in this app from measured inputs and editable parameters.` }),
-            h('div', { html: `${chip('reconstructed')} geometry derived from other data (trajectories through pick coordinates, casing from bit size).` }),
-            h('div', { html: `${chip('schematic')} illustrative only (natural fractures, cement placement, platform model).` }),
-            h('div', { style: 'margin-top:10px' }, `Coordinates: ${m.crs}, local origin E ${m.originE} / N ${m.originN}. Depths MD / TVD from ${m.datum} (+${m.datumElevation} m MSL); TVDSS below MSL. Near-well geometry is radially exaggerated for legibility; along-hole and vertical geometry are true scale.`),
-            h('div', { style: 'margin-top:8px' }, m.licence),
-          ),
-        ),
-      ),
-    );
-    return this.help;
-  }
-
-  toast(msg: string) {
-    this.toastEl.textContent = msg;
-    this.toastEl.classList.remove('hidden');
-    clearTimeout((this.toastEl as unknown as { _t: number })._t);
-    (this.toastEl as unknown as { _t: number })._t = window.setTimeout(() => this.toastEl.classList.add('hidden'), 4200);
+  get touring() {
+    return this.tourTimer !== null;
   }
 
   // ------------------------------------------------------------------ interaction
+  /** A right-click in the 3D view: the menu of the object under the pointer (and it is selected). */
+  private rightClickAt(x: number, y: number) {
+    const p = this.engine.pick(x, y);
+    const sel = p && inspect.selectionOf(this, p);
+    if (sel) this.openContextMenu(sel, x, y);
+  }
+
   private bindPicking() {
     const cv = this.engine.renderer.domElement;
     let down: { x: number; y: number; t: number } | null = null;
-    cv.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, t: performance.now() }));
+    // a click selects (the right button opens the menu below instead)
+    cv.addEventListener('pointerdown', (e) => (down = e.button === 2 ? null : { x: e.clientX, y: e.clientY, t: performance.now() }));
     cv.addEventListener('pointerup', (e) => {
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -812,12 +1022,72 @@ export class App {
           down = null;
           return;
         }
-        if (p) {
-          this.inspector.show(p);
-          if (p.md !== undefined) this.logs.setCursor(p.md);
-        } else this.inspector.hide();
+        this.select(p ? inspect.selectionOf(this, p) : null);
+        if (p?.md !== undefined) this.logs.setCursor(p.md);
       }
       down = null;
+    });
+    // right click without dragging (a right drag pans the view): the picked object's menu of actions.
+    // It opens on release, as some systems send `contextmenu` when the button goes down.
+    let rdown: { x: number; y: number } | null = null;
+    cv.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) rdown = { x: e.clientX, y: e.clientY };
+    });
+    cv.addEventListener('pointerup', (e) => {
+      const r = rdown;
+      if (e.button !== 2 || !r) return;
+      rdown = null;
+      if (Math.hypot(e.clientX - r.x, e.clientY - r.y) > 5) return;
+      this.rightClickAt(e.clientX, e.clientY);
+    });
+    // A right-click while a menu is open never reaches the page (an open menu leaves the rest of
+    // the page deaf to the pointer, and closes only for a left click): close the menu, and once it
+    // has gone pass the right-click on to what is under the pointer, so it opens that thing's menu
+    // as it would have with none open.
+    let passOn: { x: number; y: number } | null = null;
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.button !== 2 || !document.querySelector('[role="menu"]') || (e.target as Element | null)?.closest?.('[role="menu"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        passOn = { x: e.clientX, y: e.clientY };
+        this.contextMenu.set(null);
+        // any other menu (a tab's, the rail's) closes as Escape closes it
+        const focus = document.activeElement;
+        if (focus && focus !== document.body) focus.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      },
+      true,
+    );
+    window.addEventListener(
+      'pointerup',
+      (e) => {
+        const at = passOn;
+        if (e.button !== 2 || !at) return;
+        passOn = null;
+        e.stopPropagation();
+        // once the menu has gone (and the page hears the pointer again), half a second at most
+        const t0 = performance.now();
+        const send = () => {
+          if (document.querySelector('[role="menu"]') && performance.now() - t0 < 500) return void requestAnimationFrame(send);
+          const el = document.elementsFromPoint(at.x, at.y).find((x) => !x.closest('[data-testid="underlay"], [role="menu"], [role="dialog"]'));
+          if (!el) return;
+          if (el === cv) this.rightClickAt(at.x, at.y);
+          else el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2, buttons: 0 }));
+        };
+        requestAnimationFrame(send);
+      },
+      true,
+    );
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    // The app's own right-click menus stand in for the browser's everywhere: on some systems the
+    // browser's arrives after ours opened, aimed at our menu rather than the view, so it is turned
+    // off for the whole page. Text fields and selected text keep it (copy, paste, spelling).
+    document.addEventListener('contextmenu', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('input, textarea, [contenteditable=""], [contenteditable="true"]')) return;
+      if (String(window.getSelection() ?? '').trim()) return;
+      e.preventDefault();
     });
     cv.addEventListener('dblclick', (e) => {
       const p = this.engine.pick(e.clientX, e.clientY);
@@ -829,107 +1099,188 @@ export class App {
       }
       if (rig.mode === 'guided') this.setNav('explore');
       rig.setExploreView('orbit');
-      this.updateViewSeg();
+      this.viewRev.bump();
       const dir = this.engine.camera.position.clone().sub(p.point).normalize();
       const dist = Math.min(this.engine.camera.position.distanceTo(p.point) * 0.45, 900);
       rig.flyTo(p.point.clone().addScaledVector(dir, Math.max(25, dist)), p.point, 1.6);
     });
-    cv.addEventListener('pointermove', (e) => {
+    // hover: the latest pointer position is picked once per frame at most (and no more than
+    // ~20 times a second), never while a button is held (orbiting, or a drag from the chrome)
+    let hx = 0;
+    let hy = 0;
+    let hoverRaf = 0;
+    let hoverAt = 0;
+    const setHover = (md: number | null, over: boolean) => {
+      if (md !== this.logs.hoverMd) {
+        const wb = this.engine.wellbore;
+        if (wb) wb.uniforms.uHoverMd.value = md ?? -1e6;
+        this.logs.hoverMd = md;
+        this.engine.requestRender(200);
+      }
+      const c = over ? 'pointer' : '';
+      if (cv.style.cursor !== c) cv.style.cursor = c;
+    };
+    const cancel = () => {
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
+      hoverRaf = 0;
+    };
+    const hover = () => {
+      hoverRaf = 0;
       const now = performance.now();
-      if (now - this.lastHover < 120 || e.buttons) return;
-      this.lastHover = now;
-      const p = this.engine.pick(e.clientX, e.clientY, true);
-      const wb = this.engine.wellbore;
-      if (wb) wb.uniforms.uHoverMd.value = p?.md ?? -1e6;
-      this.logs.hoverMd = p?.md ?? null;
-      this.logs.invalidate();
-      cv.style.cursor = p ? 'pointer' : '';
+      if (now - hoverAt < 50) {
+        hoverRaf = requestAnimationFrame(hover);
+        return;
+      }
+      hoverAt = now;
+      const p = this.engine.pick(hx, hy, true);
+      setHover(p?.md ?? null, !!p);
+    };
+    cv.addEventListener(
+      'pointermove',
+      (e) => {
+        if (e.buttons) return cancel();
+        hx = e.clientX;
+        hy = e.clientY;
+        if (!hoverRaf) hoverRaf = requestAnimationFrame(hover);
+      },
+      { passive: true },
+    );
+    // the pointer went onto the chrome (or out of the window): nothing is hovered in the view
+    cv.addEventListener('pointerleave', () => {
+      cancel();
+      setHover(null, false);
     });
   }
 
   private bindKeys() {
+    // Ctrl PgUp / PgDn steps through the workspace tabs. Caught on the way down, since a focused
+    // button or tab list would otherwise swallow it; text fields, menus and dialogs keep it.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key !== 'PageUp' && e.key !== 'PageDown')) return;
+        if ((e.target as HTMLElement).closest?.('input, select, textarea, [role="dialog"], [role="menu"], [role="listbox"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void this.actions.run(e.key === 'PageUp' ? 'workspace.previous' : 'workspace.next');
+      },
+      true,
+    );
+    // Ctrl Z (outside text fields, menus and dialogs) takes back the last layout change
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement;
+      if (t.closest?.('input, select, textarea, [contenteditable="true"], [role="dialog"], [role="menu"], [role="listbox"]')) return;
+      if (!this.workspace.canUndo()) return;
+      e.preventDefault();
+      void this.actions.run('panels.undo_layout');
+    });
+    window.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement;
+      // keys belong to form controls, and to anything inside a dialog or popover
+      if (t.closest('input, select, textarea, [role="dialog"], [role="menu"], [role="listbox"], [role="slider"]')) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const rig = this.engine.rig;
+      // keys run the same actions as the command palette
+      const act = (id: string, input?: unknown) => void this.actions.run(id, input);
       if (e.code === 'Space' && rig.mode === 'guided') {
         e.preventDefault();
-        this.togglePlay();
-      } else if (rig.mode === 'guided' && e.key === '1') this.setGuidedView('tunnel');
-      else if (rig.mode === 'guided' && e.key === '2') this.setGuidedView('chase');
-      else if (rig.mode === 'guided' && e.key === '3') this.setGuidedView('orbit');
-      else if (e.key === 'n' || e.key === 'N') this.goChapter(this.chapterIdx + 1);
-      else if (e.key === 'p' || e.key === 'P') this.goChapter(this.chapterIdx - 1);
+        act('nav.play_pause');
+      } else if (rig.mode === 'guided' && e.key === '1') act('nav.guided_view', { view: 'tunnel' });
+      else if (rig.mode === 'guided' && e.key === '2') act('nav.guided_view', { view: 'chase' });
+      else if (rig.mode === 'guided' && e.key === '3') act('nav.guided_view', { view: 'orbit' });
+      else if (e.key === 'n' || e.key === 'N') act('nav.chapter', { index: Math.min(this.chapters.length - 1, this.chapterIdx + 1) });
+      else if (e.key === 'p' || e.key === 'P') act('nav.chapter', { index: Math.max(0, this.chapterIdx - 1) });
       else if (e.key === ']') rig.setMd(rig.md + 10);
       else if (e.key === '[') rig.setMd(rig.md - 10);
       else if (e.key === 'v' || e.key === 'V') {
-        const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.flags.on('rop') ? (['rop'] as PropertyMode[]) : [])];
-        this.setProperty(order[(order.indexOf(this.engine.mode) + 1) % order.length]);
-      } else if (e.key === 'Escape') {
-        this.featuresPanel.hide();
-        this.interp.hide();
-        this.prod.hide();
-        this.data.hide();
-        this.help.classList.add('hidden');
-      }
+        const order: PropertyMode[] = ['resistivity', 'hydrocarbon', 'lithology', ...(this.optionalModes.value.has('rop') ? (['rop'] as PropertyMode[]) : [])];
+        act('view.color_by', { mode: order[(order.indexOf(this.engine.mode) + 1) % order.length] });
+      } else if (e.key === '?') act('help.open');
+      else if (e.key === 'Escape') this.select(null);
     });
   }
 
-  // ------------------------------------------------------------------ per-frame UI sync
+  // ------------------------------------------------------------------ per-frame sync
+  /** the feature modules with a per-frame hook */
+  private frameModules: FeatureModule[] = [];
   private lastMdShown = -1;
-  private playIconState: boolean | null = null;
+  // camera read-out state: recomputed only when the camera or the navigation mode changes
+  private readonly camDir = new THREE.Vector3();
+  private readonly camPos = new THREE.Vector3(NaN, NaN, NaN);
+  private readonly camQuat = new THREE.Quaternion(NaN, NaN, NaN, NaN);
+  private camY = 0;
+  private camAbove = false;
+  private navOf: [NavMode | null, GuidedView | null, string | null] = [null, null, null];
+  private nav = '';
+  private whereOf: [string | null | undefined, boolean] = [undefined, false];
+  private where = '';
+  private hudAt = 0;
+
+  /** Runs every animation frame, so its idle path allocates nothing and sets no signal that has not changed. */
   private frame(dt = 0.016) {
-    for (const m of this.modules.values())
-      if (m.frame && this.flags.on(m.id))
+    const mods = this.frameModules;
+    for (let i = 0; i < mods.length; i++) {
+      const m = mods[i];
+      if (this.flags.on(m.id))
         try {
-          m.frame(dt);
+          m.frame!(dt);
         } catch (err) {
           console.error(`feature ${m.id}`, err);
         }
+    }
     const e = this.engine;
     const rig = e.rig;
     const w = e.activeWell;
     const md = rig.md;
-    // swap the icon only when the state changes: rewriting it every frame replaces the element
-    // under the cursor between mousedown and mouseup, and the browser then drops the click
-    if (this.playIconState !== rig.playing) {
-      this.playIconState = rig.playing;
-      this.playBtn.innerHTML = rig.playing ? I.pause : I.play;
-    }
+    this.playing.set(rig.playing);
     if (Math.abs(md - this.lastMdShown) > 0.01) {
       this.lastMdShown = md;
       const t = w.trajectory.at(Math.min(md, w.trajectory.mdEnd));
-      this.readout.md.innerHTML = `${fmt.n(md, 1)}<small>m</small>`;
-      this.readout.tvd.innerHTML = `${fmt.n(t.tvd - this.field.meta.datumElevation, 1)}<small>m</small>`;
-      this.readout.inc.innerHTML = `${fmt.n(t.inc, 1)}°<small>${fmt.n(t.azi, 0)}°</small>`;
       const z = w.zoneAt(md);
-      this.readout.zone.textContent = `${z?.name ?? '—'} · ${Trajectory.sectionType(t.inc)}`;
-      this.tl.head.style.left = `${(md / w.tdMD) * this.tl.wrap.clientWidth}px`;
+      this.pose.set({ md, tvdss: t.tvd - this.field.meta.datumElevation, inc: t.inc, azi: t.azi, zone: z?.name ?? '—', section: Trajectory.sectionType(t.inc) });
       this.logs.setCursor(md);
-      // narrative follows position in guided mode
+      // the narrative follows the position in guided mode
       if (rig.mode === 'guided' && this.tourTimer === null) {
         let k = -1;
         for (let i = 0; i < this.chapters.length; i++) if (this.chapters[i].md <= md + 3) k = i;
         if (k !== this.chapterIdx && k >= 0) {
           this.chapterIdx = k;
-          this.renderNarrative(this.chapters[k], k);
+          this.chapter.set({ index: k, touring: false });
         }
       }
     }
-    // HUD
-    const dir = new THREE.Vector3();
-    e.camera.getWorldDirection(dir);
-    const heading = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI;
-    this.hud.needle.setAttribute('transform', `rotate(${-heading} 21 21)`);
-    const cam = e.camera.position;
-    const where =
-      e.cameraFormation === 'sea'
-        ? 'In the water column'
-        : e.cameraFormation
-          ? `Inside ${FORMATION_BY_ID.get(e.cameraFormation)?.name ?? e.cameraFormation}`
-          : cam.y > 0
-            ? 'Above sea level'
-            : 'Outside model';
-    const nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
-    this.hud.loc.innerHTML = `<b>${where}</b><span>${nav} · cam ${cam.y >= 0 ? '+' : ''}${fmt.n(cam.y, 0)} m · hdg ${fmt.n((heading + 360) % 360, 0)}°</span>`;
+    const now = performance.now();
+    if (this.poseText.value !== this.pose.value && now - this.poseTextAt > 66) {
+      this.poseTextAt = now;
+      this.poseText.set(this.pose.value);
+    }
+    // the compass needle follows every frame (straight to the DOM); the text at a readable pace
+    const cam = e.camera;
+    if (!cam.position.equals(this.camPos) || !cam.quaternion.equals(this.camQuat)) {
+      this.camPos.copy(cam.position);
+      this.camQuat.copy(cam.quaternion);
+      cam.getWorldDirection(this.camDir);
+      this.heading.set(Math.round((Math.atan2(this.camDir.x, -this.camDir.z) * 1800) / Math.PI) / 10);
+      this.camY = Math.round(cam.position.y);
+      this.camAbove = cam.position.y > 0;
+    }
+    const nv = this.navOf;
+    if (nv[0] !== rig.mode || nv[1] !== rig.guidedView || nv[2] !== rig.exploreView) {
+      this.navOf = [rig.mode, rig.guidedView, rig.exploreView];
+      this.nav = rig.mode === 'guided' ? `Guided · ${rig.guidedView === 'tunnel' ? 'inside the hole' : rig.guidedView}` : `Explore · ${rig.exploreView}`;
+    }
+    const f = e.cameraFormation;
+    const above = this.camAbove;
+    if (this.whereOf[0] !== f || this.whereOf[1] !== above) {
+      this.whereOf = [f, above];
+      this.where = f === 'sea' ? 'In the water column' : f ? `Inside ${FORMATION_BY_ID.get(f)?.name ?? f}` : above ? 'Above sea level' : 'Outside model';
+    }
+    const h = this.hud.value;
+    const hd = Math.round(this.heading.value);
+    if (h.where !== this.where || h.nav !== this.nav || ((h.heading !== hd || h.camY !== this.camY) && now - this.hudAt > 66)) {
+      this.hudAt = now;
+      this.hud.set({ heading: hd, where: this.where, nav: this.nav, camY: this.camY });
+    }
   }
 }

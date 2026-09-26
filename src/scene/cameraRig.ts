@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ExploreNav } from './exploreNav';
 import type { WellboreAssembly } from './wellbore';
 
 export type NavMode = 'guided' | 'explore';
@@ -16,6 +17,8 @@ interface Flight {
   t: number;
   dur: number;
   done?: () => void;
+  /** sweep around the destination's centre (distance, heading and height eased apart) rather than along a line */
+  around?: boolean;
 }
 
 /**
@@ -46,6 +49,12 @@ export class CameraRig {
   private orbitOffset = new THREE.Vector3(-60, 30, 60);
   onMdChange?: (md: number) => void;
   onUserInput?: () => void;
+  /** The point of the scene under a pointer position (set by the engine): Explore turns around, zooms toward and drags it. */
+  pickPoint?: (clientX: number, clientY: number) => THREE.Vector3 | null;
+  /** The scene's extent (set by the engine): Explore's view stays on it. */
+  sceneBounds?: () => THREE.Box3 | null;
+  /** Explore's mouse navigation (orbit view) */
+  private nav: ExploreNav;
   wellbore?: WellboreAssembly;
   mdMax = 1000;
   chaseDistance = 1;
@@ -62,6 +71,20 @@ export class CameraRig {
     this.orbit.zoomSpeed = 1.1;
     this.orbit.enabled = false;
     this.orbit.addEventListener('start', () => this.onUserInput?.());
+    // Explore's orbit view has its own mouse navigation (around, toward and by what is under the
+    // pointer); the orbit controls keep theirs for Guided's orbit view
+    this.nav = new ExploreNav(camera, this.orbit.target, dom, () => this.mode === 'explore' && this.exploreView === 'orbit');
+    this.nav.pickPoint = (x, y) => this.pickPoint?.(x, y) ?? null;
+    this.nav.bounds = () => this.sceneBounds?.() ?? null;
+    this.nav.onInput = () => {
+      // a flight in progress stops where it is
+      if (this.flight) {
+        this.orbit.target.copy(this.lookTarget);
+        this.flight = null;
+      }
+      this.onUserInput?.();
+    };
+    this.syncOrbitInput();
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
       this.keys.add(e.code);
@@ -119,6 +142,7 @@ export class CameraRig {
     if (mode === this.mode) return;
     this.mode = mode;
     this.flight = null;
+    this.syncOrbitInput();
     if (mode === 'explore') {
       this.syncAnglesFromCamera();
       this.setExploreView(this.exploreView);
@@ -145,6 +169,7 @@ export class CameraRig {
 
   setExploreView(v: ExploreView) {
     this.exploreView = v;
+    this.syncOrbitInput();
     if (this.mode !== 'explore') return;
     if (v === 'orbit') {
       const dir = new THREE.Vector3();
@@ -166,15 +191,25 @@ export class CameraRig {
   }
 
   /** Smooth cinematic flight to a viewpoint (works in every mode). */
-  flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void) {
+  /** reduce motion: camera moves become (almost) instant */
+  instantMoves = false;
+
+  flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void, opts: { around?: boolean } = {}) {
+    this.nav.stop();
+    if (this.instantMoves) dur = 0.01;
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
     const curTarget = this.orbit.enabled ? this.orbit.target.clone() : this.camera.position.clone().addScaledVector(dir, pos.distanceTo(target));
-    this.flight = { fromPos: this.camera.position.clone(), fromTarget: curTarget, toPos: pos.clone(), toTarget: target.clone(), t: 0, dur, done };
+    this.flight = { fromPos: this.camera.position.clone(), fromTarget: curTarget, toPos: pos.clone(), toTarget: target.clone(), t: 0, dur, done, around: opts.around };
   }
 
   get isFlying() {
     return !!this.flight;
+  }
+
+  /** How far the current flight has got (0–1), or null when none is under way. */
+  flightProgress(): number | null {
+    return this.flight ? Math.min(1, this.flight.t) : null;
   }
 
   update(dt: number) {
@@ -182,10 +217,22 @@ export class CameraRig {
       const f = this.flight;
       f.t += dt / f.dur;
       const k = easeInOut(Math.min(1, f.t));
-      // arc the path slightly upward for long flights
-      const lift = Math.sin(k * Math.PI) * Math.min(600, f.fromPos.distanceTo(f.toPos) * 0.18);
-      this.camera.position.lerpVectors(f.fromPos, f.toPos, k).y += lift;
       this.lookTarget.lerpVectors(f.fromTarget, f.toTarget, k);
+      if (f.around) {
+        // a descending sweep around the destination's centre: the distance eases geometrically,
+        // the heading turns the short way round and the height angle eases between the two
+        const a = new THREE.Spherical().setFromVector3(f.fromPos.clone().sub(f.toTarget));
+        const b = new THREE.Spherical().setFromVector3(f.toPos.clone().sub(f.toTarget));
+        let dTheta = b.theta - a.theta;
+        if (dTheta > Math.PI) dTheta -= Math.PI * 2;
+        if (dTheta < -Math.PI) dTheta += Math.PI * 2;
+        const s = new THREE.Spherical(a.radius * Math.pow(b.radius / a.radius, k), a.phi + (b.phi - a.phi) * k, a.theta + dTheta * k);
+        this.camera.position.setFromSpherical(s).add(this.lookTarget);
+      } else {
+        // arc the path slightly upward for long flights
+        const lift = Math.sin(k * Math.PI) * Math.min(600, f.fromPos.distanceTo(f.toPos) * 0.18);
+        this.camera.position.lerpVectors(f.fromPos, f.toPos, k).y += lift;
+      }
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(this.lookTarget);
       if (f.t >= 1) {
@@ -228,7 +275,10 @@ export class CameraRig {
       const upPerp = up.clone().addScaledVector(f.tan, -up.dot(f.tan));
       if (upPerp.lengthSq() < 1e-3) upPerp.copy(f.nor);
       upPerp.normalize();
-      desiredPos = f.pos.clone().addScaledVector(upPerp, inner * 0.18).addScaledVector(f.tan, -inner * 0.2);
+      desiredPos = f.pos
+        .clone()
+        .addScaledVector(upPerp, inner * 0.18)
+        .addScaledVector(f.tan, -inner * 0.2);
       desiredLook = ahead.pos.clone().addScaledVector(upPerp, inner * 0.1);
     } else if (this.guidedView === 'chase') {
       const d = (30 + f.radius * 14) * this.chaseDistance;
@@ -267,8 +317,29 @@ export class CameraRig {
     this.camera.lookAt(this.smoothedLook);
   }
 
+  /** How far away what the view is looking at is: the well's point in Guided, the point zoomed or turned about in Explore. */
+  lookDistance(): number {
+    if (this.mode === 'explore' && this.exploreView === 'orbit') return this.nav.lookDistance();
+    return this.camera.position.distanceTo(this.orbit.target);
+  }
+
+  /** The marker of the point Explore's view turns around (the engine puts it in the scene and redraws for it). */
+  pivotMarker(requestRender: () => void): THREE.Object3D {
+    this.nav.requestRender = requestRender;
+    return this.nav.marker;
+  }
+
+  /** The orbit controls take the mouse everywhere but in Explore's orbit view, which navigates by itself. */
+  private syncOrbitInput() {
+    const own = this.mode === 'explore' && this.exploreView === 'orbit';
+    this.orbit.enableRotate = this.orbit.enablePan = this.orbit.enableZoom = !own;
+    this.orbit.enableDamping = !own;
+    if (!own) this.nav.stop();
+  }
+
   private updateExplore(dt: number) {
     if (this.exploreView === 'orbit') {
+      this.nav.update(dt);
       this.orbit.update();
       this.panWithKeys(dt);
       return;

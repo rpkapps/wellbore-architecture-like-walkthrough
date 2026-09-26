@@ -65,7 +65,9 @@ uniform float uRadialScale;
 uniform float uCursorMd;
 uniform float uHoverMd;
 uniform float uTime;
+uniform float uClipMd;
 bool cutaway(){
+  if (vMd > uClipMd) return true; // hole not drilled yet (live wells are built ahead of the bit)
   if (uCut < 0.5) return false;
   vec3 r = vWPos - vAxis; float rl = length(r);
   vec3 toCam = cameraPosition - vAxis; toCam -= dot(toCam, vTan) * vTan;
@@ -191,6 +193,7 @@ export class WellboreAssembly {
       uRadialScale: { value: this.radialScale },
       uCursorMd: { value: -1e6 },
       uHoverMd: { value: -1e6 },
+      uClipMd: { value: well.buildAhead > 0 ? well.tdMD : 1e9 },
       uTime: { value: 0 },
       uWallOpacity: { value: 1 },
       uShellOpacity: { value: 1 },
@@ -244,9 +247,19 @@ export class WellboreAssembly {
     return (cal * IN) / 2;
   }
 
+  /** where the geometry ends: TD, or beyond it for a well being drilled */
+  get builtTd() {
+    return this.samples[this.samples.length - 1];
+  }
+
+  /** Clip the hole at the bit (a live well's geometry runs ahead of it). */
+  setClip(md: number) {
+    this.uniforms.uClipMd.value = this.well.buildAhead > 0 ? md : 1e9;
+  }
+
   private buildFrames() {
     const w = this.well;
-    const td = w.tdMD;
+    const td = w.tdMD + w.buildAhead;
     const breaks = new Set<number>();
     for (const s of w.holeSections) {
       breaks.add(s.topMD);
@@ -596,7 +609,7 @@ diffuseColor.a = uWallOpacity;`,
     };
     mat.customProgramCacheKey = () => 'wall-v4';
     this.wallMat = mat;
-    const geo = this.tube(0, this.well.tdMD, (i) => this.rHole[i] * this.radialScale, 48, 1, true);
+    const geo = this.tube(0, this.samples[this.samples.length - 1], (i) => this.rHole[i] * this.radialScale, 48, 1, true);
     this.wall = new THREE.Mesh(geo, mat);
     this.wall.name = 'borehole-wall';
     this.wall.userData = { kind: 'wall', wellId: this.well.id };
@@ -968,7 +981,7 @@ void main(){
 
   /** Field-scale ribbon coloured by the active property; fades in as the camera pulls back. */
   private buildOverviewTube() {
-    const geo = this.tube(0, this.well.tdMD, () => 6, 10, 3);
+    const geo = this.tube(0, this.samples[this.samples.length - 1], () => 6, 10, 3);
     const mat = new THREE.ShaderMaterial({
       uniforms: { ...this.uniforms, uFade: { value: 0 }, uFormColorArr: this.uniforms.uFormColor },
       transparent: true,
@@ -993,6 +1006,7 @@ uniform float uFade; uniform float uMode; uniform float uResLogMin; uniform floa
 varying vec3 vN;
 void main(){
   #include <logdepthbuf_fragment>
+  if (vMd > uClipMd) discard;
   vec4 A = fetchNearest(uDataA, vMd);
   vec4 B = fetchNearest(uDataB, vMd);
   vec4 C = fetchNearest(uDataC, vMd);
@@ -1034,6 +1048,11 @@ void main(){
    * Swap in re-computed log / interpretation textures without rebuilding any
    * geometry, so camera, cut-away and opacity settings are preserved.
    */
+  /** The textures were refilled in place (a live well grew): new sample count, pay intervals later. */
+  texturesChanged() {
+    this.uniforms.uDataCount.value = this.tex.count;
+  }
+
   updateTextures(tex: WellTextures) {
     const old = this.tex;
     this.tex = tex;
@@ -1150,7 +1169,9 @@ void main(){
       const cls = o.userData.cls as string;
       const maxD = cls === 'tick' ? 900 : 2600;
       o.visible = tunnel ? labelsVisible && md > focusMd - 5 && md < focusMd + 140 && cls !== 'tick' : labelsVisible && (d < maxD || (near && d < 5000));
-      o.element.style.opacity = String(Math.max(0.15, Math.min(1, 1.4 - d / maxD)));
+      // written only when it changes: every style write invalidates the label's style
+      const op = Math.round(Math.max(0.15, Math.min(1, 1.4 - d / maxD)) * 100) / 100;
+      if (o.userData.opacity !== op) o.element.style.opacity = String((o.userData.opacity = op));
     }
   }
 

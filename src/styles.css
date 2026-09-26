@@ -1,0 +1,345 @@
+@import '@tecton/react/globals.css';
+
+/*
+ * BoreWalk is a full-viewport 3D workspace. Everything around the 3D view is
+ * Tecton; the rules below style only what three.js puts in the scene (the
+ * WebGL canvas and the CSS2D labels pinned to wells, tops and tools).
+ */
+/*
+ * App tokens on top of Tecton's theme. Tecton is rem-based, so the root size
+ * is the density knob: text, controls and spacing scale together (the
+ * personalisation dialog sets --ui-root). The accent is the vivid step of
+ * Tecton's violet primary, for what must stand out: cursor, playhead,
+ * selection, slider fill.
+ */
+@theme inline {
+  --color-ui-accent: var(--ui-accent);
+  --color-fg-1: var(--fg-1);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-panel: var(--panel-bg);
+}
+
+@layer base {
+  :root {
+    --ui-root: 15px;
+    --ui-accent: var(--tecton-palette-orchid-460);
+    /* three text levels: values and titles / labels / captions and section headers */
+    --fg-1: var(--foreground);
+    --fg-2: var(--tecton-palette-gray-830);
+    --fg-3: var(--tecton-palette-gray-460);
+    /* panels float over the 3D view; opacity and blur are personal settings */
+    --panel-alpha: 1;
+    --panel-blur: 0px;
+    --panel-bg: color-mix(in oklab, var(--background) calc(var(--panel-alpha) * 100%), transparent);
+  }
+  html {
+    font-size: var(--ui-root);
+  }
+  /* crisper glyphs at the small sizes the chrome uses */
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+  }
+  /* thin scrollbars that stay out of the way until the pointer is over the pane */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  *:hover {
+    scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+  }
+  :root[data-reduce-motion] *,
+  :root[data-reduce-motion] *::before,
+  :root[data-reduce-motion] *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
+}
+
+/* text roles: use these instead of ad-hoc sizes and greys */
+@utility type-title {
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+@utility type-section {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+@utility type-label {
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 400;
+  color: var(--fg-2);
+}
+@utility type-value {
+  font-family: var(--font-mono);
+  font-size: 0.857rem;
+  line-height: 1.15rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-1);
+}
+@utility type-key {
+  font-family: var(--font-mono);
+  font-size: 1.143rem;
+  line-height: 1.45rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+@utility type-caption {
+  font-size: 0.786rem;
+  line-height: 1.05rem;
+  color: var(--fg-3);
+}
+@utility type-unit {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--fg-3);
+}
+/* a floating panel's surface */
+@utility surface-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--panel-blur));
+  border: 1px solid var(--border-subtle);
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--foreground) 4%, transparent) inset,
+    0 8px 24px -8px rgb(0 0 0 / 0.55);
+}
+
+@layer components {
+  .labels-layer {
+    position: absolute !important;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    /* sized by the engine: label changes never reach the layout of the panels around it */
+    contain: strict;
+  }
+
+  canvas.gl {
+    display: block;
+    outline: none;
+    touch-action: none;
+  }
+
+  canvas.gl.measuring {
+    cursor: crosshair !important;
+  }
+
+  /* sizes in rem (written for the 14 px Compact root) so the labels grow with the density setting */
+  .label3d {
+    pointer-events: none;
+    font-size: 0.75rem;
+    line-height: 1.25;
+    color: var(--foreground);
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    /* no backdrop blur: over a canvas that redraws, every label would be re-blurred by the compositor each frame */
+    background: color-mix(in oklab, var(--card) 84%, transparent);
+    border: 1px solid var(--border-subtle);
+    white-space: nowrap;
+    transform-origin: 0 50%;
+    transition: opacity 0.3s;
+  }
+  .label3d b {
+    font-weight: 500;
+    margin-right: 0.35rem;
+  }
+  .label3d span {
+    font-family: var(--font-mono);
+    color: var(--muted-foreground);
+    font-size: 0.68rem;
+  }
+  .label3d.tick,
+  .label3d.ctx {
+    background: none;
+    border: 0;
+    font-family: var(--font-mono);
+    padding: 0;
+    text-shadow: 0 1px 3px #000;
+  }
+  .label3d.tick {
+    color: color-mix(in oklab, var(--foreground) 75%, transparent);
+    font-size: 0.72rem;
+  }
+  .label3d.ctx {
+    color: var(--muted-foreground);
+    font-size: 0.68rem;
+  }
+  /* borders pick up the colour of the 3D object the label names */
+  .label3d.shoe {
+    border-color: rgba(154, 161, 168, 0.35);
+  }
+  .label3d.well {
+    border-color: rgba(127, 227, 255, 0.35);
+  }
+  .label3d.platform {
+    border-color: rgba(255, 181, 71, 0.3);
+  }
+  .label3d.gs.top {
+    border-color: rgba(255, 210, 122, 0.45);
+  }
+  .label3d.gs.base {
+    border-color: rgba(255, 143, 163, 0.45);
+  }
+  .label3d.unc {
+    border-color: rgba(184, 200, 255, 0.4);
+  }
+  /* anti-collision: the colour of the separation-factor status (AC_COLOR) */
+  .label3d.ac.collision {
+    border-color: rgba(255, 90, 103, 0.75);
+  }
+  .label3d.ac.caution {
+    border-color: rgba(255, 181, 71, 0.7);
+  }
+  .label3d.curtain {
+    border-color: rgba(155, 226, 122, 0.4);
+  }
+  .label3d.owc {
+    border-color: rgba(79, 179, 255, 0.5);
+  }
+  .label3d.owc span,
+  .label3d.measure span {
+    display: block;
+  }
+  .label3d.owc.field {
+    background: rgba(10, 30, 50, 0.84);
+  }
+  .label3d.measure {
+    border-color: rgba(255, 210, 122, 0.6);
+    background: rgba(20, 16, 8, 0.88);
+  }
+  .label3d.measure b {
+    font-size: 0.9rem;
+    color: #ffd27a;
+  }
+}
+
+/* ------------------------------------------------------------------ menus */
+/* menu and list items stay on one line; the popover grows to fit them */
+@layer components {
+  [role='menu'] [role^='menuitem'],
+  [role='listbox'] [role='option'] {
+    white-space: nowrap;
+  }
+}
+
+/* ------------------------------------------------------------------ page loader */
+@layer components {
+  .loader-in {
+    animation: loader-in 900ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .loader-vignette {
+    background:
+      radial-gradient(60% 50% at 50% 42%, color-mix(in oklab, var(--ui-accent) 9%, transparent), transparent 70%),
+      radial-gradient(120% 90% at 50% 50%, transparent 55%, rgb(0 0 0 / 0.55) 100%);
+  }
+  .light .loader-vignette {
+    background:
+      radial-gradient(60% 50% at 50% 42%, color-mix(in oklab, var(--ui-accent) 10%, transparent), transparent 70%),
+      radial-gradient(120% 90% at 50% 50%, transparent 60%, rgb(0 0 0 / 0.06) 100%);
+  }
+  /* each loading step slides up in over the last one */
+  .loader-step {
+    animation: loader-step 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  /* done: the words and the line lift away while the particles burst */
+  .loader[data-leaving] .loader-status,
+  .loader[data-leaving] h1,
+  .loader[data-leaving] .type-label {
+    transition:
+      opacity 600ms ease-out,
+      transform 700ms cubic-bezier(0.4, 0, 0.2, 1),
+      filter 700ms ease-out;
+    opacity: 0;
+    transform: translateY(-8px);
+    filter: blur(4px);
+  }
+  .loader-sheen {
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--foreground) 35%, transparent), transparent);
+    animation: loader-sheen 1.6s ease-in-out infinite;
+  }
+}
+@keyframes loader-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+@keyframes loader-step {
+  from {
+    opacity: 0;
+    transform: translateY(70%);
+    filter: blur(2px);
+  }
+}
+@keyframes loader-sheen {
+  from {
+    left: -25%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+/* ------------------------------------------------------------------ the page loader and intro */
+/* the loader fades away over the finished workspace (it lifts a little and
+   softens as it goes) while the workspace fades up from just under full size;
+   LOADER_FADE_MS in Root.tsx waits for the longest of these */
+.loader[data-leaving] {
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(1.03);
+  filter: blur(6px);
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 200ms,
+    transform 1500ms cubic-bezier(0.2, 0.6, 0.2, 1),
+    filter 1300ms ease-in 200ms;
+}
+.app-reveal {
+  transition:
+    opacity 1300ms cubic-bezier(0.4, 0, 0.2, 1) 250ms,
+    transform 1500ms cubic-bezier(0.2, 0.8, 0.2, 1) 100ms;
+}
+.app-reveal[data-veiled] {
+  opacity: 0;
+  transform: scale(0.985);
+}
+/* the intro: the 3D view first, alone; the workspace around it fades in as the
+   camera settles (html[data-intro] is 'scene' from before the loader leaves,
+   so the workspace is hidden at once; then 'chrome', then removed) */
+html[data-intro='chrome'] :is([data-chrome], [data-col], [data-rail]) {
+  transition:
+    opacity 1100ms cubic-bezier(0.4, 0, 0.2, 1),
+    translate 1200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+html[data-intro='scene'] :is([data-chrome], [data-col], [data-rail]) {
+  opacity: 0;
+  pointer-events: none;
+}
+html[data-intro='scene'] [data-col='left'],
+html[data-intro='scene'] [data-rail] {
+  translate: -16px 0;
+}
+html[data-intro='scene'] [data-col='right'] {
+  translate: 16px 0;
+}
+html[data-intro='scene'] [data-col='bottom'] {
+  translate: 0 16px;
+}
+

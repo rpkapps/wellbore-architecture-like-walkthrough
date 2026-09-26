@@ -28,15 +28,44 @@ export interface WellTextures {
 /**
  * Pack logs + interpretation along MD into float textures so that every
  * shader (borehole wall, invasion shells, fluid volume) samples the same data.
+ * A well being drilled (`buildAhead`) gets room below TD, so its textures can
+ * be refilled from the bit down in place (`updateWellTextures`).
  */
 export function buildWellTextures(well: Well): WellTextures {
   const md0 = 0;
-  const md1 = well.tdMD;
-  const count = Math.ceil((md1 - md0) / DATA_STEP) + 1;
-  const rows = Math.ceil(count / WIDTH);
+  const count = Math.ceil((well.tdMD - md0) / DATA_STEP) + 1;
+  const capacity = Math.ceil((well.tdMD + well.buildAhead * 2 - md0) / DATA_STEP) + 1;
+  const rows = Math.ceil(capacity / WIDTH);
   const A = new Float32Array(WIDTH * rows * 4).fill(MISSING);
   const B = new Float32Array(WIDTH * rows * 4).fill(MISSING);
   const C = new Float32Array(WIDTH * rows * 4).fill(MISSING);
+  fillSamples(well, A, B, C, md0, 0, count);
+  const mk = (arr: Float32Array) => {
+    const t = new THREE.DataTexture(arr, WIDTH, rows, THREE.RGBAFormat, THREE.FloatType);
+    t.minFilter = THREE.NearestFilter;
+    t.magFilter = THREE.NearestFilter;
+    t.needsUpdate = true;
+    return t;
+  };
+  return { a: mk(A), b: mk(B), c: mk(C), md0, count, width: WIDTH, step: DATA_STEP };
+}
+
+/**
+ * Refill the samples from `fromMd` to TD in place. Returns false when TD has
+ * outgrown the textures' room (then build new ones).
+ */
+export function updateWellTextures(tex: WellTextures, well: Well, fromMd: number): boolean {
+  const count = Math.ceil((well.tdMD - tex.md0) / DATA_STEP) + 1;
+  const A = tex.a.image.data as Float32Array;
+  if (count * 4 > A.length) return false;
+  const from = Math.max(0, Math.min(tex.count, Math.floor((fromMd - tex.md0) / DATA_STEP)));
+  fillSamples(well, A, tex.b.image.data as Float32Array, tex.c.image.data as Float32Array, tex.md0, from, count);
+  tex.count = count;
+  tex.a.needsUpdate = tex.b.needsUpdate = tex.c.needsUpdate = true;
+  return true;
+}
+
+function fillSamples(well: Well, A: Float32Array, B: Float32Array, C: Float32Array, md0: number, from: number, to: number) {
   const logs = well.logs;
   const deep = findCurve(logs, 'RT');
   const shallow = findCurve(logs, 'RSHAL');
@@ -49,7 +78,7 @@ export function buildWellTextures(well: Well): WellTextures {
   const p = well.petro;
   const d = logs?.depth;
   let zi = 0;
-  for (let i = 0; i < count; i++) {
+  for (let i = from; i < to; i++) {
     const md = md0 + i * DATA_STEP;
     const o = i * 4;
     while (zi < well.zones.length - 1 && md >= well.zones[zi].baseMD) zi++;
@@ -77,21 +106,15 @@ export function buildWellTextures(well: Well): WellTextures {
         const k = nearestIndex(d, md);
         C[o] = k >= 0 && Math.abs(d[k] - md) < 1 ? p.pay[k] : MISSING;
       }
-      C[o + 1] = Number.isFinite(s(rhob)) ? s(rhob) : MISSING;
-      C[o + 2] = Number.isFinite(s(nphi)) ? s(nphi) : MISSING;
+      const rh = s(rhob);
+      const np = s(nphi);
+      C[o + 1] = Number.isFinite(rh) ? rh : MISSING;
+      C[o + 2] = Number.isFinite(np) ? np : MISSING;
       const r = s(rop);
       C[o + 3] = r > 0.05 && r < 1000 ? r : MISSING;
     }
     B[o + 3] = fidx;
   }
-  const mk = (arr: Float32Array) => {
-    const t = new THREE.DataTexture(arr, WIDTH, rows, THREE.RGBAFormat, THREE.FloatType);
-    t.minFilter = THREE.NearestFilter;
-    t.magFilter = THREE.NearestFilter;
-    t.needsUpdate = true;
-    return t;
-  };
-  return { a: mk(A), b: mk(B), c: mk(C), md0, count, width: WIDTH, step: DATA_STEP };
 }
 
 function nearestIndex(d: Float64Array, md: number): number {

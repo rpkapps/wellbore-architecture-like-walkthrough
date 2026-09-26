@@ -1,0 +1,432 @@
+[
+ {
+  "fileId": "HAND-MADE-1",
+  "frame": "CODES",
+  "indexType": "TIME",
+  "index": "TIME",
+  "well": "WELL-C",
+  "field": "GULLFAKS",
+  "company": null,
+  "originFileId": "codes file",
+  "creationTime": "2024-03-05T12:30:00",
+  "skipped": [
+   "R_ARRAY"
+  ],
+  "columns": [
+   {
+    "name": "TIME",
+    "unit": null,
+    "description": "Acquisition time",
+    "reprc": 21,
+    "values": [
+     1709641800000,
+     1709641800250,
+     1709641800500,
+     1709641800750,
+     1709641801000,
+     1709641801500,
+     1709641801750,
+     1709641802000,
+     1709641802250,
+     1709641802500,
+     1709641802750
+    ]
+   },
+   {
+    "name": "A_FSHORT",
+    "unit": "m",
+    "description": "Channel FSHORT",
+    "reprc": 1,
+    "values": [
+     1.5,
+     -153.0,
+     0.25,
+     7.0,
+     -0.5,
+     1.5,
+     -153.0,
+     0.25,
+     7.0,
+     -0.5,
+     1000.0
+    ]
+   },
+   {
+    "name": "B_ISINGL",
+    "unit": "m",
+    "description": "Channel ISINGL",
+    "reprc": 5,
+    "values": [
+     118.625,
+     -237.25,
+     355.875,
+     -474.5,
+     593.125,
+     830.375,
+     -949.0,
+     1067.625,
+     -1186.25,
+     1304.875,
+     -1423.5
+    ]
+   },
+   {
+    "name": "C_VSINGL",
+    "unit": "m",
+    "description": "Channel VSINGL",
+    "reprc": 6,
+    "values": [
+     153.0,
+     152.875,
+     153.25,
+     152.625,
+     153.5,
+     153.75,
+     152.125,
+     154.0,
+     151.875,
+     154.25,
+     151.625
+    ]
+   },
+   {
+    "name": "D_FSING1",
+    "unit": null,
+    "description": "Channel FSING1",
+    "reprc": 3,
+    "values": [
+     0.0,
+     2.5,
+     5.0,
+     7.5,
+     10.0,
+     15.0,
+     17.5,
+     20.0,
+     22.5,
+     25.0,
+     27.5
+    ]
+   },
+   {
+    "name": "E_FSING2",
+    "unit": null,
+    "description": "Channel FSING2",
+    "reprc": 4,
+    "values": [
+     -0.0,
+     -1.25,
+     -2.5,
+     -3.75,
+     -5.0,
+     -7.5,
+     -8.75,
+     -10.0,
+     -11.25,
+     -12.5,
+     -13.75
+    ]
+   },
+   {
+    "name": "F_FDOUB1",
+    "unit": null,
+    "description": "Channel FDOUB1",
+    "reprc": 8,
+    "values": [
+     0.0,
+     3.141592653589793,
+     6.283185307179586,
+     9.42477796076938,
+     12.566370614359172,
+     18.84955592153876,
+     21.991148575128552,
+     25.132741228718345,
+     28.274333882308138,
+     31.41592653589793,
+     34.55751918948772
+    ]
+   },
+   {
+    "name": "G_FDOUB2",
+    "unit": null,
+    "description": "Channel FDOUB2",
+    "reprc": 9,
+    "values": [
+     0.0,
+     2.718281828459045,
+     5.43656365691809,
+     8.154845485377136,
+     10.87312731383618,
+     16.30969097075427,
+     19.027972799213316,
+     21.74625462767236,
+     24.464536456131405,
+     27.18281828459045,
+     29.901100113049495
+    ]
+   },
+   {
+    "name": "H_CSINGL",
+    "unit": null,
+    "description": "Channel CSINGL",
+    "reprc": 10,
+    "values": [
+     0.5,
+     1.5,
+     2.5,
+     3.5,
+     4.5,
+     6.5,
+     7.5,
+     8.5,
+     9.5,
+     10.5,
+     11.5
+    ]
+   },
+   {
+    "name": "I_CDOUBL",
+    "unit": null,
+    "description": "Channel CDOUBL",
+    "reprc": 11,
+    "values": [
+     1.0,
+     0.5,
+     0.3333333333333333,
+     0.25,
+     0.2,
+     0.14285714285714285,
+     0.125,
+     0.1111111111111111,
+     0.1,
+     0.09090909090909091,
+     0.08333333333333333
+    ]
+   },
+   {
+    "name": "J_SSHORT",
+    "unit": null,
+    "description": "Channel SSHORT",
+    "reprc": 12,
+    "values": [
+     -100.0,
+     -99.0,
+     -98.0,
+     -97.0,
+     -96.0,
+     -94.0,
+     -93.0,
+     -92.0,
+     -91.0,
+     -90.0,
+     -89.0
+    ]
+   },
+   {
+    "name": "K_SNORM",
+    "unit": null,
+    "description": "Channel SNORM",
+    "reprc": 13,
+    "values": [
+     -30000.0,
+     -29000.0,
+     -28000.0,
+     -27000.0,
+     -26000.0,
+     -24000.0,
+     -23000.0,
+     -22000.0,
+     -21000.0,
+     -20000.0,
+     -19000.0
+    ]
+   },
+   {
+    "name": "L_USHORT",
+    "unit": null,
+    "description": "Channel USHORT",
+    "reprc": 15,
+    "values": [
+     200.0,
+     201.0,
+     202.0,
+     203.0,
+     204.0,
+     206.0,
+     207.0,
+     208.0,
+     209.0,
+     210.0,
+     211.0
+    ]
+   },
+   {
+    "name": "M_ULONG",
+    "unit": null,
+    "description": "Channel ULONG",
+    "reprc": 17,
+    "values": [
+     4000000000.0,
+     4000000001.0,
+     4000000002.0,
+     4000000003.0,
+     4000000004.0,
+     4000000006.0,
+     4000000007.0,
+     4000000008.0,
+     4000000009.0,
+     4000000010.0,
+     4000000011.0
+    ]
+   },
+   {
+    "name": "N_UVARI",
+    "unit": null,
+    "description": "Channel UVARI",
+    "reprc": 18,
+    "values": [
+     5.0,
+     200.0,
+     70000.0,
+     16383.0,
+     16384.0,
+     5.0,
+     200.0,
+     70000.0,
+     16383.0,
+     16384.0,
+     127.0
+    ]
+   },
+   {
+    "name": "O_STATUS",
+    "unit": null,
+    "description": "Channel STATUS",
+    "reprc": 26,
+    "values": [
+     0.0,
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ]
+   },
+   {
+    "name": "P_ASCII",
+    "unit": null,
+    "description": "Channel ASCII",
+    "reprc": 20,
+    "values": [
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   },
+   {
+    "name": "Q_ABSENT",
+    "unit": "ohm.m",
+    "description": "Channel ABSENT",
+    "reprc": 2,
+    "values": [
+     null,
+     2.0,
+     3.0,
+     null,
+     5.0,
+     null,
+     8.0,
+     9.0,
+     null,
+     11.0,
+     12.0
+    ]
+   },
+   {
+    "name": "S_EXPLICIT",
+    "unit": "s",
+    "description": "Explicit",
+    "reprc": 7,
+    "values": [
+     0.0,
+     0.001,
+     0.002,
+     0.003,
+     0.004,
+     0.006,
+     0.007,
+     0.008,
+     0.009000000000000001,
+     0.01,
+     0.011
+    ]
+   }
+  ]
+ },
+ {
+  "fileId": "HAND-MADE-2",
+  "frame": "NOINDEX",
+  "indexType": null,
+  "index": "FRAMENO",
+  "well": "WELL-D",
+  "field": "FIELD-D",
+  "company": "COMP-D",
+  "originFileId": "second file",
+  "creationTime": null,
+  "skipped": [],
+  "columns": [
+   {
+    "name": "FRAMENO",
+    "values": [
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0
+    ]
+   },
+   {
+    "name": "X",
+    "unit": "m",
+    "description": null,
+    "reprc": 2,
+    "values": [
+     0.0,
+     0.5,
+     1.0,
+     1.5,
+     2.0,
+     2.5
+    ]
+   },
+   {
+    "name": "Y",
+    "unit": null,
+    "description": null,
+    "reprc": 13,
+    "values": [
+     0.0,
+     -1.0,
+     -2.0,
+     -3.0,
+     -4.0,
+     -5.0
+    ]
+   }
+  ]
+ }
+]

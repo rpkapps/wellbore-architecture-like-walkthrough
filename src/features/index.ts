@@ -1,8 +1,10 @@
 import type { App } from '../ui/app';
+import { AntiCollisionFeature } from './anticollision';
 import { ContactsFeature } from './contacts';
 import { CorrelationFeature } from './correlation';
 import { CrossplotFeature } from './crossplot';
 import { CurtainFeature } from './curtain';
+import { CylinderFeature } from './cylinder';
 import { GeosteerFeature } from './geosteer';
 import { MapViewFeature } from './mapview';
 import { MeasureFeature } from './measure';
@@ -14,7 +16,7 @@ import { SnapshotFeature } from './snapshot';
 import { UncertaintyFeature } from './uncertainty';
 import { ViewsFeature } from './views';
 
-/** One instance of every optional feature; the Features panel switches them on and off. */
+/** One instance of every optional feature; each is switched where it lives (its `home` in the registry). */
 export function createFeatureModules(app: App): FeatureModule[] {
   return [
     new GeosteerFeature(app),
@@ -25,6 +27,8 @@ export function createFeatureModules(app: App): FeatureModule[] {
     new ContactsFeature(app),
     new RopFeature(app),
     new UncertaintyFeature(app),
+    new AntiCollisionFeature(app),
+    new CylinderFeature(app),
     new ExtraWellsFeature(app),
     new SimulationFeature(app),
     new MapViewFeature(app),
