@@ -2,7 +2,7 @@ import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
 import { ChartScatterIcon, ColumnsIcon, FocusIcon, FoldVerticalIcon, NavigationIcon, RadarIcon, ScissorsIcon, TargetIcon } from 'lucide-react';
 import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
-import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
+import { DEFAULT_PARAMS, PARAM_RANGES, paramProblem, type NumericParam, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
 import { FEATURES, graphicsQuality, labelOf, setGraphicsQuality, type FeatureDef, type FeatureId, type GraphicsQuality } from '../features/registry';
 import { CorrelationFeature } from '../features/correlation';
@@ -451,7 +451,8 @@ export function appActions(): AnyAction<App>[] {
         const visible = app.engine.geology.state.get(sel.id)?.visible;
         return visible === undefined ? null : { input: { formation: sel.id, visible: !visible }, label: visible ? 'Hide' : 'Show' };
       },
-      run: (app, { formation, visible, opacity }) => app.setLayer(formation, { visible, opacity }),
+      run: (app, { formation, visible, opacity }) =>
+        app.setLayer(formation, { ...(visible !== undefined ? { visible } : {}), ...(opacity !== undefined ? { opacity } : {}) }),
     }),
     A({
       id: 'scene.isolate',
@@ -1027,7 +1028,9 @@ export function appActions(): AnyAction<App>[] {
       id: 'interp.set_parameter',
       title: 'Set interpretation parameter',
       description:
-        'Changes a petrophysical parameter of the active well (Vsh from GR, porosity, Archie / Simandoux saturation, net pay cut-offs) and re-interprets. Keys: grClean, grShale, rhoMa, rhoFl, a, m, n, rw, rwTemp, rsh, cutVsh, cutPhi, cutSw.',
+        `Changes a petrophysical parameter of the active well (Vsh from GR, porosity, Archie / Simandoux saturation, net pay cut-offs) and re-interprets. Allowed ranges: ${Object.entries(PARAM_RANGES)
+          .map(([k, [lo, hi]]) => `${k} ${lo}–${hi}`)
+          .join(', ')}; grClean stays below grShale.`,
       category: 'Interpretation',
       where: 'Interpretation',
       input: z.object({ key: z.enum(NUMERIC_PARAMS), value: z.number() }),
@@ -1042,7 +1045,10 @@ export function appActions(): AnyAction<App>[] {
       },
       enabled: (app) => !!app.engine.activeWell.petro?.available,
       run: (app, { key, value }) => {
-        (app.engine.activeWell.params as unknown as Record<string, number>)[key] = value;
+        const params = app.engine.activeWell.params;
+        const problem = paramProblem(params, key as NumericParam, value);
+        if (problem) throw new Error(problem);
+        (params as unknown as Record<string, number>)[key] = value;
         app.reinterpret();
         return { key, value };
       },

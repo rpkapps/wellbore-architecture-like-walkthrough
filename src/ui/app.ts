@@ -657,7 +657,7 @@ export class App {
   }
 
   setWellboreDisplay(d: Partial<WellboreDisplay>) {
-    Object.assign(this.wellbore, d);
+    Object.assign(this.wellbore, definedOnly(d));
     this.applyWellboreDisplay();
     this.sceneRev.bump();
   }
@@ -677,6 +677,7 @@ export class App {
   }
 
   setDisplay(d: Partial<SceneDisplay>) {
+    d = definedOnly(d);
     Object.assign(this.display, d);
     const e = this.engine;
     const s = this.display;
@@ -1291,4 +1292,9 @@ export class App {
       this.hud.set({ heading: hd, where: this.where, nav: this.nav, camY: this.camY });
     }
   }
+}
+
+/** A partial update without its missing values: an undefined field or a NaN never overwrites a setting. */
+function definedOnly<T extends object>(d: Partial<T>): Partial<T> {
+  return Object.fromEntries(Object.entries(d).filter(([, v]) => v !== undefined && !(typeof v === 'number' && !Number.isFinite(v)))) as Partial<T>;
 }
