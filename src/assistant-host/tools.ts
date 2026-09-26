@@ -31,6 +31,9 @@ const READS = new Set(['app.state', 'data.list', 'data.plugins']);
  */
 const ALWAYS_ASK = new Set(['data.connect', 'workspace.reset']);
 
+/** Whether an action waits for the person's approval (the assistant asks first; an answer's `app://action` link refuses it). */
+export const actionNeedsApproval = (a: Pick<AnyAction<App>, 'id' | 'needsApproval'>): boolean => !!a.needsApproval || ALWAYS_ASK.has(a.id);
+
 /** Most choices listed in a tool's description. */
 const MAX_CHOICES = 30;
 
@@ -87,7 +90,7 @@ function actionTool(app: App, a: AnyAction<App>): AssistantTool {
     description: `${a.title}. ${a.description}${where}${applies}${shortcut}${choicesLine(app, a)}`,
     parameters: schemaOf(a),
     kind: READS.has(a.id) ? 'read' : 'write',
-    needsApproval: !!a.needsApproval || ALWAYS_ASK.has(a.id),
+    needsApproval: actionNeedsApproval(a),
     execute: async (args) => {
       if (!app.actions.enabled(a)) throw new Error(`“${a.title}” (${a.id}) is not available right now. Read app.state to see why (e.g. no selection, the well has no logs, the feature is off).`);
       const r = await keepChatInView(app, () => app.actions.run(a.id, a.input ? (args ?? {}) : undefined));

@@ -1,8 +1,9 @@
 import { a2uiPromptGuide, extractA2UIFences } from '../a2ui';
 import { asProviderError, isAbortError, toErrorPart } from '../providers/errors';
+import { INTERRUPTED_RESULT } from '../providers/shared';
 import { abortError } from '../providers/sse';
 import { RENDER_UI, builtinTools } from './builtinTools';
-import { capToolResult, isToolOutput, registerDatasets, summariseDataset } from './datasets';
+import { capToolResult, datasetSeq, isToolOutput, registerDatasets, summariseDataset } from './datasets';
 import { parsePartialJson } from './json';
 import { buildSystemPrompt } from './systemPrompt';
 import { buildToolNameMap, type ToolNameMap } from './toolNames';
@@ -99,13 +100,19 @@ export function uiMessagesFromArgs(args: unknown): unknown[] | undefined {
   return undefined;
 }
 
-/** The message as it stands when a turn is stopped: unfinished calls cancelled, status `stopped`. */
+/**
+ * The message as it stands when a turn is stopped: unfinished calls
+ * cancelled (those already running marked `interrupted`: they may have taken
+ * effect), status `stopped`.
+ */
 export function finalizeStopped(message: ChatMessage, now = Date.now()): ChatMessage {
   let changed = false;
-  const parts = message.parts.map((p) => {
+  const parts = message.parts.map((p): Part => {
     if (p.type === 'tool-call' && (p.state === 'streaming' || p.state === 'awaiting-approval' || p.state === 'running')) {
       changed = true;
-      return { ...p, state: 'cancelled' as const, endedAt: p.endedAt ?? now };
+      const next: ToolCallPart = { ...p, state: 'cancelled', endedAt: p.endedAt ?? now };
+      if (p.state === 'running') Object.assign(next, { interrupted: true, result: { ...INTERRUPTED_RESULT } });
+      return next;
     }
     return p;
   });
@@ -505,7 +512,8 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
           let result: unknown = out === undefined ? { ok: true } : out;
           let ids: string[] | undefined;
           if (isToolOutput(out)) {
-            const registered = registerDatasets(threadNow().datasets, out.datasets ?? [], now());
+            const th = threadNow();
+            const registered = registerDatasets(th.datasets, out.datasets ?? [], now(), datasetSeq(th));
             if (registered.length) {
               opts.addDatasets(registered);
               ids = registered.map((d) => d.id);

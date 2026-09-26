@@ -1,4 +1,4 @@
-import type { Dataset, DatasetColumn, DatasetRow, Json, ToolOutput } from './types';
+import type { Dataset, DatasetColumn, DatasetRow, Json, Thread, ToolOutput } from './types';
 import { safeJsonStringify } from './json';
 
 /*
@@ -12,14 +12,27 @@ export function isToolOutput(x: unknown): x is ToolOutput {
   return !!x && typeof x === 'object' && !Array.isArray(x) && 'content' in x && 'datasets' in x && (Array.isArray((x as ToolOutput).datasets) || (x as ToolOutput).datasets === undefined);
 }
 
-/** The next free `ds_<n>` id of a thread. */
-export function nextDatasetId(existing: Record<string, unknown>): string {
+const maxDatasetNumber = (existing: Record<string, unknown>) => {
   let max = 0;
   for (const id of Object.keys(existing)) {
     const m = /^ds_(\d+)$/.exec(id);
     if (m) max = Math.max(max, Number(m[1]));
   }
-  return `ds_${max + 1}`;
+  return max;
+};
+
+/** The next free `ds_<n>` id of a thread, never below `ds_<floor>` (the thread's counter). */
+export function nextDatasetId(existing: Record<string, unknown>, floor = 1): string {
+  return `ds_${Math.max(maxDatasetNumber(existing) + 1, floor)}`;
+}
+
+/**
+ * The number the thread's next dataset gets: its counter, or the highest
+ * `ds_<n>` + 1 for a thread saved before the counter existed. Ids are never
+ * reused, so a saved dataset never changes under its key.
+ */
+export function datasetSeq(thread: Pick<Thread, 'datasets' | 'nextDatasetSeq'>): number {
+  return Math.max(thread.nextDatasetSeq ?? 1, maxDatasetNumber(thread.datasets) + 1);
 }
 
 const inferType = (rows: DatasetRow[], key: string): DatasetColumn['type'] => {
@@ -33,13 +46,13 @@ const inferType = (rows: DatasetRow[], key: string): DatasetColumn['type'] => {
   return undefined;
 };
 
-/** Gives incoming datasets thread-unique ids and fills in missing column descriptions. */
-export function registerDatasets(existing: Record<string, Dataset>, incoming: Omit<Dataset, 'id' | 'createdAt'>[], now = Date.now()): Dataset[] {
+/** Gives incoming datasets thread-unique ids (from `ds_<floor>` on: the thread's `datasetSeq`) and fills in missing column descriptions. */
+export function registerDatasets(existing: Record<string, Dataset>, incoming: Omit<Dataset, 'id' | 'createdAt'>[], now = Date.now(), floor = 1): Dataset[] {
   const taken: Record<string, unknown> = { ...existing };
   const out: Dataset[] = [];
   for (const d of incoming) {
     if (!d || !Array.isArray(d.rows)) continue;
-    const id = nextDatasetId(taken);
+    const id = nextDatasetId(taken, floor);
     taken[id] = true;
     const rows = d.rows;
     const columns: DatasetColumn[] =
@@ -73,6 +86,8 @@ export interface DatasetSummary {
   /** the first 3 and last 2 rows */
   sample: DatasetRow[];
   stats: Record<string, ColumnStats>;
+  /** the rows were not saved (the browser's storage was full): read back after a reload, the dataset is empty */
+  note?: string;
 }
 
 /** What the model is told about a dataset. */
@@ -140,6 +155,7 @@ export function summariseDataset(ds: Dataset): DatasetSummary {
     stats,
   };
   if (ds.source) out.source = ds.source;
+  if (ds.trimmed) out.note = `Its ${ds.trimmed.rowCount} rows were too many to save in the browser and are gone after a reload: run the tool again to read them.`;
   return out;
 }
 

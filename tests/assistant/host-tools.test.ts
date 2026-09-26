@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { AssistantTool, ToolContext, ToolOutput } from '../../src/assistant/core/types';
 import { ActionRegistry, defineAction } from '../../src/actions/registry';
 import { loadVolve, type FieldModel } from '../../src/data/dataset';
 import { dataTools, MAX_ROWS } from '../../src/assistant-host/dataTools';
 import { linkInput, parseAppLink } from '../../src/assistant-host/links';
-import { appTools } from '../../src/assistant-host/tools';
+import { onLink } from '../../src/assistant-host/host';
+import { actionNeedsApproval, appTools } from '../../src/assistant-host/tools';
 import { findWell, parseIsoDate, resolveCurve } from '../../src/assistant-host/wells';
 import type { App } from '../../src/ui/app';
 
@@ -182,5 +183,29 @@ describe('app links', () => {
     expect(l.target).toBe('view.color_by');
     expect(linkInput(l.query)).toEqual({ mode: 'hydrocarbon' });
     expect(parseAppLink('https://example.com')).toBeNull();
+  });
+});
+
+describe('approval of app actions', () => {
+  it('an app:// link refuses every action the assistant would ask about, including the always-ask ones', async () => {
+    const ran: string[] = [];
+    const reg = new ActionRegistry<object>({});
+    const action = (id: string, needsApproval?: boolean) =>
+      defineAction({ id, title: id, description: '.', category: 'Workspace', needsApproval, run: () => void ran.push(id) });
+    reg.register(action('workspace.reset'), action('data.connect'), action('workspace.delete', true), action('view.reset_camera'));
+    const toast = vi.fn();
+    const app = { actions: reg, toast } as unknown as App;
+    const tools = new Map(appTools({ ...app, field, engine: undefined, flags: undefined, feature: () => undefined, workspace: { isShown: () => false } } as unknown as App).map((t) => [t.name, t]));
+    for (const id of ['workspace.reset', 'data.connect', 'workspace.delete']) {
+      expect(actionNeedsApproval(reg.get(id)!)).toBe(true);
+      expect(tools.get(id)!.needsApproval).toBe(true);
+      await onLink(app, `app://action/${id}`);
+    }
+    expect(ran).toEqual([]);
+    expect(toast).toHaveBeenCalledTimes(3);
+    expect(toast.mock.calls[0]).toEqual([expect.stringContaining('ask the assistant'), 'error']);
+    expect(actionNeedsApproval(reg.get('view.reset_camera')!)).toBe(false);
+    await onLink(app, 'app://action/view.reset_camera');
+    expect(ran).toEqual(['view.reset_camera']);
   });
 });

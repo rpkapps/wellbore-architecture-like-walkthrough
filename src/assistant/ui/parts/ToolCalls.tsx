@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import { cn } from 'cn';
-import { BanIcon, CheckIcon, ChevronDownIcon, ShieldAlertIcon, WrenchIcon, XIcon } from 'lucide-react';
+import { BanIcon, CheckIcon, ChevronDownIcon, CircleAlertIcon, ShieldAlertIcon, WrenchIcon, XIcon } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@tecton/react/components/collapsible';
 import { Spinner } from '@tecton/react/components/spinner';
 import { CopyButton } from '@tecton/react/tecton/copy-button';
@@ -11,8 +11,9 @@ import { argsSummary, formatDuration, prettyJson } from '../format';
 const TRIGGER_CLASS =
   'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring';
 
-/** The icon of a tool call's state: spinner, check, cross, shield, slash. */
-export function ToolStateIcon({ state }: { state: ToolCallState }) {
+/** The icon of a tool call's state: spinner, check, cross, shield, slash (an alert for a call stopped while it ran: it may have taken effect). */
+export function ToolStateIcon({ state, interrupted }: { state: ToolCallState; interrupted?: boolean }) {
+  if (state === 'cancelled' && interrupted) return <CircleAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />;
   switch (state) {
     case 'streaming':
     case 'running':
@@ -60,6 +61,11 @@ function JsonBlock({ label, value, tone }: { label: string; value: unknown; tone
 
 const duration = (call: ToolCallPart) => (call.startedAt && call.endedAt ? formatDuration(call.endedAt - call.startedAt) : '');
 
+/** A call stopped while it ran is not crossed out: it may have taken effect. */
+const interrupted = (call: ToolCallPart) => call.state === 'cancelled' && !!call.interrupted;
+const stateLabel = (call: ToolCallPart) => (interrupted(call) ? 'stopped while running' : STATE_LABEL[call.state]);
+const outcome = (call: ToolCallPart) => (call.state === 'denied' ? 'Denied' : interrupted(call) ? 'Interrupted' : call.state === 'cancelled' ? 'Cancelled' : duration(call));
+
 /** One call: state icon, title, a one-line summary of its arguments, duration; expands to the JSON. */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCallPart }) {
   const { toolTitle } = usePanel();
@@ -69,11 +75,19 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCallPart }) {
   const summary = argsSummary(call.args);
   return (
     <Collapsible data-slot="assistant-tool-row" data-state={call.state} className="group/tool min-w-0" isExpanded={expanded} onExpandedChange={setExpanded}>
-      <CollapsibleTrigger className={TRIGGER_CLASS} aria-label={`${title}, ${STATE_LABEL[call.state]}${summary ? `: ${summary}` : ''}`}>
-        <ToolStateIcon state={call.state} />
-        <span className={cn('shrink-0 truncate font-medium text-foreground', active && 'shimmer motion-reduce:shimmer-none', (call.state === 'denied' || call.state === 'cancelled') && 'text-muted-foreground line-through')}>{title}</span>
+      <CollapsibleTrigger className={TRIGGER_CLASS} aria-label={`${title}, ${stateLabel(call)}${summary ? `: ${summary}` : ''}`}>
+        <ToolStateIcon state={call.state} interrupted={call.interrupted} />
+        <span
+          className={cn(
+            'shrink-0 truncate font-medium text-foreground',
+            active && 'shimmer motion-reduce:shimmer-none',
+            (call.state === 'denied' || call.state === 'cancelled') && !interrupted(call) && 'text-muted-foreground line-through',
+          )}
+        >
+          {title}
+        </span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>
-        <span className="shrink-0 text-muted-foreground tabular-nums">{call.state === 'denied' ? 'Denied' : call.state === 'cancelled' ? 'Cancelled' : duration(call)}</span>
+        <span className="shrink-0 text-muted-foreground tabular-nums">{outcome(call)}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-expanded/tool:rotate-180 motion-reduce:transition-none" aria-hidden />
       </CollapsibleTrigger>
       {call.state === 'error' && call.error && !expanded && <p className="line-clamp-2 ps-7 pe-2 pb-1 text-xs text-destructive">{call.error}</p>}

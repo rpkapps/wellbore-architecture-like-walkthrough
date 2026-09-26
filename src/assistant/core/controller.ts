@@ -3,9 +3,10 @@ import { ProviderError, asProviderError, isAbortError } from '../providers/error
 import { presetById } from '../providers/presets';
 import type { FetchLike } from '../providers/shared';
 import { finalizeStopped, runTurn } from './agent';
+import { datasetSeq } from './datasets';
 import { newId } from './ids';
 import { safeJsonStringify } from './json';
-import { createPersistence, type ThreadMeta } from './persistence';
+import { createPersistence, type Persistence, type ThreadMeta } from './persistence';
 import { createStore, threadMeta, titleFrom } from './store';
 import { buildTurnState } from './systemPrompt';
 import type {
@@ -42,6 +43,8 @@ export interface CreateAssistantOptions {
   fetch?: FetchLike;
   /** `memory` keeps nothing across reloads */
   storage?: 'auto' | 'memory';
+  /** where threads and settings live, instead of the browser's storage (tests, apps with their own) */
+  persistence?: Persistence;
   /** waits before the automatic retry of a transient failure (tests pass a fast one) */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
@@ -86,7 +89,18 @@ function normaliseSettings(s: Partial<AssistantSettings> | null): AssistantSetti
   return out;
 }
 
-/** A thread read back from storage: a turn that was cut off by a reload reads as stopped. */
+/** Dataset ids that the given messages' tool calls produced. */
+const datasetsOf = (messages: ChatMessage[]) => {
+  const ids = new Set<string>();
+  for (const m of messages) for (const p of m.parts) if (p.type === 'tool-call') p.datasets?.forEach((d) => ids.add(d));
+  return ids;
+};
+
+/**
+ * A thread read back from storage: a turn that was cut off by a reload reads
+ * as stopped, and datasets no message refers to (left by a regenerated
+ * answer in an older version) are dropped, their ids not reused.
+ */
 function reviveThread(t: Thread): Thread {
   let changed = false;
   const messages = t.messages.map((m) => {
@@ -95,20 +109,21 @@ function reviveThread(t: Thread): Thread {
     changed = true;
     return finalizeStopped(m);
   });
-  return changed ? { ...t, messages } : t;
+  const used = datasetsOf(messages);
+  const unused = Object.keys(t.datasets).filter((id) => !used.has(id));
+  if (!changed && !unused.length) return t;
+  const out: Thread = { ...t, messages };
+  if (unused.length) {
+    out.nextDatasetSeq = datasetSeq(t);
+    out.datasets = Object.fromEntries(Object.entries(t.datasets).filter(([id]) => used.has(id)));
+  }
+  return out;
 }
-
-/** Dataset ids that the given messages' tool calls produced. */
-const datasetsOf = (messages: ChatMessage[]) => {
-  const ids = new Set<string>();
-  for (const m of messages) for (const p of m.parts) if (p.type === 'tool-call') p.datasets?.forEach((d) => ids.add(d));
-  return ids;
-};
 
 /** Creates the assistant for a host. */
 export function createAssistant(host: AssistantHost, opts: CreateAssistantOptions = {}): AssistantEngine {
   const storageKey = host.storageKey || host.appName || 'app';
-  const persistence = createPersistence(storageKey, opts.storage ?? 'auto');
+  const persistence = opts.persistence ?? createPersistence(storageKey, opts.storage ?? 'auto');
   let settings = normaliseSettings(persistence.loadSettings());
   let metas: ThreadMeta[] = [];
   const threads = new Map<string, Thread>();
@@ -118,7 +133,8 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
   let error: ErrorPart | null = null;
   let turn: ActiveTurn | null = null;
   const always = new Map<string, Set<string>>();
-  let loadToken = 0;
+  /** threads being read from storage (shown as a placeholder meanwhile) */
+  const loading = new Map<string, Promise<void>>();
   let disposed = false;
 
   // ------------------------------------------------------------ snapshots
@@ -256,7 +272,7 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
         if (!th) return;
         const datasets = { ...th.datasets };
         for (const d of ds) datasets[d.id] = d;
-        putThread({ ...th, datasets }, false);
+        putThread({ ...th, datasets, nextDatasetSeq: datasetSeq({ datasets, nextDatasetSeq: th.nextDatasetSeq }) }, false);
       },
       requestApproval: (part) =>
         new Promise<boolean>((resolve) => {
@@ -302,9 +318,24 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     return parts.map((p, j) => (j === i && p.type === 'context' ? { ...p, state } : p));
   };
 
-  const appendUserMessage = (parts: Part[]) => {
+  /**
+   * Runs an action on the thread on screen once it is loaded: a message sent
+   * while a saved thread is still being read waits for its history, so the
+   * request carries it and the save does not overwrite it.
+   */
+  const whenLoaded = (action: (threadId: string) => void) => {
+    const id = current.id;
+    if (!loading.has(id)) return action(id);
+    void (async () => {
+      for (let p = loading.get(id); p; p = loading.get(id)) await p;
+      if (!disposed && threads.has(id)) action(id);
+    })();
+  };
+
+  const appendUserMessage = (threadId: string, parts: Part[]) => {
     stopTurn();
-    const thread = current;
+    const thread = threads.get(threadId);
+    if (!thread) return;
     const msg: ChatMessage = { id: newId('m'), role: 'user', parts: withState(parts, thread), createdAt: Date.now() };
     const first = !thread.messages.some((m) => m.role === 'user');
     let title = thread.title;
@@ -315,11 +346,13 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       title = titleFrom(text || event?.label || event?.name || file?.name || 'New chat');
     }
     const next: Thread = { ...thread, title, messages: [...thread.messages, msg], updatedAt: Date.now() };
-    error = null;
-    status = 'ready';
+    if (next.id === current.id) {
+      error = null;
+      status = 'ready';
+      persistence.saveCurrentThreadId(next.id);
+    }
     putThread(next);
     persist(next);
-    persistence.saveCurrentThreadId(next.id);
     startTurn(next.id);
   };
 
@@ -330,13 +363,62 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     const stillUsed = datasetsOf(kept);
     const datasets: Record<string, Dataset> = {};
     for (const [id, d] of Object.entries(thread.datasets)) if (!dropped.has(id) || stillUsed.has(id)) datasets[id] = d;
-    return { ...thread, messages: kept, datasets, updatedAt: Date.now() };
+    // the dropped ids are not given again: a new dataset never takes a saved one's key
+    return { ...thread, messages: kept, datasets, nextDatasetSeq: datasetSeq(thread), updatedAt: Date.now() };
+  };
+
+  /** Drops the last assistant turn and asks again. */
+  const regenerate = (threadId: string) => {
+    stopTurn();
+    const thread = threads.get(threadId);
+    if (!thread) return;
+    let li = -1;
+    for (let i = thread.messages.length - 1; i >= 0; i--)
+      if (thread.messages[i].role === 'user') {
+        li = i;
+        break;
+      }
+    if (li < 0) return publish();
+    const next = truncate(thread, li + 1);
+    if (threadId === current.id) {
+      error = null;
+      status = 'ready';
+    }
+    putThread(next);
+    persist(next);
+    startTurn(next.id);
+  };
+
+  /** Replaces a user message's text, drops what came after it and asks again. */
+  const editAndResend = (threadId: string, messageId: string, text: string) => {
+    stopTurn();
+    const thread = threads.get(threadId);
+    if (!thread) return;
+    const i = thread.messages.findIndex((m) => m.id === messageId && m.role === 'user');
+    if (i < 0) return publish();
+    const old = thread.messages[i];
+    const oldText = old.parts.find((p) => p.type === 'text') as { text: string } | undefined;
+    const parts: Part[] = old.parts.filter((p) => p.type !== 'text');
+    if (text.trim()) parts.push({ type: 'text', text });
+    if (!parts.length) return publish();
+    const edited: ChatMessage = { ...old, parts, createdAt: Date.now() };
+    const cut = truncate(thread, i);
+    edited.parts = withState(edited.parts, cut);
+    const firstUser = thread.messages.findIndex((m) => m.role === 'user') === i;
+    const title = firstUser && thread.title === titleFrom(oldText?.text ?? '') ? titleFrom(text) : thread.title;
+    const next: Thread = { ...cut, title, messages: [...cut.messages, edited] };
+    if (threadId === current.id) {
+      error = null;
+      status = 'ready';
+    }
+    putThread(next);
+    persist(next);
+    startTurn(next.id);
   };
 
   // ------------------------------------------------------------ loading
 
   const openLoaded = (id: string) => {
-    const token = ++loadToken;
     const known = threads.get(id);
     if (known) {
       current = known;
@@ -348,19 +430,29 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     threads.set(id, placeholder);
     current = placeholder;
     publish();
-    void persistence.loadThread(id).then((loaded) => {
-      if (disposed || token !== loadToken) {
-        // another thread was opened meanwhile: keep the loaded copy for next time
-        if (loaded && threads.get(id) === placeholder) threads.set(id, reviveThread(loaded));
-        return;
-      }
-      const now = threads.get(id);
-      if (!loaded || !now) return;
-      const revived = reviveThread(loaded);
-      // messages sent while it loaded come after the saved ones
-      const merged = now.messages.length ? { ...revived, messages: [...revived.messages, ...now.messages], datasets: { ...revived.datasets, ...now.datasets } } : revived;
-      putThread(merged);
-    });
+    const load = persistence
+      .loadThread(id)
+      .catch(() => null)
+      .then((loaded) => {
+        if (loading.get(id) === load) loading.delete(id);
+        const now = threads.get(id);
+        if (disposed || !loaded || !now) return; // deleted meanwhile, or nothing saved
+        const revived = reviveThread(loaded);
+        if (now === placeholder) return putThread(revived);
+        // changed while it loaded (renamed, a message): the saved history comes first
+        const datasets = { ...revived.datasets, ...now.datasets };
+        const merged: Thread = {
+          ...revived,
+          title: now.title,
+          messages: [...revived.messages, ...now.messages],
+          datasets,
+          nextDatasetSeq: Math.max(datasetSeq(revived), datasetSeq({ datasets, nextDatasetSeq: now.nextDatasetSeq })),
+          updatedAt: Math.max(revived.updatedAt, now.updatedAt),
+        };
+        putThread(merged);
+        persist(merged);
+      });
+    loading.set(id, load);
   };
 
   const ready = (async () => {
@@ -444,7 +536,7 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       for (const i of message.images ?? []) parts.push(i);
       if (message.text.trim()) parts.push({ type: 'text', text: message.text });
       if (!parts.some((p) => p.type !== 'context')) return;
-      appendUserMessage(parts);
+      whenLoaded((id) => appendUserMessage(id, parts));
     },
 
     stop() {
@@ -472,53 +564,20 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     },
 
     uiAction(event) {
-      appendUserMessage([{ type: 'ui-event', ...event }]);
+      whenLoaded((id) => appendUserMessage(id, [{ type: 'ui-event', ...event }]));
     },
 
     regenerate() {
-      stopTurn();
-      const thread = current;
-      let li = -1;
-      for (let i = thread.messages.length - 1; i >= 0; i--) if (thread.messages[i].role === 'user') {
-        li = i;
-        break;
-      }
-      if (li < 0) return publish();
-      const next = truncate(thread, li + 1);
-      error = null;
-      status = 'ready';
-      putThread(next);
-      persist(next);
-      startTurn(next.id);
+      whenLoaded(regenerate);
     },
 
     editAndResend(messageId, text) {
-      stopTurn();
-      const thread = current;
-      const i = thread.messages.findIndex((m) => m.id === messageId && m.role === 'user');
-      if (i < 0) return publish();
-      const old = thread.messages[i];
-      const oldText = old.parts.find((p) => p.type === 'text') as { text: string } | undefined;
-      const parts: Part[] = old.parts.filter((p) => p.type !== 'text');
-      if (text.trim()) parts.push({ type: 'text', text });
-      if (!parts.length) return publish();
-      const edited: ChatMessage = { ...old, parts, createdAt: Date.now() };
-      const cut = truncate(thread, i);
-      edited.parts = withState(edited.parts, cut);
-      const firstUser = thread.messages.findIndex((m) => m.role === 'user') === i;
-      const title = firstUser && thread.title === titleFrom(oldText?.text ?? '') ? titleFrom(text) : thread.title;
-      const next: Thread = { ...cut, title, messages: [...cut.messages, edited] };
-      error = null;
-      status = 'ready';
-      putThread(next);
-      persist(next);
-      startTurn(next.id);
+      whenLoaded((id) => editAndResend(id, messageId, text));
     },
 
     newThread() {
       stopTurn();
       if (!current.messages.length) return publish();
-      loadToken++;
       current = emptyThread();
       threads.set(current.id, current);
       status = 'ready';
@@ -533,8 +592,8 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       stopTurn();
       status = 'ready';
       error = null;
-      // an untouched empty thread is not worth keeping
-      if (!current.messages.length) threads.delete(current.id);
+      // an untouched empty thread is not worth keeping (one still loading is kept: its load fills it)
+      if (!current.messages.length && !loading.has(current.id)) threads.delete(current.id);
       persistence.saveCurrentThreadId(id);
       openLoaded(id);
     },
@@ -546,7 +605,6 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       always.delete(id);
       void persistence.deleteThread(id);
       if (current.id === id) {
-        loadToken++;
         current = emptyThread();
         threads.set(current.id, current);
         status = 'ready';

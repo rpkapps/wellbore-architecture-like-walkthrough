@@ -7,7 +7,7 @@ import { contextItems, subscribeContext } from './context';
 import { renderIcon } from './icons';
 import { borewalkInstructions } from './instructions';
 import { suggestions } from './suggestions';
-import { appTools } from './tools';
+import { actionNeedsApproval, appTools } from './tools';
 import { linkInput, parseAppLink } from './links';
 import { findWell, round } from './wells';
 
@@ -109,7 +109,7 @@ export async function onLink(app: App, href: string): Promise<void> {
       case 'action': {
         const a = app.actions.get(link.target);
         if (!a || a.id.startsWith('assistant.')) return fail(`No action "${link.target}".`);
-        if (a.needsApproval || a.id === 'data.connect') return fail(`“${a.title}” changes your data: ask the assistant to do it, and it will ask you first.`);
+        if (actionNeedsApproval(a)) return fail(`“${a.title}” changes your data: ask the assistant to do it, and it will ask you first.`);
         await run(a.id, linkInput(link.query) ?? (a.input ? {} : undefined));
         return;
       }

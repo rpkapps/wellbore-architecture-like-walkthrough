@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AssistantHost, AssistantSnapshot, AssistantTool, ProviderConfig, ToolCallPart, UIPart } from '../../src/assistant/core/types';
+import type { AssistantHost, AssistantSnapshot, AssistantTool, ProviderConfig, Thread, ToolCallPart, UIPart } from '../../src/assistant/core/types';
+import type { Persistence } from '../../src/assistant/core/persistence';
+import { fakeIndexedDB, fakeStorage } from './core-fake-storage';
 
 // the generated-UI module is another agent's: a small stand-in keeps these tests about the engine
 vi.mock('../../src/assistant/a2ui', () => ({
@@ -25,6 +27,8 @@ vi.mock('../../src/assistant/a2ui', () => ({
 const { createAssistant } = await import('../../src/assistant/core/controller');
 const { createMockFetch } = await import('../../src/assistant/testing/mockLLM');
 const { configFromPreset, presetById } = await import('../../src/assistant/providers/presets');
+const { createPersistence } = await import('../../src/assistant/core/persistence');
+const { toolResultFor } = await import('../../src/assistant/providers/shared');
 type Engine = ReturnType<typeof createAssistant>;
 type Script = Parameters<typeof createMockFetch>[0];
 
@@ -85,10 +89,13 @@ const PROVIDERS: Record<'openai' | 'anthropic' | 'gemini', Partial<ProviderConfi
   gemini: { baseUrl: 'https://mock.test/v1beta', model: 'gemini-3.5-flash' },
 };
 
-function setup(script: Script, opts: { preset?: keyof typeof PROVIDERS; delayMs?: number; host?: Partial<AssistantHost>; settings?: Partial<AssistantSnapshot['settings']> } = {}) {
+function setup(
+  script: Script,
+  opts: { preset?: keyof typeof PROVIDERS; delayMs?: number; host?: Partial<AssistantHost>; settings?: Partial<AssistantSnapshot['settings']>; persistence?: Persistence } = {},
+) {
   const ran: Ran = { colorBy: [], deleted: 0 };
   const fetch = createMockFetch(script, { delayMs: opts.delayMs, chunkSize: 5 });
-  const engine = createAssistant(makeHost(ran, opts.host), { fetch, storage: 'memory', sleep: async () => {} });
+  const engine = createAssistant(makeHost(ran, opts.host), { fetch, storage: 'memory', persistence: opts.persistence, sleep: async () => {} });
   engines.push(engine);
   const preset = opts.preset ?? 'openai';
   engine.saveProvider(configFromPreset(presetById(preset)!, { id: 'p1', apiKey: 'key', ...PROVIDERS[preset] }));
@@ -467,5 +474,128 @@ describe('stable system prompt', () => {
     expect(sent).toContain('<app_state>');
     expect(sent).toContain(String.raw`{\"md\":100}`);
     expect(sent).toContain(String.raw`{\"md\":200}`);
+  });
+});
+
+describe('datasets across regenerate, stop during a call, and threads still loading', () => {
+  it('regenerate never reuses a dataset id: the new rows are saved and the dropped dataset is deleted from storage', async () => {
+    const { indexedDB, control } = fakeIndexedDB();
+    const storages = { indexedDB, localStorage: fakeStorage(), sessionStorage: null };
+    const persistence = createPersistence('regen', 'auto', storages);
+    let n = 0;
+    const readLog: AssistantTool = {
+      name: 'data.read_log',
+      kind: 'read',
+      description: 'Reads a log.',
+      parameters: { type: 'object', properties: {} },
+      execute: () => ({ content: { ok: true }, datasets: [{ title: 'GR', columns: [{ key: 'gr' }], rows: [{ gr: ++n * 100 }] }] }),
+    };
+    const { engine } = setup((req) => (req.stepIndex === 0 ? { toolCalls: [{ name: 'data__read_log', args: {} }] } : { text: 'Done.' }), {
+      host: { tools: () => [readLog] },
+      persistence,
+    });
+    engine.send({ text: 'Read GR' });
+    let s = await settled(engine);
+    expect(Object.keys(s.thread.datasets)).toEqual(['ds_1']);
+    await persistence.flush();
+    engine.regenerate();
+    s = await settled(engine);
+    expect(calls(s)[0].datasets).toEqual(['ds_2']);
+    expect(Object.keys(s.thread.datasets)).toEqual(['ds_2']);
+    expect(s.thread.nextDatasetSeq).toBe(3);
+    await persistence.flush();
+
+    const stored = [...control.dbs.get('regen-assistant')!.get('datasets')!.rows.keys()];
+    expect(stored).toEqual([`${s.thread.id}/ds_2`]);
+    const reloaded = (await createPersistence('regen', 'auto', storages).loadThread(s.thread.id)) as Thread;
+    expect(reloaded.datasets.ds_2.rows).toEqual([{ gr: 200 }]);
+    expect(reloaded.nextDatasetSeq).toBe(3);
+  });
+
+  it('stopping while a write tool runs marks the call interrupted: the model is told it may have taken effect', async () => {
+    let release = () => {};
+    const colorBy: AssistantTool = {
+      name: 'view.color_by',
+      description: 'Colours the well.',
+      parameters: { type: 'object', properties: {} },
+      execute: () => new Promise((r) => (release = () => r({ ok: true }))),
+    };
+    const bodies: string[] = [];
+    const { engine } = setup(
+      (req) => {
+        bodies.push(JSON.stringify(req.body));
+        return req.turnIndex === 0 ? { toolCalls: [{ name: 'view__color_by', args: {} }] } : { text: 'Checked.' };
+      },
+      { host: { tools: () => [colorBy] }, settings: { autonomy: 'auto' } },
+    );
+    engine.send({ text: 'Colour it' });
+    await waitFor(engine, (s) => calls(s)[0]?.state === 'running');
+    engine.stop();
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    const call = calls(engine.getSnapshot())[0];
+    expect(call).toMatchObject({ state: 'cancelled', interrupted: true, result: { interrupted: true } });
+    expect(toolResultFor(call)).toEqual({ value: expect.objectContaining({ interrupted: true, message: expect.stringContaining('may have taken effect') }), isError: false });
+    // a call that never started still reads as not run
+    expect(toolResultFor({ ...call, interrupted: undefined, result: undefined }).value).toMatchObject({ cancelled: true, message: expect.stringContaining('before this call ran') });
+    engine.send({ text: 'Did it work?' });
+    await settled(engine);
+    expect(bodies.at(-1)).toContain('may have taken effect');
+    expect(bodies.at(-1)).not.toContain('before this call ran');
+  });
+
+  /** A saved thread (a question and its answer) and a persistence whose reads wait for `open()`. */
+  async function slowStorage() {
+    const inner = createPersistence('slow', 'memory');
+    const saved: Thread = {
+      id: 't_saved',
+      title: 'Saved chat',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        { id: 'm_q', role: 'user', parts: [{ type: 'text', text: 'Earlier question' }], createdAt: 1 },
+        { id: 'm_a', role: 'assistant', parts: [{ type: 'text', text: 'Earlier answer' }], createdAt: 2, status: 'done' },
+      ],
+      datasets: {},
+    };
+    inner.saveThread(saved);
+    await inner.flush();
+    let open = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    const persistence: Persistence = { ...inner, loadThread: async (id) => (await gate, inner.loadThread(id)) };
+    return { inner, persistence, saved, open };
+  }
+
+  it('a message sent while a saved thread loads waits for its history, then is sent with it and saved after it', async () => {
+    const { inner, persistence, saved, open } = await slowStorage();
+    let seen = { turnIndex: -1, text: '' };
+    const { engine } = setup((req) => ((seen = { turnIndex: req.turnIndex, text: JSON.stringify(req.body) }), { text: 'Follow-up answer' }), { persistence });
+    await engine.ready;
+    engine.openThread(saved.id);
+    engine.send({ text: 'Follow-up' });
+    expect(engine.getSnapshot().thread.messages).toEqual([]);
+    open();
+    const s = await waitFor(engine, (x) => x.thread.messages.length === 4 && x.status === 'ready');
+    expect(s.thread.messages.map((m) => m.id).slice(0, 2)).toEqual(['m_q', 'm_a']);
+    expect(seen.turnIndex).toBe(1);
+    expect(seen.text).toContain('Earlier answer');
+    await persistence.flush();
+    expect((await inner.loadThread(saved.id))!.messages).toHaveLength(4);
+  });
+
+  it('without a provider, a message sent while the thread loads keeps the saved history', async () => {
+    const { inner, persistence, saved, open } = await slowStorage();
+    const engine = createAssistant(makeHost({ colorBy: [], deleted: 0 }), { persistence });
+    engines.push(engine);
+    await engine.ready;
+    engine.openThread(saved.id);
+    engine.send({ text: 'Hello?' });
+    open();
+    const s = await waitFor(engine, (x) => x.thread.messages.length === 4);
+    expect(s.status).toBe('error');
+    await persistence.flush();
+    const stored = (await inner.loadThread(saved.id))!;
+    expect(stored.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(stored.messages[0].id).toBe('m_q');
   });
 });

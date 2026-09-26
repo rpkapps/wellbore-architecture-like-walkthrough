@@ -115,6 +115,12 @@ export const IMAGE_OMITTED = '[image omitted: the model has no vision]';
 
 // ------------------------------------------------------------------ tool results
 
+/** What a call that was running when the person stopped the turn reports: it may have finished anyway. */
+export const INTERRUPTED_RESULT = {
+  interrupted: true,
+  message: 'Stopped while it was running; it may have taken effect. Check the app state before repeating it.',
+} as const;
+
 /** What a tool call reports to the model, whatever state it ended in. */
 export function toolResultFor(part: ToolCallPart): { value: unknown; isError: boolean } {
   switch (part.state) {
@@ -125,6 +131,7 @@ export function toolResultFor(part: ToolCallPart): { value: unknown; isError: bo
     case 'denied':
       return { value: part.result ?? { denied: true, message: 'The person declined this action.' }, isError: false };
     default:
+      if (part.interrupted) return { value: part.result ?? INTERRUPTED_RESULT, isError: false };
       return { value: { cancelled: true, message: 'The person stopped the turn before this call ran.' }, isError: true };
   }
 }

@@ -3,8 +3,9 @@ import type { AssistantSettings, Dataset, ProviderConfig, Thread } from './types
 /*
  * Where threads and settings live. Threads go to IndexedDB (database
  * `<storageKey>-assistant`: thread list, messages and datasets in separate
- * stores, so the list loads without the transcripts), falling back to
- * localStorage and then to memory. Saves are debounced and happen at turn
+ * stores, so the list loads without the transcripts); a save IndexedDB
+ * refuses goes to localStorage (without IndexedDB: localStorage, then
+ * memory), and reads look in both. Saves are debounced and happen at turn
  * ends and thread changes, never per streamed token. Settings live in
  * localStorage; API keys only when the person asked to remember them,
  * otherwise in sessionStorage (gone when the browser session ends).
@@ -28,6 +29,13 @@ export interface Persistence {
   dispose: () => void;
 }
 
+/** The browser storages to use instead of the global ones (tests). `null`: none. */
+export interface PersistenceStorages {
+  indexedDB?: IDBFactory | null;
+  localStorage?: Storage | null;
+  sessionStorage?: Storage | null;
+}
+
 interface Backend {
   kind: Persistence['kind'];
   list: () => Promise<ThreadMeta[]>;
@@ -36,7 +44,29 @@ interface Backend {
   delete: (id: string) => Promise<void>;
 }
 
-const meta = (t: Thread): ThreadMeta => ({ id: t.id, title: t.title, createdAt: t.createdAt, updatedAt: t.updatedAt });
+const meta = (t: ThreadMeta): ThreadMeta => ({ id: t.id, title: t.title, createdAt: t.createdAt, updatedAt: t.updatedAt });
+
+/** A dataset with more rows than this is saved without them when the storage is full. */
+export const TRIM_ROWS = 2_000;
+
+const isQuotaError = (e: unknown) => {
+  const x = e as { name?: string; code?: number } | null;
+  return !!x && (x.name === 'QuotaExceededError' || x.name === 'NS_ERROR_DOM_QUOTA_REACHED' || x.code === 22 || x.code === 1014);
+};
+
+/** The thread with the rows of its large datasets left out (marked `trimmed`); the same object when none is large. */
+function trimDatasets(t: Thread): Thread {
+  let changed = false;
+  const datasets: Record<string, Dataset> = {};
+  for (const [id, d] of Object.entries(t.datasets)) {
+    if (d.rows.length <= TRIM_ROWS) datasets[id] = d;
+    else {
+      changed = true;
+      datasets[id] = { ...d, rows: [], trimmed: { rowCount: d.rows.length } };
+    }
+  }
+  return changed ? { ...t, datasets } : t;
+}
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
   try {
@@ -91,9 +121,18 @@ function localStorageBackend(ls: Storage, prefix: string): Backend {
     list: async () => list(),
     get: async (id) => readJson<Thread>(ls, threadKey(id)),
     async put(t) {
-      // datasets can be large: if the quota refuses them, keep the transcript at least
-      if (!writeJson(ls, threadKey(t.id), t)) writeJson(ls, threadKey(t.id), { ...t, datasets: {} });
-      writeJson(ls, listKey, [meta(t), ...list().filter((m) => m.id !== t.id)]);
+      // datasets can be large: if the quota refuses them, keep the small ones, then the transcript at least
+      let error: unknown;
+      for (const version of [t, trimDatasets(t), { ...t, datasets: {} }]) {
+        try {
+          ls.setItem(threadKey(t.id), JSON.stringify(version));
+          ls.setItem(listKey, JSON.stringify([meta(t), ...list().filter((m) => m.id !== t.id)]));
+          return;
+        } catch (e) {
+          error = e;
+        }
+      }
+      throw error;
     },
     async delete(id) {
       writeJson(ls, threadKey(id), null);
@@ -139,13 +178,13 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
     kind: 'indexeddb',
     async list() {
       const db = await open();
-      return req(db.transaction('threads').objectStore('threads').getAll() as IDBRequest<ThreadMeta[]>);
+      return (await req(db.transaction('threads').objectStore('threads').getAll() as IDBRequest<ThreadMeta[]>)).map(meta);
     },
     async get(id) {
       const db = await open();
       const tx = db.transaction(['threads', 'messages', 'datasets']);
       const [m, msgs, ds] = await Promise.all([
-        req(tx.objectStore('threads').get(id) as IDBRequest<ThreadMeta | undefined>),
+        req(tx.objectStore('threads').get(id) as IDBRequest<(ThreadMeta & { nextDatasetSeq?: number }) | undefined>),
         req(tx.objectStore('messages').get(id) as IDBRequest<{ id: string; messages: Thread['messages'] } | undefined>),
         req(tx.objectStore('datasets').index('threadId').getAll(id) as IDBRequest<{ key: string; dataset: Dataset }[]>),
       ]);
@@ -155,34 +194,53 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
         datasets[d.dataset.id] = d.dataset;
         savedDatasets.add(d.key);
       }
-      return { ...meta(m as Thread), messages: msgs?.messages ?? [], datasets };
+      const thread: Thread = { ...meta(m), messages: msgs?.messages ?? [], datasets };
+      if (m.nextDatasetSeq) thread.nextDatasetSeq = m.nextDatasetSeq;
+      return thread;
     },
     async put(t) {
       const db = await open();
       const tx = db.transaction(['threads', 'messages', 'datasets'], 'readwrite');
       const finished = done(tx);
       const written: string[] = [];
+      const dropped: string[] = [];
       try {
-        tx.objectStore('threads').put(meta(t));
+        tx.objectStore('threads').put(t.nextDatasetSeq ? { ...meta(t), nextDatasetSeq: t.nextDatasetSeq } : meta(t));
         // structured clone refuses functions and the like a tool may have returned: store the JSON form then
         try {
           tx.objectStore('messages').put({ id: t.id, messages: t.messages });
         } catch {
           tx.objectStore('messages').put({ id: t.id, messages: plain(t.messages) });
         }
+        const keep = new Set<string>();
         for (const d of Object.values(t.datasets)) {
           const key = `${t.id}/${d.id}`;
-          if (savedDatasets.has(key)) continue; // datasets never change once made
+          keep.add(key);
+          if (savedDatasets.has(key)) continue; // ids are never reused, so a saved dataset never changes
           tx.objectStore('datasets').put({ key, threadId: t.id, dataset: d });
           written.push(key);
         }
+        // the datasets of answers that were regenerated or edited away go too
+        const stored = tx.objectStore('datasets').index('threadId').getAllKeys(t.id);
+        stored.onsuccess = () => {
+          for (const k of stored.result) {
+            if (keep.has(String(k))) continue;
+            tx.objectStore('datasets').delete(k);
+            dropped.push(String(k));
+          }
+        };
       } catch (e) {
-        tx.abort();
+        try {
+          tx.abort();
+        } catch {
+          /* already finished */
+        }
         await finished.catch(() => {});
         throw e;
       }
       await finished;
       written.forEach((k) => savedDatasets.add(k));
+      dropped.forEach((k) => savedDatasets.delete(k));
     },
     async delete(id) {
       const db = await open();
@@ -200,28 +258,74 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
   };
 }
 
-/** Falls back to the next backend when a call fails (IndexedDB unavailable in a private window, quota…). */
-function withFallback(primary: Backend, fallback: () => Backend): Backend {
-  let active = primary;
-  let failed = false;
-  const run = async <T>(fn: (b: Backend) => Promise<T>): Promise<T> => {
-    try {
-      return await fn(active);
-    } catch (e) {
-      if (failed) throw e;
-      failed = true;
-      active = fallback();
-      return fn(active);
-    }
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+const settle = async <T>(fn: () => Promise<T>): Promise<Settled<T>> => {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+};
+
+/**
+ * The primary store, and a fallback for what it refuses, one save at a time:
+ * a save that fails (after one more try without the rows of large datasets
+ * when the quota is full) goes to the fallback, every other thread stays
+ * where it is. Reads merge both (the newer copy of a thread wins), deletes
+ * clear both, and a fallback copy is dropped once the primary saves the thread.
+ */
+function layered(primary: Backend, fallback: Backend): Backend {
+  let primaryFailing = false;
+  const inFallback = new Set<string>();
+  const onPrimary = async <T>(fn: () => Promise<T>): Promise<Settled<T>> => {
+    const r = await settle(fn);
+    primaryFailing = !r.ok;
+    return r;
   };
   return {
     get kind() {
-      return active.kind;
+      return primaryFailing ? fallback.kind : primary.kind;
     },
-    list: () => run((b) => b.list()),
-    get: (id) => run((b) => b.get(id)),
-    put: (t) => run((b) => b.put(t)),
-    delete: (id) => run((b) => b.delete(id)),
+    async list() {
+      const [a, b] = await Promise.all([onPrimary(() => primary.list()), settle(() => fallback.list())]);
+      if (!a.ok && !b.ok) throw a.error;
+      const byId = new Map<string, ThreadMeta>();
+      if (a.ok) for (const m of a.value) byId.set(m.id, m);
+      if (b.ok)
+        for (const m of b.value) {
+          inFallback.add(m.id);
+          const x = byId.get(m.id);
+          if (!x || m.updatedAt > x.updatedAt) byId.set(m.id, m);
+        }
+      return [...byId.values()];
+    },
+    async get(id) {
+      const [a, b] = await Promise.all([onPrimary(() => primary.get(id)), settle(() => fallback.get(id))]);
+      if (!a.ok && !b.ok) throw a.error;
+      const x = a.ok ? a.value : null;
+      const y = b.ok ? b.value : null;
+      if (y) inFallback.add(id);
+      return x && y ? (y.updatedAt > x.updatedAt ? y : x) : (x ?? y);
+    },
+    async put(t) {
+      let r = await onPrimary(() => primary.put(t));
+      if (!r.ok && isQuotaError(r.error)) {
+        const trimmed = trimDatasets(t);
+        if (trimmed !== t) r = await onPrimary(() => primary.put(trimmed));
+      }
+      if (!r.ok) {
+        await fallback.put(t);
+        inFallback.add(t.id);
+        return;
+      }
+      // the copy an earlier failed save left in the fallback is stale now
+      if (inFallback.delete(t.id)) await settle(() => fallback.delete(t.id));
+    },
+    async delete(id) {
+      inFallback.delete(id);
+      const [a, b] = await Promise.all([onPrimary(() => primary.delete(id)), settle(() => fallback.delete(id))]);
+      if (!a.ok && !b.ok) throw a.error;
+    },
   };
 }
 
@@ -229,20 +333,22 @@ function withFallback(primary: Backend, fallback: () => Backend): Backend {
 
 type StoredKeys = Record<string, string>;
 
-/** Creates the persistence for a storage namespace. `memory` keeps nothing across reloads (tests, demos). */
-export function createPersistence(storageKey: string, mode: 'auto' | 'memory' = 'auto'): Persistence {
-  const ls = mode === 'memory' ? null : storage('localStorage');
-  const ss = mode === 'memory' ? null : storage('sessionStorage');
+/**
+ * Creates the persistence for a storage namespace. `memory` keeps nothing
+ * across reloads (tests, demos); `storages` replaces the browser's (tests).
+ */
+export function createPersistence(storageKey: string, mode: 'auto' | 'memory' = 'auto', storages: PersistenceStorages = {}): Persistence {
+  const pick = <T>(given: T | null | undefined, global: () => T | null | undefined): T | null => (mode === 'memory' ? null : given !== undefined ? given : (global() ?? null));
+  const ls = pick(storages.localStorage, () => storage('localStorage'));
+  const ss = pick(storages.sessionStorage, () => storage('sessionStorage'));
   const memSettings: { settings: Partial<AssistantSettings> | null; keys: StoredKeys; current: string | null } = { settings: null, keys: {}, current: null };
   const settingsKey = `${storageKey}.assistant.settings`;
   const keysKey = `${storageKey}.assistant.keys`;
   const currentKey = `${storageKey}.assistant.current`;
 
-  let backend: Backend;
-  const idb = mode === 'memory' ? undefined : (globalThis as { indexedDB?: IDBFactory }).indexedDB;
-  const secondary = () => (ls ? localStorageBackend(ls, storageKey) : memoryBackend());
-  if (idb) backend = withFallback(idbBackend(idb, `${storageKey}-assistant`), secondary);
-  else backend = withFallback(secondary(), memoryBackend);
+  const idb = pick(storages.indexedDB, () => (globalThis as { indexedDB?: IDBFactory }).indexedDB);
+  const secondary = ls ? localStorageBackend(ls, storageKey) : memoryBackend();
+  const backend: Backend = idb ? layered(idbBackend(idb, `${storageKey}-assistant`), secondary) : ls ? layered(secondary, memoryBackend()) : secondary;
 
   const pending = new Map<string, Thread>();
   let timer: ReturnType<typeof setTimeout> | null = null;

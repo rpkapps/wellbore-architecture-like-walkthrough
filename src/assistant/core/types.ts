@@ -93,7 +93,7 @@ export type ToolCallState =
   | 'done'
   | 'error'
   | 'denied'
-  /** the turn was stopped before it ran or finished */
+  /** the turn was stopped before it ran or finished (`ToolCallPart.interrupted` when it had started) */
   | 'cancelled';
 
 export interface ToolCallPart {
@@ -114,6 +114,11 @@ export interface ToolCallPart {
   datasets?: string[];
   startedAt?: number;
   endedAt?: number;
+  /**
+   * `cancelled` while it was running: the tool may still have taken effect,
+   * so the model is told to check the app's state rather than that it never ran.
+   */
+  interrupted?: boolean;
   /** provider-specific data replayed with the call, namespaced by provider kind (`{ gemini: { thoughtSignature } }`) */
   providerMeta?: Record<string, unknown>;
   /**
@@ -217,6 +222,8 @@ export interface Dataset {
   /** where it came from, in words ("Well 15/9-F-11 A · GR, 3000–3100 m MD") */
   source?: string;
   createdAt: number;
+  /** the rows were too many to save in the browser's storage: this copy, read back after a reload, has none (`rowCount` says how many there were) */
+  trimmed?: { rowCount: number };
 }
 
 /** What a tool returns to hand over datasets: `content` is what the model reads. */
@@ -443,6 +450,12 @@ export interface Thread {
   messages: ChatMessage[];
   /** datasets produced in this thread, by id */
   datasets: Record<string, Dataset>;
+  /**
+   * The number of the thread's next dataset (`ds_<n>`): ids are never
+   * reused, even after the datasets of a regenerated answer are dropped.
+   * Missing in threads saved before it existed (the highest id + 1 then).
+   */
+  nextDatasetSeq?: number;
 }
 
 /** The composer's status, as `@tecton/react/tecton/composer` expects it. */
