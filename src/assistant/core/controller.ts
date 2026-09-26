@@ -1,11 +1,14 @@
 import { adapterFor } from '../providers';
-import { ProviderError, asProviderError, isAbortError } from '../providers/errors';
+import { ProviderError, asProviderError, isAbortError, toErrorPart } from '../providers/errors';
 import { presetById } from '../providers/presets';
 import type { FetchLike } from '../providers/shared';
 import { finalizeStopped, runTurn } from './agent';
+import { KEEP_TURNS, compactHistory } from './compaction';
+import { resolveContextWindow, workingWindow } from './context';
 import { datasetSeq } from './datasets';
 import { newId } from './ids';
 import { safeJsonStringify } from './json';
+import { connectionKey, estimateNextRequest } from './plan';
 import { createPersistence, type Persistence, type ThreadMeta } from './persistence';
 import { createStore, threadMeta, titleFrom } from './store';
 import { buildTurnState } from './systemPrompt';
@@ -16,6 +19,7 @@ import type {
   AssistantSnapshot,
   ChatMessage,
   ChatStatus,
+  ContextUsage,
   Dataset,
   ErrorPart,
   ModelInfo,
@@ -45,9 +49,12 @@ export interface CreateAssistantOptions {
   storage?: 'auto' | 'memory';
   /** where threads and settings live, instead of the browser's storage (tests, apps with their own) */
   persistence?: Persistence;
-  /** waits before the automatic retry of a transient failure (tests pass a fast one) */
+  /** waits before an automatic retry of a transient failure (tests pass a fast one) */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
+
+/** Presets whose model list reports every model's context window: read once per session when the connection sets none. */
+const WINDOW_LISTS = new Set(['openrouter']);
 
 /** The controller plus lifecycle. */
 export interface AssistantEngine extends AssistantController {
@@ -96,6 +103,14 @@ const datasetsOf = (messages: ChatMessage[]) => {
   return ids;
 };
 
+/** The thread's compactions whose boundary message is still in `messages` (a regenerated or edited answer drops those after it). */
+const liveCompactions = (t: Pick<Thread, 'compactions'>, messages: ChatMessage[]) => {
+  if (!t.compactions?.length) return t.compactions;
+  const ids = new Set(messages.map((m) => m.id));
+  const kept = t.compactions.filter((c) => ids.has(c.throughMessageId));
+  return kept.length === t.compactions.length ? t.compactions : kept;
+};
+
 /**
  * A thread read back from storage: a turn that was cut off by a reload reads
  * as stopped, and datasets no message refers to (left by a regenerated
@@ -111,8 +126,10 @@ function reviveThread(t: Thread): Thread {
   });
   const used = datasetsOf(messages);
   const unused = Object.keys(t.datasets).filter((id) => !used.has(id));
-  if (!changed && !unused.length) return t;
+  const compactions = liveCompactions(t, messages);
+  if (!changed && !unused.length && compactions === t.compactions) return t;
   const out: Thread = { ...t, messages };
+  if (compactions !== t.compactions) out.compactions = compactions;
   if (unused.length) {
     out.nextDatasetSeq = datasetSeq(t);
     out.datasets = Object.fromEntries(Object.entries(t.datasets).filter(([id]) => used.has(id)));
@@ -136,6 +153,18 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
   /** threads being read from storage (shown as a placeholder meanwhile) */
   const loading = new Map<string, Promise<void>>();
   let disposed = false;
+  /** text the app asked to put in the composer */
+  let draft: AssistantSnapshot['draft'] = null;
+  /** per thread: the actual/estimated token ratio on a connection (`core/context.ts`) */
+  const ratios = new Map<string, { connection: string; ratio: number }>();
+  /** context windows the providers' model lists reported, per endpoint and model */
+  const modelWindows = new Map<string, Map<string, number>>();
+  const windowLists = new Set<string>();
+  let windowsVersion = 0;
+  /** how full the context is, as the running turn last reported it */
+  let turnContext: ContextUsage | null = null;
+  /** a `/compact` summary is being written */
+  let compactingNow = false;
 
   // ------------------------------------------------------------ snapshots
 
@@ -156,16 +185,51 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     }
     return lastList;
   };
-  const build = (): AssistantSnapshot => ({
-    thread: current,
-    threads: listOf(),
-    status,
-    pendingApprovals: pendingOf(current),
-    settings,
-    provider: settings.providers.find((p) => p.id === settings.activeProviderId) ?? null,
-    error,
-  });
-  const store = createStore<AssistantSnapshot>(build());
+  let contextMemo: { thread: Thread; provider: ProviderConfig; autonomy: AssistantSettings['autonomy']; ratio: number; windows: number; value: ContextUsage } | null = null;
+  let lastContext: ContextUsage | null = null;
+  /** How full the context of the thread on screen is: the running turn's report, else an estimate of the next request (recomputed only when its inputs change). */
+  const contextOf = (provider: ProviderConfig | null): ContextUsage | null => {
+    let value: ContextUsage | null = null;
+    if (provider) {
+      if (turn && turn.threadId === current.id && turnContext) value = turnContext;
+      else {
+        const ratio = ratioOf(current.id, provider);
+        const m = contextMemo;
+        if (!m || m.thread !== current || m.provider !== provider || m.autonomy !== settings.autonomy || m.ratio !== ratio || m.windows !== windowsVersion) {
+          const config = effectiveConfig(provider);
+          const window = windowOf(config);
+          let used = 0;
+          try {
+            used = estimateNextRequest({ host, config, autonomy: settings.autonomy, thread: current, window, messages: current.messages, compactions: current.compactions }) * ratio;
+          } catch {
+            /* a failing host: nothing to count */
+          }
+          contextMemo = { thread: current, provider, autonomy: settings.autonomy, ratio, windows: windowsVersion, value: { used: Math.round(used), window: workingWindow(window), compacting: false } };
+        }
+        value = contextMemo!.value;
+      }
+      if (compactingNow && !value.compacting) value = { ...value, compacting: true };
+    }
+    // the same numbers keep the same object, so the meter does not re-render
+    if (value && lastContext && value.used === lastContext.used && value.window === lastContext.window && value.compacting === lastContext.compacting) return lastContext;
+    return (lastContext = value);
+  };
+  /** The snapshot; `withContext` false only for the first one, built before the helpers the context needs are defined. */
+  const build = (withContext = true): AssistantSnapshot => {
+    const provider = settings.providers.find((p) => p.id === settings.activeProviderId) ?? null;
+    return {
+      thread: current,
+      threads: listOf(),
+      status,
+      pendingApprovals: pendingOf(current),
+      settings,
+      provider,
+      error,
+      context: withContext ? contextOf(provider) : null,
+      draft,
+    };
+  };
+  const store = createStore<AssistantSnapshot>(build(false));
   const publish = (flush = true) => {
     if (!disposed) store.set(build(), { flush });
   };
@@ -200,12 +264,49 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
   };
   const adapterOf = (kind: ProviderKind) => opts.adapters?.[kind] ?? adapterFor(kind, { fetch: opts.fetch });
 
+  // ------------------------------------------------------------ context windows
+
+  const windowsKey = (c: ProviderConfig) => `${c.presetId}|${(c.baseUrl || presetById(c.presetId)?.baseUrl || '').replace(/\/+$/, '')}`;
+  /** The connection's context window: its own setting, else the model list's, else a default (`resolveContextWindow`). */
+  function windowOf(config: ProviderConfig): number {
+    return resolveContextWindow(config, modelWindows.get(windowsKey(config))?.get(config.model));
+  }
+  const rememberWindows = (config: ProviderConfig, models: ModelInfo[]) => {
+    const known = models.filter((m) => m.contextWindow);
+    if (!known.length) return;
+    const key = windowsKey(config);
+    const map = new Map(modelWindows.get(key) ?? []);
+    for (const m of known) map.set(m.id, m.contextWindow!);
+    modelWindows.set(key, map);
+    windowsVersion++;
+  };
+  /** Reads the model list once per session for providers whose list gives context windows. */
+  const learnWindows = (config: ProviderConfig) => {
+    const key = windowsKey(config);
+    if (config.contextWindow || !WINDOW_LISTS.has(config.presetId) || windowLists.has(key)) return;
+    windowLists.add(key);
+    const adapter = adapterOf(config.kind);
+    adapter
+      .listModels?.(config)
+      .then((models) => {
+        rememberWindows(config, models);
+        publish(false);
+      })
+      .catch(() => windowLists.delete(key));
+  };
+  function ratioOf(threadId: string, provider: ProviderConfig): number {
+    const r = ratios.get(threadId);
+    return r && r.connection === connectionKey(provider) ? r.ratio : 1;
+  }
+
   // ------------------------------------------------------------ turns
 
   const stopTurn = () => {
     const t = turn;
     if (!t) return;
     turn = null;
+    turnContext = null;
+    compactingNow = false;
     t.abort.abort();
     for (const a of t.approvals.values()) a.resolve(false);
     t.approvals.clear();
@@ -242,9 +343,11 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     }
 
     const config = effectiveConfig(provider);
+    learnWindows(config);
     const message: ChatMessage = { ...base, provider: config.presetId, model: config.model, status: 'streaming' };
     const t: ActiveTurn = { threadId, messageId: message.id, abort: new AbortController(), approvals: new Map() };
     turn = t;
+    turnContext = null;
     status = 'submitted';
     error = null;
     putThread({ ...thread, messages: [...thread.messages, message], updatedAt: Date.now() });
@@ -289,11 +392,27 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       },
       signal: t.abort.signal,
       sleep: opts.sleep,
+      contextWindow: windowOf(config),
+      calibration: {
+        get: () => ratioOf(threadId, provider),
+        set: (ratio) => void ratios.set(threadId, { connection: connectionKey(provider), ratio }),
+      },
+      updateThread: (fn) => {
+        const th = threads.get(threadId);
+        if (th && !disposed && turn === t) putThread(fn(th));
+      },
+      onContext: (usage) => {
+        if (turn !== t) return;
+        const flush = usage.compacting !== turnContext?.compacting;
+        turnContext = usage;
+        if (threadId === current.id) publish(flush);
+      },
     })
       .then((result) => {
         const th = threads.get(threadId);
         if (turn === t) {
           turn = null;
+          turnContext = null;
           if (threadId === current.id) {
             status = result.error ? 'error' : 'ready';
             error = result.error ?? null;
@@ -364,7 +483,11 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
     const datasets: Record<string, Dataset> = {};
     for (const [id, d] of Object.entries(thread.datasets)) if (!dropped.has(id) || stillUsed.has(id)) datasets[id] = d;
     // the dropped ids are not given again: a new dataset never takes a saved one's key
-    return { ...thread, messages: kept, datasets, nextDatasetSeq: datasetSeq(thread), updatedAt: Date.now() };
+    const out: Thread = { ...thread, messages: kept, datasets, nextDatasetSeq: datasetSeq(thread), updatedAt: Date.now() };
+    // a summary that covered a dropped message no longer applies
+    const compactions = liveCompactions(thread, kept);
+    if (compactions !== thread.compactions) out.compactions = compactions;
+    return out;
   };
 
   /** Drops the last assistant turn and asks again. */
@@ -688,13 +811,87 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       const adapter = adapterOf(cfg.kind);
       if (!adapter.listModels) return (presetById(cfg.presetId)?.models ?? []).map((id) => ({ id }));
       try {
-        return await adapter.listModels(cfg);
+        const models = await adapter.listModels(cfg);
+        rememberWindows(cfg, models);
+        return models;
       } catch (err) {
         throw asProviderError(err);
       }
     },
 
     exportMarkdown,
+
+    compact() {
+      whenLoaded((threadId) => {
+        const thread = threads.get(threadId);
+        const provider = activeProvider();
+        if (turn || disposed || !thread || !provider?.model) return;
+        // nothing answered yet: nothing to summarise
+        if (!thread.messages.some((m) => m.role === 'assistant' && m.status !== 'streaming')) return;
+        const config = effectiveConfig(provider);
+        const window = windowOf(config);
+        const t: ActiveTurn = { threadId, messageId: '', abort: new AbortController(), approvals: new Map() };
+        turn = t;
+        turnContext = null;
+        compactingNow = true;
+        status = 'submitted';
+        error = null;
+        publish();
+        const estimate = (th: Thread) =>
+          Math.round(estimateNextRequest({ host, config, autonomy: settings.autonomy, thread: th, window, messages: th.messages, compactions: th.compactions }) * ratioOf(threadId, provider));
+        void compactHistory({
+          adapter: adapterOf(config.kind),
+          config,
+          window,
+          appName: host.appName,
+          messages: thread.messages,
+          compactions: thread.compactions,
+          datasets: thread.datasets,
+          keep: [KEEP_TURNS, 1, 0],
+          auto: false,
+          fallback: false,
+          signal: t.abort.signal,
+          sleep: opts.sleep,
+        }).then(
+          (c) => {
+            if (turn !== t) return;
+            turn = null;
+            compactingNow = false;
+            status = 'ready';
+            const th = threads.get(threadId);
+            if (!c || !th || disposed) return publish();
+            let tokensBefore: number | undefined;
+            let tokensAfter: number | undefined;
+            try {
+              tokensBefore = estimate(th);
+              tokensAfter = estimate({ ...th, compactions: [...(th.compactions ?? []), c] });
+            } catch {
+              /* a failing host: no figures */
+            }
+            const next: Thread = { ...th, compactions: [...(th.compactions ?? []), { ...c, tokensBefore, tokensAfter }], updatedAt: Date.now() };
+            putThread(next);
+            persist(next);
+          },
+          (err) => {
+            if (turn !== t) return;
+            turn = null;
+            compactingNow = false;
+            if (isAbortError(err)) status = 'ready';
+            else {
+              const part = toErrorPart(err);
+              status = 'error';
+              error = { ...part, message: `The conversation could not be summarised: ${part.message}` };
+            }
+            publish();
+          },
+        );
+      });
+    },
+
+    compose(text) {
+      draft = { id: (draft?.id ?? 0) + 1, text };
+      publish();
+    },
 
     dispose() {
       if (disposed) return;
@@ -704,5 +901,7 @@ export function createAssistant(host: AssistantHost, opts: CreateAssistantOption
       persistence.dispose();
     },
   };
+  // the first snapshot left the context out: everything it needs is defined now
+  publish();
   return engine;
 }

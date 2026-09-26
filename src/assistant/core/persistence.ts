@@ -46,6 +46,16 @@ interface Backend {
 
 const meta = (t: ThreadMeta): ThreadMeta => ({ id: t.id, title: t.title, createdAt: t.createdAt, updatedAt: t.updatedAt });
 
+/** What a thread keeps besides its messages and datasets: its summaries, tool mode and found tools (saved with the messages). */
+type ThreadState = Pick<Thread, 'compactions' | 'toolMode' | 'enabledTools'>;
+const stateOf = (t: ThreadState): ThreadState => {
+  const out: ThreadState = {};
+  if (t.compactions?.length) out.compactions = t.compactions;
+  if (t.toolMode) out.toolMode = t.toolMode;
+  if (t.enabledTools?.length) out.enabledTools = t.enabledTools;
+  return out;
+};
+
 /** A dataset with more rows than this is saved without them when the storage is full. */
 export const TRIM_ROWS = 2_000;
 
@@ -185,7 +195,7 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
       const tx = db.transaction(['threads', 'messages', 'datasets']);
       const [m, msgs, ds] = await Promise.all([
         req(tx.objectStore('threads').get(id) as IDBRequest<(ThreadMeta & { nextDatasetSeq?: number }) | undefined>),
-        req(tx.objectStore('messages').get(id) as IDBRequest<{ id: string; messages: Thread['messages'] } | undefined>),
+        req(tx.objectStore('messages').get(id) as IDBRequest<(Pick<Thread, 'id' | 'messages'> & ThreadState) | undefined>),
         req(tx.objectStore('datasets').index('threadId').getAll(id) as IDBRequest<{ key: string; dataset: Dataset }[]>),
       ]);
       if (!m) return null;
@@ -196,6 +206,7 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
       }
       const thread: Thread = { ...meta(m), messages: msgs?.messages ?? [], datasets };
       if (m.nextDatasetSeq) thread.nextDatasetSeq = m.nextDatasetSeq;
+      if (msgs) Object.assign(thread, stateOf(msgs));
       return thread;
     },
     async put(t) {
@@ -207,10 +218,11 @@ function idbBackend(idb: IDBFactory, name: string): Backend {
       try {
         tx.objectStore('threads').put(t.nextDatasetSeq ? { ...meta(t), nextDatasetSeq: t.nextDatasetSeq } : meta(t));
         // structured clone refuses functions and the like a tool may have returned: store the JSON form then
+        const state = stateOf(t);
         try {
-          tx.objectStore('messages').put({ id: t.id, messages: t.messages });
+          tx.objectStore('messages').put({ id: t.id, messages: t.messages, ...state });
         } catch {
-          tx.objectStore('messages').put({ id: t.id, messages: plain(t.messages) });
+          tx.objectStore('messages').put({ id: t.id, messages: plain(t.messages), ...plain(state) });
         }
         const keep = new Set<string>();
         for (const d of Object.values(t.datasets)) {

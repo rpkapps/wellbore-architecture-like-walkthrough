@@ -599,3 +599,17 @@ describe('datasets across regenerate, stop during a call, and threads still load
     expect(stored.messages[0].id).toBe('m_q');
   });
 });
+
+describe('startup', () => {
+  it('starts with a connection already saved (the context meter is computed once the engine is set up)', async () => {
+    const inner = createPersistence(`test-${Math.random()}`, 'memory');
+    const saved = configFromPreset(presetById('openai')!, { id: 'p1', apiKey: 'key', baseUrl: 'https://mock.test/v1', model: 'gpt-mock' });
+    const persistence: Persistence = { ...inner, loadSettings: () => ({ providers: [saved], activeProviderId: 'p1' }) };
+    const ran: Ran = { colorBy: [], deleted: 0 };
+    const engine = createAssistant(makeHost(ran), { fetch: createMockFetch(() => ({ text: 'ok' })), storage: 'memory', persistence, sleep: async () => {} });
+    engines.push(engine);
+    expect(engine.getSnapshot().provider?.id).toBe('p1');
+    expect(engine.getSnapshot().context).toMatchObject({ compacting: false });
+    expect(engine.getSnapshot().context!.used).toBeGreaterThan(0);
+  });
+});

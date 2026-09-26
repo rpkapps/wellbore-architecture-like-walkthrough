@@ -1,18 +1,35 @@
-import { a2uiPromptGuide, extractA2UIFences } from '../a2ui';
+import { extractA2UIFences } from '../a2ui';
 import { asProviderError, isAbortError, toErrorPart } from '../providers/errors';
 import { INTERRUPTED_RESULT } from '../providers/shared';
 import { abortError } from '../providers/sse';
-import { RENDER_UI, builtinTools } from './builtinTools';
+import { RENDER_UI } from './builtinTools';
+import { KEEP_TURNS, OUTLINE_NOTE, compactHistory, compactionBoundary, latestCompaction, requestHistory, summaryTokens } from './compaction';
+import {
+  CALIBRATION_MAX,
+  COMPACT_AT,
+  calibrationRatio,
+  estimateMessage,
+  estimateRequest,
+  estimateText,
+  estimateTools,
+  inputBudget,
+  resolveContextWindow,
+  workingWindow,
+} from './context';
 import { capToolResult, datasetSeq, isToolOutput, registerDatasets, summariseDataset } from './datasets';
 import { parsePartialJson } from './json';
-import { buildSystemPrompt } from './systemPrompt';
-import { buildToolNameMap, type ToolNameMap } from './toolNames';
+import { planSystem, planTools, type ToolPlan } from './plan';
+import { MAX_RETRIES, abortableSleep, retryDelay } from './retry';
+import { buildToolNameMap, sanitizeToolName, type ToolNameMap } from './toolNames';
+import { findToolsTool } from './toolSearch';
 import type {
   AssistantHost,
   AssistantSettings,
   AssistantTool,
   ChatMessage,
   ChatStatus,
+  Compaction,
+  ContextUsage,
   Dataset,
   ErrorPart,
   FinishReason,
@@ -59,8 +76,16 @@ export interface TurnOptions {
   onPhase?: (status: ChatStatus) => void;
   signal: AbortSignal;
   now?: () => number;
-  /** waits before the automatic retry (tests pass a fast one) */
+  /** waits before an automatic retry (tests pass a fast one) */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** the model's context window in tokens (default: resolved from the connection, `core/context.ts`) */
+  contextWindow?: number;
+  /** the thread's actual/estimated token ratio: read before each request, updated from the usage the provider reports */
+  calibration?: { get: () => number; set: (ratio: number) => void };
+  /** changes the thread's own state: a new compaction, the tool mode, tools `find_tools` loaded (kept for the turn when omitted) */
+  updateThread?: (fn: (thread: Thread) => Thread) => void;
+  /** how full the context is: before and after each request, and while a summary is written */
+  onContext?: (usage: ContextUsage) => void;
 }
 
 export interface TurnResult {
@@ -70,7 +95,10 @@ export interface TurnResult {
 }
 
 const DENIED = { denied: true, message: 'The person declined this action.' };
-const MAX_RETRY_WAIT_MS = 10_000;
+/** A summary aims to bring the request down to this share of the budget. */
+const COMPACT_TARGET = 0.5;
+/** Automatic summaries in one turn (a turn whose own tool results keep growing could otherwise summarise at every step). */
+const MAX_TURN_COMPACTIONS = 2;
 
 /** A2UI messages from `render_ui` arguments (`{messages: [...]}`, or an `a2ui_json` string of a JSON array / JSONL), tolerating partial JSON. */
 export function uiMessagesFromArgs(args: unknown): unknown[] | undefined {
@@ -126,21 +154,6 @@ const sumUsage = (a: Usage | undefined, b: Usage): Usage => {
   return out;
 };
 
-function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(abortError(signal));
-    const t = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      reject(abortError(signal));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 /** Resolves with the promise, or rejects with an AbortError as soon as the signal aborts. */
 function raceAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(abortError(signal));
@@ -165,13 +178,14 @@ interface OfferedTools {
   byName: Map<string, AssistantTool>;
   wire: WireTool[];
   names: ToolNameMap;
+  deferred: boolean;
 }
 
 /** Runs one turn to its end. Never rejects: errors end up in the message. */
 export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
   const { host, adapter, config, signal } = opts;
   const now = opts.now ?? Date.now;
-  const sleep = opts.sleep ?? defaultSleep;
+  const sleep = opts.sleep ?? abortableSleep;
   let msg: ChatMessage = opts.message;
   const set = (next: ChatMessage, flush = false) => {
     msg = next;
@@ -189,59 +203,126 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
     if (i >= 0) replacePart(i, { ...(msg.parts[i] as ToolCallPart), ...patch }, flush);
   };
 
-  const builtins = builtinTools().map((t) => ({ ...t, kind: 'read' as const }));
+  // ---- the context budget
+  const window = opts.contextWindow ?? resolveContextWindow(config);
+  const budget = inputBudget(config, window);
+  let localRatio = 1;
+  const ratio = () => opts.calibration?.get() ?? localRatio;
+  const setRatio = (r: number) => (opts.calibration ? opts.calibration.set(r) : (localRatio = r));
+  let lastUsed = 0;
+  const report = (used: number, compacting = false) => {
+    lastUsed = Math.round(used);
+    opts.onContext?.({ used: lastUsed, window: workingWindow(window), compacting });
+  };
+
+  // ---- the thread's own state (compactions, tool mode, found tools): the controller's, or kept here for the turn
+  let local: Pick<Thread, 'compactions' | 'toolMode' | 'enabledTools'> = {};
+  const thread = (): Thread => (opts.updateThread ? opts.getThread() : { ...opts.getThread(), ...local });
+  const updateThread = (fn: (t: Thread) => Thread) => {
+    if (opts.updateThread) return opts.updateThread(fn);
+    const next = fn(thread());
+    local = { compactions: next.compactions, toolMode: next.toolMode, enabledTools: next.enabledTools };
+  };
+
+  // ---- tools
   const usesTools = config.tools !== false;
+  let plan: ToolPlan | undefined;
+  let names: ToolNameMap | undefined;
+  const findTools = findToolsTool({
+    deferred: () => plan?.hidden ?? [],
+    enable: (found) => updateThread((t) => ({ ...t, enabledTools: [...new Set([...(t.enabledTools ?? []), ...found])] })),
+    toWire: (n) => names?.toWire(n) ?? sanitizeToolName(n),
+  });
   const collectTools = (): OfferedTools => {
-    const byName = new Map<string, AssistantTool>();
-    if (usesTools) {
-      let hostTools: AssistantTool[] = [];
-      try {
-        hostTools = host.tools() ?? [];
-      } catch {
-        /* a failing host keeps the built-ins */
-      }
-      for (const t of [...hostTools, ...builtins]) {
-        if (byName.has(t.name)) continue;
-        if (opts.settings.autonomy === 'read' && (t.kind ?? 'write') !== 'read') continue;
-        byName.set(t.name, t);
-      }
-    }
-    const tools = [...byName.values()];
+    const th = thread();
+    plan = planTools({ host, config, autonomy: opts.settings.autonomy, thread: th, window, findTools });
+    const mode = plan.mode;
+    // the mode is chosen once per connection and kept, so the system prompt does not change between turns
+    if (usesTools && th.toolMode?.connection !== mode.connection) updateThread((t) => ({ ...t, toolMode: mode }));
+    const tools = plan.tools;
     const historyNames: string[] = [];
-    for (const m of opts.getThread().messages) for (const p of m.parts) if (p.type === 'tool-call') historyNames.push(p.name);
+    for (const m of th.messages) for (const p of m.parts) if (p.type === 'tool-call') historyNames.push(p.name);
     for (const p of msg.parts) if (p.type === 'tool-call') historyNames.push(p.name);
-    const names = buildToolNameMap([...tools.map((t) => t.name), ...historyNames]);
-    const wire = tools.map((t) => ({ name: names.toWire(t.name), description: t.description, parameters: t.parameters }));
-    return { tools, byName, wire, names };
+    names = buildToolNameMap([...tools.map((t) => t.name), ...historyNames]);
+    const map = names;
+    const wire = tools.map((t) => ({ name: map.toWire(t.name), description: t.description, parameters: t.parameters }));
+    return { tools, byName: plan.byName, wire, names: map, deferred: plan.deferred };
   };
 
   const initialTools = collectTools();
-  let guide: string | undefined;
-  if (initialTools.byName.has(RENDER_UI)) {
-    try {
-      guide = typeof a2uiPromptGuide === 'function' ? a2uiPromptGuide() : undefined;
-    } catch {
-      guide = undefined;
-    }
-  }
-  const system = buildSystemPrompt({
-    host,
-    autonomy: opts.settings.autonomy,
-    tools: initialTools.tools.length > 0,
-    a2uiGuide: guide,
-  });
+  const system = planSystem({ host, autonomy: opts.settings.autonomy }, { tools: initialTools.tools, deferred: initialTools.deferred });
 
-  const history = (names: ToolNameMap): ChatMessage[] => {
-    const thread = opts.getThread();
-    const idx = thread.messages.findIndex((m) => m.id === msg.id);
-    const before = idx >= 0 ? thread.messages.slice(0, idx) : thread.messages.filter((m) => m.id !== msg.id);
-    const all = msg.parts.length ? [...before, msg] : before;
-    return all.map((m) =>
+  // ---- the request history: the latest summary and the messages after it, older results shortened
+  let aggressive = false;
+  const before = (): ChatMessage[] => {
+    const th = thread();
+    const idx = th.messages.findIndex((m) => m.id === msg.id);
+    return idx >= 0 ? th.messages.slice(0, idx) : th.messages.filter((m) => m.id !== msg.id);
+  };
+  const kitHistory = (compactions = thread().compactions): ChatMessage[] => {
+    const b = before();
+    return requestHistory(msg.parts.length ? [...b, msg] : b, compactions, { aggressive });
+  };
+  const toWireMessages = (messages: ChatMessage[], map: ToolNameMap): ChatMessage[] =>
+    messages.map((m) =>
       m.role === 'assistant' && m.parts.some((p) => p.type === 'tool-call')
-        ? { ...m, parts: m.parts.map((p) => (p.type === 'tool-call' ? { ...p, name: names.toWire(p.name) } : p)) }
+        ? { ...m, parts: m.parts.map((p) => (p.type === 'tool-call' ? { ...p, name: map.toWire(p.name) } : p)) }
         : m,
     );
+
+  /**
+   * Summarises the older part of the conversation (tier 2), or everything
+   * before this turn after the provider rejected the request as too long
+   * (tier 3). Resolves with whether a summary was added.
+   */
+  const compact = async (offered: OfferedTools, overflow: boolean): Promise<boolean> => {
+    const th = thread();
+    const history = before();
+    const latest = latestCompaction(history, th.compactions);
+    // nothing before this turn that a summary does not already cover
+    if (compactionBoundary(history, latest ? latest.index + 1 : 0, 1) < 0) return false;
+    const base = estimateText(system) + estimateTools(offered.wire);
+    const tokensBefore = Math.round(estimateRequest({ system, tools: offered.wire, messages: kitHistory() }) * ratio());
+    const current = msg.parts.length ? estimateMessage(msg) : 0;
+    const fits = (from: number) => {
+      let n = base + summaryTokens(config, window) + current;
+      for (let i = from; i < history.length; i++) n += estimateMessage(history[i]);
+      return n * ratio() <= budget * COMPACT_TARGET;
+    };
+    opts.onPhase?.('submitted');
+    started = false;
+    report(lastUsed, true);
+    let c: Compaction | null;
+    try {
+      c = await compactHistory({
+        adapter,
+        config,
+        window,
+        appName: host.appName,
+        messages: history,
+        compactions: th.compactions,
+        datasets: th.datasets,
+        // the turn in progress counts as one of the turns kept
+        keep: overflow ? [1] : [KEEP_TURNS + 1, KEEP_TURNS, 1],
+        fits: overflow ? undefined : fits,
+        auto: true,
+        fallback: true,
+        signal,
+        sleep,
+        now,
+      });
+    } finally {
+      report(lastUsed, false);
+    }
+    if (!c) return false;
+    // no summary could be written: send only this turn, shortened, like an overflow
+    if (c.summary.startsWith(OUTLINE_NOTE)) aggressive = true;
+    const compactions = [...(th.compactions ?? []), c];
+    const done: Compaction = { ...c, tokensBefore, tokensAfter: Math.round(estimateRequest({ system, tools: offered.wire, messages: kitHistory(compactions) }) * ratio()) };
+    updateThread((t) => ({ ...t, compactions: [...(t.compactions ?? []), done] }));
+    return true;
   };
+  let turnCompactions = 0;
 
   let fenceCount = msg.parts.filter((p) => p.type === 'ui' && p.id.startsWith(`${msg.id}:fence:`)).length;
   let started = false;
@@ -260,7 +341,20 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
         return { message: msg };
       }
       const offered = step === 0 ? initialTools : collectTools();
-      const request: ModelRequest = { config, system, messages: history(offered.names), tools: offered.wire, signal };
+      let history = kitHistory();
+      let estimate = estimateRequest({ system, tools: offered.wire, messages: history });
+      report(estimate * ratio());
+      // tier 2: most of the budget is used: summarise the older turns first
+      if (turnCompactions < MAX_TURN_COMPACTIONS && estimate * ratio() > COMPACT_AT * budget) {
+        turnCompactions++;
+        if (await compact(offered, false)) {
+          history = kitHistory();
+          estimate = estimateRequest({ system, tools: offered.wire, messages: history });
+          report(estimate * ratio());
+        }
+      }
+      let request: ModelRequest = { config, system, messages: toWireMessages(history, offered.names), tools: offered.wire, signal };
+      let stepInput: number | undefined;
 
       // ---- stream one model response
       const stepStart = msg.parts.length;
@@ -387,6 +481,7 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
             return;
           }
           case 'usage':
+            if (ev.usage.inputTokens) stepInput = ev.usage.inputTokens;
             set({ ...msg, usage: sumUsage(msg.usage, ev.usage) });
             return;
           case 'finish':
@@ -395,7 +490,9 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
         }
       };
 
-      for (let attempt = 0; ; attempt++) {
+      let retries = 0;
+      let overflowed = false;
+      for (;;) {
         let got = false;
         try {
           for await (const ev of adapter.stream(request)) {
@@ -413,16 +510,33 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
         } catch (err) {
           if (signal.aborted || isAbortError(err)) throw err;
           const pe = asProviderError(err);
-          // one automatic retry for a transient failure, only if nothing arrived yet
-          if (!got && attempt === 0 && pe.retryable && (pe.retryAfterMs ?? 0) <= MAX_RETRY_WAIT_MS) {
-            await sleep(pe.retryAfterMs ?? 1000, signal);
+          // tier 3: the request did not fit: summarise everything before this turn, shorten the rest, and ask again, once
+          if (!got && pe.contextOverflow && !overflowed) {
+            overflowed = true;
+            // the estimate was low for this model (or the window is smaller than assumed): count higher from now on
+            if (estimate > 0) setRatio(Math.min(CALIBRATION_MAX, Math.max(ratio() * 1.1, (budget / estimate) * 1.05)));
+            aggressive = true;
+            await compact(offered, true);
+            history = kitHistory();
+            estimate = estimateRequest({ system, tools: offered.wire, messages: history });
+            report(estimate * ratio());
+            request = { ...request, messages: toWireMessages(history, offered.names) };
             continue;
           }
-          throw pe;
+          // transient failures (rate limit, overload, server error, network) before any output: back off and retry
+          const wait = !got && pe.retryable && retries < MAX_RETRIES ? retryDelay(retries, pe.retryAfterMs) : undefined;
+          if (wait === undefined) throw pe;
+          retries++;
+          await sleep(wait, signal);
         }
       }
       closeReasoning();
       if (signal.aborted) throw abortError(signal);
+      {
+        const r = calibrationRatio(stepInput, estimate);
+        if (r !== undefined) setRatio(r);
+        report(estimateRequest({ system, tools: offered.wire, messages: kitHistory() }) * ratio());
+      }
 
       // ---- ```a2ui fences in this step's text become interfaces
       if (typeof extractA2UIFences === 'function') {
@@ -469,8 +583,9 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
         if (argsErrors.has(id)) return { id, error: `The arguments were not valid JSON (${argsErrors.get(id)}). Send them again as a JSON object.` };
         const tool = offered.byName.get(part.name);
         if (!tool) {
-          const names = [...offered.byName.keys()].map((n) => offered.names.toWire(n));
-          return { id, error: `Unknown tool "${offered.names.toWire(part.name)}". Available tools: ${names.join(', ') || 'none'}.` };
+          const available = [...offered.byName.keys()].map((n) => offered.names.toWire(n));
+          const hint = offered.deferred ? ' Call find_tools to load the tool you need.' : '';
+          return { id, error: `Unknown tool "${offered.names.toWire(part.name)}". Available tools: ${available.join(', ') || 'none'}.${hint}` };
         }
         return { id, tool };
       });

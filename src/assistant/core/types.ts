@@ -269,6 +269,12 @@ export interface AssistantTool {
    * datasets. Throw to report an error to the model (it can correct itself).
    */
   execute: (args: unknown, ctx: ToolContext) => unknown | Promise<unknown>;
+  /**
+   * Always offered. When the full tool list would take too much of a small
+   * context window, the kit offers only the core tools plus `find_tools`,
+   * which finds and enables the others by keyword for the rest of the thread.
+   */
+  core?: boolean;
 }
 
 // ------------------------------------------------------------------ host
@@ -363,6 +369,12 @@ export interface ProviderConfig {
    * `https://my-proxy.example/` + the request URL.
    */
   corsProxy?: string;
+  /**
+   * The model's context window in tokens: filled in from the provider's model
+   * list when it reports one, else a default for the model family; editable.
+   * The kit keeps each request well inside it (see `Compaction`).
+   */
+  contextWindow?: number;
   /** the model can call tools (off: the assistant only answers) */
   tools?: boolean;
   /** the model accepts images */
@@ -456,6 +468,51 @@ export interface Thread {
    * Missing in threads saved before it existed (the highest id + 1 then).
    */
   nextDatasetSeq?: number;
+  /**
+   * Summaries that stand in for the messages before them, oldest first.
+   * Requests send the latest summary and the messages after its boundary;
+   * the transcript keeps every message and shows a divider there.
+   */
+  compactions?: Compaction[];
+  /**
+   * Whether this thread offers only the core tools plus `find_tools`
+   * (`AssistantTool.core`), decided at its first turn on a connection and
+   * kept, so the system prompt stays the same from turn to turn.
+   */
+  toolMode?: { connection: string; deferred: boolean };
+  /** tools `find_tools` loaded in this thread (kit names), offered from then on */
+  enabledTools?: string[];
+}
+
+/**
+ * An automatic (or `/compact`) summary of the conversation so far, made when
+ * it grew too long for the model's context window. The transcript is never
+ * cut: messages up to and including `throughMessageId` are replaced by the
+ * summary in requests only.
+ */
+export interface Compaction {
+  id: string;
+  /** the last message the summary covers */
+  throughMessageId: string;
+  /** what the model is given instead of those messages (Markdown) */
+  summary: string;
+  createdAt: number;
+  /** made automatically (vs asked for with `/compact`) */
+  auto: boolean;
+  /** how many messages it covers, and the estimated tokens before and after */
+  messages: number;
+  tokensBefore?: number;
+  tokensAfter?: number;
+}
+
+/** How full the model's context is, for the panel's meter. */
+export interface ContextUsage {
+  /** estimated tokens of the next request (system, tools and messages) */
+  used: number;
+  /** the model's context window */
+  window: number;
+  /** a summary is being written */
+  compacting: boolean;
 }
 
 /** The composer's status, as `@tecton/react/tecton/composer` expects it. */
@@ -506,6 +563,13 @@ export interface AssistantSnapshot {
   provider: ProviderConfig | null;
   /** the last error of the session (also in the transcript as an ErrorPart) */
   error: ErrorPart | null;
+  /** how full the context is (null before a connection is set up) */
+  context: ContextUsage | null;
+  /**
+   * Text the app asked to put in the composer for the person to edit and
+   * send (`compose`); the UI applies it when `id` changes.
+   */
+  draft: { id: number; text: string } | null;
 }
 
 /** What the UI can do (from `useAssistant`). */
@@ -535,5 +599,9 @@ export interface AssistantController {
   listModels: (config: ProviderConfig) => Promise<ModelInfo[]>;
   /** the thread as Markdown, for export */
   exportMarkdown: (threadId?: string) => string;
+  /** summarise the conversation so far now (`/compact`), keeping the last few turns */
+  compact: () => void;
+  /** put text in the composer for the person to edit and send (e.g. "Ask the assistant about this") */
+  compose: (text: string) => void;
   host: AssistantHost;
 }

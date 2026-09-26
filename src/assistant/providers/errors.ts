@@ -14,15 +14,36 @@ export class ProviderError extends Error {
   config: boolean;
   /** how long the provider asked to wait (from `retry-after` or the error body) */
   retryAfterMs?: number;
+  /** the request did not fit the model's context window: compacting the conversation and asking again may work */
+  contextOverflow: boolean;
 
-  constructor(message: string, opts: { status?: number; detail?: string; retryable?: boolean; config?: boolean; retryAfterMs?: number } = {}) {
+  constructor(
+    message: string,
+    opts: { status?: number; detail?: string; retryable?: boolean; config?: boolean; retryAfterMs?: number; contextOverflow?: boolean } = {},
+  ) {
     super(message);
     this.status = opts.status;
     this.detail = opts.detail;
     this.retryable = opts.retryable ?? false;
     this.config = opts.config ?? false;
     this.retryAfterMs = opts.retryAfterMs;
+    this.contextOverflow = opts.contextOverflow ?? false;
   }
+}
+
+/**
+ * What providers say when a request is longer than the model's context
+ * window: OpenAI `context_length_exceeded` / "maximum context length",
+ * Anthropic "prompt is too long" / `model_context_window_exceeded`, Gemini
+ * "exceeds the maximum number of tokens", and the wordings of
+ * OpenAI-compatible servers (vLLM, llama.cpp, Ollama, LM Studio).
+ */
+const CONTEXT_OVERFLOW =
+  /context_length_exceeded|model_context_window_exceeded|maximum context length|prompt is too long|exceeds the maximum number of tokens|input token count.{0,60}exceeds|too many (input )?tokens|reduce the length of the (messages|prompt|input)|request too large|exceed\w*[\w' `]{0,40}context( size| length| window| limit)?|context (length|window|size)[\w ]{0,20}exceeded|input (is )?too long|n_ctx|num_ctx/;
+
+/** Whether an error is a request that did not fit the model's context window (see `ProviderError.contextOverflow`). */
+export function isContextOverflow(err: unknown): boolean {
+  return err instanceof ProviderError && err.contextOverflow;
 }
 
 /** Whether an error is an abort (the person pressed stop, or a timeout aborted the request). */
@@ -94,7 +115,10 @@ export function errorFromStatus(status: number, body: string, headers?: Headers,
   const lower = (said ?? '').toLowerCase();
   const who = config?.label || 'The provider';
   const retryAfterMs = parseRetryAfter(headers, body);
-  const mk = (message: string, o: { retryable?: boolean; config?: boolean } = {}) => new ProviderError(message, { status, detail, retryAfterMs, ...o });
+  const mk = (message: string, o: { retryable?: boolean; config?: boolean; contextOverflow?: boolean } = {}) => new ProviderError(message, { status, detail, retryAfterMs, ...o });
+  // checked before the quota and model messages: "the model's maximum context length…" mentions neither but must not be taken for them
+  if (status === 413 || ((status === 400 || status === 422 || status === 500 || status === 429) && CONTEXT_OVERFLOW.test(`${lower} ${body.toLowerCase()}`)))
+    return mk('The conversation is too long for this model, even after compacting it. Start a new thread, or remove large attachments.', { contextOverflow: true });
 
   if (status === 401) return mk(`The API key was rejected (401). Check the key for ${who} in Settings.`, { config: true });
   if (status === 403) {
@@ -111,8 +135,8 @@ export function errorFromStatus(status: number, body: string, headers?: Headers,
     const wait = retryAfterMs !== undefined ? ` — retry in ${Math.max(1, Math.ceil(retryAfterMs / 1000))}s` : ' — wait a moment and retry';
     return mk(`Rate limited${wait}.`, { retryable: true });
   }
-  if (status === 413 || /context.{0,20}(length|window)|too many tokens|maximum.{0,30}tokens|prompt is too long|input.{0,20}too long|reduce the length/.test(lower))
-    return mk('The conversation is too long for this model. Start a new thread or remove attachments.', {});
+  if (/context.{0,20}(length|window)|too many tokens|maximum.{0,30}tokens|prompt is too long|input.{0,20}too long|reduce the length/.test(lower))
+    return mk('The conversation is too long for this model, even after compacting it. Start a new thread, or remove large attachments.', { contextOverflow: true });
   if (status === 408 || status === 504) return mk(`${who} timed out (${status}). Try again.`, { retryable: true });
   if (status === 529 || /overloaded/.test(lower)) return mk(`${who} is overloaded right now (${status}). Try again in a moment.`, { retryable: true });
   if (status >= 500) return mk(`${who} had a server error (${status}). Try again.`, { retryable: true });

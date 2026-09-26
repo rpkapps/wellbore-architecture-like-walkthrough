@@ -31,6 +31,21 @@ function stores() {
 }
 
 describe('thread storage', () => {
+  it('keeps a thread’s summaries, tool mode and found tools across a reload', async () => {
+    const { open, saved } = stores();
+    const t: Thread = {
+      ...thread('s', 1),
+      compactions: [{ id: 'c1', throughMessageId: 's_a', summary: 'Goal: GR.', createdAt: 3, auto: true, messages: 2, tokensBefore: 9000, tokensAfter: 1200 }],
+      toolMode: { connection: 'p1|m', deferred: true },
+      enabledTools: ['view.color_by'],
+    };
+    await saved(open(), t);
+    const back = (await open().loadThread('s'))!;
+    expect(back.compactions).toEqual(t.compactions);
+    expect(back.toolMode).toEqual(t.toolMode);
+    expect(back.enabledTools).toEqual(['view.color_by']);
+  });
+
   it('one refused IndexedDB save goes to localStorage alone: the other threads stay readable and deletable in IndexedDB', async () => {
     const { idb, open, saved, inIdb, inLs } = stores();
     const p = open();

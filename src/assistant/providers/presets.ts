@@ -128,7 +128,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'http://localhost:11434/v1',
     models: [],
     needsKey: false,
-    note: 'Runs on this computer. If this page is not served from localhost, start Ollama with OLLAMA_ORIGINS=* so the browser may call it. Pick a model that supports tools.',
+    note:
+      'Runs on this computer. If this page is not served from localhost, start Ollama with OLLAMA_ORIGINS=* so the browser may call it. Pick a model that supports tools. Its OpenAI-compatible endpoint ignores num_ctx, so the model runs with the server’s context length (8,192 tokens unless OLLAMA_CONTEXT_LENGTH says otherwise): set that and enter the same number as the context window here.',
   },
   {
     id: 'lmstudio',
@@ -137,7 +138,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'http://localhost:1234/v1',
     models: [],
     needsKey: false,
-    note: 'Start the local server with CORS enabled (Developer › Settings, or `lms server start --cors`).',
+    note: 'Start the local server with CORS enabled (Developer › Settings, or `lms server start --cors`). The context length is chosen when the model is loaded: enter it as the context window here (8,192 tokens is assumed).',
   },
   {
     id: 'custom',
@@ -171,4 +172,73 @@ export function configFromPreset(preset: ProviderPreset, partial: Partial<Provid
   if (Object.keys(headers).length) config.headers = headers;
   config.baseUrl = config.baseUrl.replace(/\/+$/, '');
   return config;
+}
+
+// ------------------------------------------------------------------ context windows
+
+/**
+ * The most of a model's context window the kit fills: million-token windows
+ * are capped, so a long conversation is compacted before each request costs
+ * dollars and takes a minute to read.
+ */
+export const MAX_WORKING_CONTEXT = 200_000;
+
+/**
+ * A preset's context window when neither the connection nor the provider's
+ * model list gives one. `fixed`: the server decides, whatever the model
+ * family (hosted open models run with the host's own limit; local servers
+ * with the context they were started with).
+ */
+const PRESET_WINDOWS: Record<string, { window: number; fixed?: boolean }> = {
+  openai: { window: 128_000 },
+  anthropic: { window: 200_000 },
+  gemini: { window: 1_048_576 },
+  deepseek: { window: 128_000, fixed: true },
+  openrouter: { window: 128_000 },
+  groq: { window: 131_072, fixed: true },
+  mistral: { window: 128_000, fixed: true },
+  xai: { window: 131_072 },
+  together: { window: 131_072, fixed: true },
+  fireworks: { window: 131_072, fixed: true },
+  cerebras: { window: 65_536, fixed: true },
+  ollama: { window: 8_192, fixed: true },
+  lmstudio: { window: 8_192, fixed: true },
+  custom: { window: 32_768 },
+};
+
+/** Context windows by model family, for model ids the provider's list does not describe (`anthropic/claude-sonnet-5` on OpenRouter too). */
+function familyWindow(model: string): number | undefined {
+  const id = model.toLowerCase();
+  const claude = /claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d{1,2}))?(?!\d)/.exec(id);
+  if (claude) {
+    const [, family, major, minor] = claude;
+    const v = Number(major) + (minor ? Number(minor) / 10 : 0);
+    if (family === 'fable' || family === 'mythos' || (family !== 'haiku' && v >= 4.6) || Number(major) >= 5) return 1_000_000;
+    return 200_000;
+  }
+  if (/claude/.test(id)) return 200_000;
+  if (/gemini/.test(id)) return 1_048_576;
+  if (/gpt-4\.1/.test(id)) return 1_047_576;
+  if (/gpt-oss/.test(id)) return 131_072;
+  if (/gpt-[5-9]|codex/.test(id)) return 400_000;
+  if (/(^|\/)o[134](-|$)/.test(id)) return 200_000;
+  if (/gpt-4o|gpt-4-turbo/.test(id)) return 128_000;
+  if (/deepseek/.test(id)) return 128_000;
+  if (/grok-4/.test(id)) return 256_000;
+  if (/grok/.test(id)) return 131_072;
+  if (/mistral|magistral|codestral|devstral|ministral/.test(id)) return 128_000;
+  if (/qwen|llama-?[34]|kimi|glm|minimax/.test(id)) return 131_072;
+  return undefined;
+}
+
+/**
+ * The context window to assume for a connection's model when the connection
+ * does not set one and the provider's model list did not report it: the
+ * server's for local and hosted-open-model presets, else the model family's,
+ * else the preset's (32,768 for an unknown server).
+ */
+export function defaultContextWindow(presetId: string, model: string): number {
+  const preset = PRESET_WINDOWS[presetId];
+  if (preset?.fixed) return preset.window;
+  return familyWindow(model) ?? preset?.window ?? 32_768;
 }

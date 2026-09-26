@@ -26,6 +26,8 @@ export interface MockRequest {
   turnIndex: number;
   /** assistant messages since the person's last message: 0 on the first step of a turn */
   stepIndex: number;
+  /** the request's size in tokens, as the mock counts them (4 characters of the JSON body per token): report it as `usage.input` */
+  inputTokens: number;
 }
 
 /** What the model "says". */
@@ -50,6 +52,10 @@ export interface MockOptions {
   delayMs?: number;
   /** models listed by GET …/models */
   models?: string[];
+  /** the model's context window: longer requests (`MockRequest.inputTokens`) get the provider's context-length error */
+  contextWindow?: number;
+  /** context windows the model list reports, by model id */
+  modelWindows?: Record<string, number>;
 }
 
 export interface MockHttpRequest {
@@ -110,7 +116,8 @@ const tryJson = (s: unknown) => {
 
 /** Reads the request the way a script wants to see it. */
 export function describeRequest(protocol: MockProtocol, url: string, body: Record<string, unknown>): MockRequest {
-  const req: MockRequest = { protocol, url, body, system: '', toolNames: [], lastUserText: '', toolResults: [], turnIndex: 0, stepIndex: 0 };
+  const inputTokens = Math.ceil(JSON.stringify(body).length / 4);
+  const req: MockRequest = { protocol, url, body, system: '', toolNames: [], lastUserText: '', toolResults: [], turnIndex: 0, stepIndex: 0, inputTokens };
   if (protocol === 'openai') {
     const msgs = (body.messages as Record<string, unknown>[]) ?? [];
     req.system = msgs.filter((m) => m.role === 'system').map((m) => textOf(m.content)).join('\n');
@@ -179,6 +186,27 @@ export function describeRequest(protocol: MockProtocol, url: string, body: Recor
       }
   }
   return req;
+}
+
+/** The error each provider answers a request longer than the model's context window with (for `MockTurn.error`). */
+export function contextLengthError(protocol: MockProtocol, tokens = 250_000, limit = 200_000): NonNullable<MockTurn['error']> {
+  if (protocol === 'anthropic')
+    return { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: `prompt is too long: ${tokens} tokens > ${limit} maximum` } } };
+  if (protocol === 'gemini')
+    return {
+      status: 400,
+      body: { error: { code: 400, status: 'INVALID_ARGUMENT', message: `The input token count (${tokens}) exceeds the maximum number of tokens allowed (${limit}).` } },
+    };
+  return {
+    status: 400,
+    body: {
+      error: {
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+        message: `This model's maximum context length is ${limit} tokens. However, your messages resulted in ${tokens} tokens. Please reduce the length of the messages.`,
+      },
+    },
+  };
 }
 
 const sse = (data: unknown, event?: string) => `${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
@@ -254,11 +282,13 @@ function geminiChunks(turn: MockTurn, size: number): string[] {
   return out;
 }
 
-function modelsBody(url: string, headers: MockHttpRequest['headers'], models: string[]): unknown {
+function modelsBody(url: string, headers: MockHttpRequest['headers'], models: string[], windows: Record<string, number> = {}): unknown {
   const h = (k: string) => Object.entries(headers ?? {}).some(([key, v]) => key.toLowerCase() === k && v !== undefined);
-  if (h('anthropic-version')) return { data: models.map((id) => ({ id, type: 'model', display_name: id })), has_more: false };
-  if (h('x-goog-api-key') || /pageSize=|\/v1beta\/models/.test(url)) return { models: models.map((id) => ({ name: `models/${id}`, displayName: id, supportedGenerationMethods: ['generateContent'] })) };
-  return { object: 'list', data: models.map((id) => ({ id, object: 'model', owned_by: 'mock' })) };
+  const w = (id: string, key: string) => (windows[id] ? { [key]: windows[id] } : {});
+  if (h('anthropic-version')) return { data: models.map((id) => ({ id, type: 'model', display_name: id, ...w(id, 'max_input_tokens') })), has_more: false };
+  if (h('x-goog-api-key') || /pageSize=|\/v1beta\/models/.test(url))
+    return { models: models.map((id) => ({ name: `models/${id}`, displayName: id, supportedGenerationMethods: ['generateContent'], ...w(id, 'inputTokenLimit') })) };
+  return { object: 'list', data: models.map((id) => ({ id, object: 'model', owned_by: 'mock', ...w(id, 'context_length') })) };
 }
 
 /** A request handler for a Node HTTP server (async: the script may be). Answers CORS preflights and `GET …/models`. */
@@ -269,7 +299,7 @@ export function mockServerHandler(script: MockScript, opts: MockOptions = {}): (
     const method = (req.method ?? 'GET').toUpperCase();
     if (method === 'OPTIONS') return { status: 204, headers: { ...CORS }, chunks: [] };
     const url = req.url;
-    if (method === 'GET' && /\/models(\?|$)/.test(url)) return { status: 200, headers: { ...CORS, 'content-type': 'application/json' }, chunks: [JSON.stringify(modelsBody(url, req.headers, models))] };
+    if (method === 'GET' && /\/models(\?|$)/.test(url)) return { status: 200, headers: { ...CORS, 'content-type': 'application/json' }, chunks: [JSON.stringify(modelsBody(url, req.headers, models, opts.modelWindows))] };
     const protocol = protocolOf(url);
     if (!protocol || method !== 'POST') return { status: 404, headers: { ...CORS, 'content-type': 'application/json' }, chunks: [JSON.stringify({ error: { message: `No route for ${method} ${url}` } })] };
     let body: Record<string, unknown>;
@@ -278,7 +308,8 @@ export function mockServerHandler(script: MockScript, opts: MockOptions = {}): (
     } catch {
       return { status: 400, headers: { ...CORS, 'content-type': 'application/json' }, chunks: [JSON.stringify({ error: { message: 'Invalid JSON body' } })] };
     }
-    const turn = await script(describeRequest(protocol, url, body));
+    const described = describeRequest(protocol, url, body);
+    const turn = opts.contextWindow && described.inputTokens > opts.contextWindow ? { error: contextLengthError(protocol, described.inputTokens, opts.contextWindow) } : await script(described);
     if (turn.error) {
       const b = turn.error.body ?? { error: { message: `Mock error ${turn.error.status}` } };
       return { status: turn.error.status, headers: { ...CORS, 'content-type': 'application/json', ...(turn.error.headers ?? {}) }, chunks: [typeof b === 'string' ? b : JSON.stringify(b)] };

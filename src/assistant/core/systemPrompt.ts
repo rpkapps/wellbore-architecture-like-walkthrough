@@ -18,6 +18,8 @@ export interface SystemPromptInput {
   tools: boolean;
   /** the A2UI guide (the generated-interface protocol), when `render_ui` is offered */
   a2uiGuide?: string;
+  /** only the core tools are offered; the others are found with `find_tools` (`core/toolSearch.ts`) */
+  deferredTools?: boolean;
 }
 
 const AUTONOMY: Record<AutonomyMode, string> = {
@@ -43,9 +45,17 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
         '- When several independent reads are needed, call them together.',
         '- A tool result may hand over a dataset: you see its id (ds_1…), columns, size, sample rows and statistics, not every row. Use `query_dataset` to filter, aggregate or derive datasets. Say which dataset a figure comes from.',
         '- If a tool fails, read the error, fix the arguments and try again once or twice; then explain what went wrong.',
+        '- Results of older calls may be shortened to `{"elided": true, "summary": …}` to save space; the datasets they produced stay available by id. Call the tool again if you need the full result.',
         '- Keep going until the request is done, then answer. Do not narrate each call.',
       ].join('\n'),
     );
+    if (input.deferredTools)
+      sections.push(
+        [
+          '# More tools',
+          'Only the most used tools are loaded, and the app has many more: when none of your tools fits the request, call `find_tools` with a few keywords for what you need. The tools it returns can be called from then on. Search before saying that something cannot be done.',
+        ].join('\n'),
+      );
   }
 
   if (input.a2uiGuide) sections.push(`# Generated interfaces\n${input.a2uiGuide.trim()}`);

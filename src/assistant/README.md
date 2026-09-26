@@ -105,6 +105,43 @@ A few things matter when the browser calls providers directly:
   Provider caches therefore hit from turn to turn, and Claude's replayed
   thinking stays valid.
 
+## Context
+
+The person never has to manage the model's context window; the kit keeps
+every request inside it (`core/context.ts`, `core/compaction.ts`).
+
+- **Budget.** The window comes from the connection's `contextWindow`, else
+  from the provider's model list (Anthropic, Gemini and OpenRouter report
+  it; OpenRouter's is read once per session), else from a default per
+  preset or model family (`providers/presets.ts`). Million-token windows
+  are capped at 200k (`MAX_WORKING_CONTEXT`) to keep cost and latency sane.
+  Room for the answer is kept free. Tokens are estimated from characters
+  and corrected per thread by the input tokens the provider reports.
+- **Every request** shortens tool results older than the last few turns to
+  a stub (`{elided, summary, datasets}`: datasets stay usable by id) and
+  leaves out their reasoning and recorded app state. The shortened region
+  grows four turns at a time, so prompt caches keep hitting in between.
+  Only the request changes; the transcript keeps everything.
+- **At 70 % of the budget** one model call summarises everything but the
+  last two turns. The summary is stored on the thread (`Thread.compactions`,
+  append-only; the transcript shows a divider) and requests send it in
+  place of the messages it covers. `compact()` (the `/compact` command) does
+  the same on demand. While it runs, `snapshot.context.compacting` is true.
+- **If the provider still says the request is too long**, everything before
+  the current turn is summarised (or outlined, if the summary fails too)
+  and the request is sent again, once.
+- **Many tools, small window.** When the tool definitions would take more
+  than 15 % of the window (or the window is 32k or less), only tools marked
+  `core: true` and the kit's own are offered, plus `find_tools`: the model
+  searches the others by keyword, and what it finds stays offered for the
+  thread. The choice is made at a thread's first turn, so the system prompt
+  stays the same from turn to turn.
+- **Transient errors** (rate limits, overload, server errors, network) are
+  retried up to three times before any output arrived, after 1 s, 2 s and
+  4 s (or the provider's `retry-after`, up to 20 s).
+
+`snapshot.context` (`{ used, window, compacting }`) drives the panel's meter.
+
 ## Performance
 
 - Nothing runs while the panel is closed, and the kit is a separate chunk.
@@ -117,7 +154,8 @@ A few things matter when the browser calls providers directly:
 
 `tests/assistant/` covers:
 
-- `core-*`: the agent loop through every protocol;
+- `core-*`: the agent loop through every protocol, the context budget,
+  compaction, tool deferral and retries;
 - `providers-*`: wire conversion and stream parsing against recorded SSE;
 - `a2ui-*`: the processor, the validator and rendering;
 - `ui-*`: Markdown and panel rendering.

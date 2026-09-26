@@ -16,8 +16,8 @@ export function adapterFor(kind: ProviderKind, opts: AdapterOptions = {}): Provi
 }
 
 export { createAnthropicAdapter, createGeminiAdapter, createOpenAIAdapter, type AdapterOptions };
-export { ProviderError, isAbortError, toErrorPart, toProviderError, networkError } from './errors';
-export { PROVIDER_PRESETS, presetById, configFromPreset } from './presets';
+export { ProviderError, isAbortError, isContextOverflow, toErrorPart, toProviderError, networkError } from './errors';
+export { PROVIDER_PRESETS, presetById, configFromPreset, defaultContextWindow, MAX_WORKING_CONTEXT } from './presets';
 export { readSSE, readLines, readNDJSON, type SSEMessage } from './sse';
 export { request, withProxy, type FetchLike } from './shared';
 export { toGeminiSchema } from './gemini';
