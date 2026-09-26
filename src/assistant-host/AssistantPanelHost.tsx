@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
 import { createAssistant } from '../assistant/core/controller';
 import type { AssistantController } from '../assistant/core/types';
 import { AssistantPanel } from '../assistant/ui';
 import type { App } from '../ui/app';
+import { useSignal } from '../ui/signal';
 import { borewalkHost } from './host';
 import { closeAssistant, composerFocus } from './lazy';
 
@@ -23,28 +23,13 @@ export function ensureAssistant(app: App): AssistantController {
   return c;
 }
 
-/** Moves focus to the composer's text field inside `root`, when a focus was asked for. */
-function takeFocus(root: HTMLElement | null) {
-  if (!composerFocus.pending || !root) return;
-  const field = root.querySelector<HTMLTextAreaElement>('textarea:not([disabled])');
-  if (!field) return;
-  composerFocus.pending = false;
-  field.focus();
-}
-
-/** The Assistant panel's body. */
+/** The Assistant panel's body: it takes each focus request (⌘I, "Ask about this") the panel has not taken yet. */
 export default function AssistantPanelHost({ app }: { app: App }) {
   const controller = ensureAssistant(app);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // the panel may render its composer a frame after mounting (settings first, a lazy part)
-    const focus = () => requestAnimationFrame(() => takeFocus(root.current));
-    focus();
-    return composerFocus.rev.subscribe(focus);
-  }, []);
+  const focusRequest = useSignal(composerFocus);
   return (
-    <div ref={root} className="flex min-h-0 flex-1 flex-col">
-      <AssistantPanel controller={controller} onClose={() => closeAssistant(app)} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <AssistantPanel controller={controller} onClose={() => closeAssistant(app)} focusRequest={focusRequest || undefined} />
     </div>
   );
 }

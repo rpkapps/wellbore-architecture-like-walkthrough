@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@tecton/rea
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from '@tecton/react/components/combobox';
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@tecton/react/components/field';
 import { Input } from '@tecton/react/components/input';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@tecton/react/components/input-group';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from '@tecton/react/components/input-group';
 import { Slider } from '@tecton/react/components/slider';
 import { Spinner } from '@tecton/react/components/spinner';
 import { Switch } from '@tecton/react/components/switch';
@@ -16,12 +16,18 @@ import { Tooltip, TooltipTrigger } from '@tecton/react/components/tooltip';
 import { Link } from '@tecton/react/tecton/link';
 import type { ProviderConfig, ProviderPreset, ReasoningEffort } from '../../core/types';
 import { usePanel } from '../context';
+import { resolveContextWindow } from '../../core/context';
 
 const EFFORTS: ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
 
 /** URL checks for the form: absolute http(s), no trailing slash needed. */
-export function validateConnection(c: ProviderConfig, needsKey: boolean): Partial<Record<'label' | 'baseUrl' | 'model' | 'apiKey' | 'corsProxy' | 'maxOutputTokens', string>> {
-  const errors: Partial<Record<'label' | 'baseUrl' | 'model' | 'apiKey' | 'corsProxy' | 'maxOutputTokens', string>> = {};
+type ConnectionField = 'label' | 'baseUrl' | 'model' | 'apiKey' | 'corsProxy' | 'maxOutputTokens' | 'contextWindow';
+
+/** The smallest context window the form accepts (below it no conversation fits). */
+export const MIN_CONTEXT_WINDOW = 1024;
+
+export function validateConnection(c: ProviderConfig, needsKey: boolean): Partial<Record<ConnectionField, string>> {
+  const errors: Partial<Record<ConnectionField, string>> = {};
   if (!c.label.trim()) errors.label = 'Give the connection a name.';
   try {
     const url = new URL(c.baseUrl);
@@ -33,6 +39,8 @@ export function validateConnection(c: ProviderConfig, needsKey: boolean): Partia
   if (needsKey && !c.apiKey?.trim()) errors.apiKey = 'This provider needs an API key.';
   if (c.corsProxy && !/^https?:\/\/\S+$/.test(c.corsProxy)) errors.corsProxy = 'Use an http(s) URL prefix.';
   if (c.maxOutputTokens !== undefined && (!Number.isInteger(c.maxOutputTokens) || c.maxOutputTokens < 1)) errors.maxOutputTokens = 'A whole number above 0.';
+  if (c.contextWindow !== undefined && (!Number.isInteger(c.contextWindow) || c.contextWindow < MIN_CONTEXT_WINDOW))
+    errors.contextWindow = `A whole number of tokens, at least ${MIN_CONTEXT_WINDOW.toLocaleString('en')}.`;
   return errors;
 }
 
@@ -55,6 +63,9 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
   const [showKey, setShowKey] = useState(false);
   const [models, setModels] = useState<string[]>(() => [...new Set([initial.model, ...(preset?.models ?? [])].filter(Boolean))]);
   const [fetchState, setFetchState] = useState<{ status: 'idle' | 'loading' | 'done' | 'error'; message?: string }>({ status: 'idle' });
+  // context windows the provider reported, by model id; typed by the person, the field is theirs
+  const [windows, setWindows] = useState<Record<string, number>>({});
+  const windowTyped = useRef(false);
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({ status: 'idle' });
   const [showErrors, setShowErrors] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -78,12 +89,20 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
   const err = (k: keyof typeof errors) => (showErrors && errors[k] ? [{ message: errors[k] }] : undefined);
 
   const set = <K extends keyof ProviderConfig>(key: K, value: ProviderConfig[K]) => setDraft((d) => ({ ...d, [key]: value }));
+  /** A model picked or typed: its reported window comes with it, unless the person typed one. */
+  const setModel = (model: string) =>
+    setDraft((d) => (windowTyped.current || !Object.keys(windows).length ? { ...d, model } : { ...d, model, contextWindow: windows[model.trim()] }));
+  // what Auto means for this model: the window the provider reported, else the kit's default for the model family
+  const autoWindow = config.model ? resolveContextWindow({ presetId: config.presetId, model: config.model }, windows[config.model]) : null;
 
   const fetchModels = async () => {
     setFetchState({ status: 'loading' });
     try {
       const list = await controller.listModels(config);
       setModels((cur) => [...new Set([...list.map((m) => m.id), ...cur])]);
+      const found = Object.fromEntries(list.flatMap((m) => (m.contextWindow ? [[m.id, m.contextWindow]] : [])));
+      setWindows(found);
+      if (!windowTyped.current && found[config.model]) set('contextWindow', found[config.model]);
       setFetchState({ status: 'done', message: `${list.length} models available.` });
     } catch (e) {
       setFetchState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -190,8 +209,8 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
               allowsEmptyCollection
               menuTrigger="focus"
               inputValue={draft.model}
-              onInputChange={(value) => set('model', value)}
-              onChange={(key) => key !== null && set('model', String(key))}
+              onInputChange={setModel}
+              onChange={(key) => key !== null && setModel(String(key))}
               isInvalid={!!err('model')}
             >
               <ComboboxInput id={id('model')} className="font-mono" placeholder="model id" />
@@ -215,6 +234,33 @@ export function ConnectionForm({ initial, preset, isNew, isActive, onSaved, onRe
           {fetchState.status === 'done' && <FieldDescription>{fetchState.message}</FieldDescription>}
           {fetchState.status === 'error' && <FieldError>{`Could not list the models: ${fetchState.message}`}</FieldError>}
           <FieldError errors={err('model')} />
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor={id('window')}>Context window</FieldLabel>
+          <InputGroup className="sm:max-w-64">
+            <InputGroupInput
+              id={id('window')}
+              type="number"
+              inputMode="numeric"
+              min={MIN_CONTEXT_WINDOW}
+              step={1024}
+              placeholder={autoWindow ? `Auto (${autoWindow.toLocaleString('en')})` : 'Auto'}
+              value={draft.contextWindow ?? ''}
+              onChange={(e) => {
+                windowTyped.current = e.target.value !== '';
+                set('contextWindow', e.target.value === '' ? undefined : Number(e.target.value));
+              }}
+              aria-invalid={!!err('contextWindow')}
+              aria-describedby={id('window-help')}
+              className="tabular-nums"
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupText>tokens</InputGroupText>
+            </InputGroupAddon>
+          </InputGroup>
+          <FieldDescription id={id('window-help')}>How much the model reads at once; older messages are summarised to stay inside it. Empty: the model’s own.</FieldDescription>
+          <FieldError errors={err('contextWindow')} />
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">

@@ -47,10 +47,10 @@ export function AssistantPanelBody({ app }: { app: App }) {
 }
 
 /**
- * A request to move focus to the composer (⌘I, "Ask about this"): the panel
- * takes it when it has mounted, or at once if it already has.
+ * Requests to move focus to the composer (⌘I, "Ask about this"), counted:
+ * the panel takes a new one when it has mounted, or at once if it already has.
  */
-export const composerFocus = { pending: false, rev: new Rev() };
+export const composerFocus = new Rev();
 
 /** Is the assistant panel open and in front? */
 export const assistantShown = (app: App) => app.workspace.isShown(ASSISTANT_PANEL);
@@ -61,8 +61,7 @@ export function openAssistant(app: App) {
     if (app.workspace.hidden.value) app.workspace.hidden.set(false);
     app.workspace.open(ASSISTANT_PANEL);
   });
-  composerFocus.pending = true;
-  composerFocus.rev.bump();
+  composerFocus.bump();
 }
 
 /** Closes the assistant panel (its conversation stays; reopening shows it again). */

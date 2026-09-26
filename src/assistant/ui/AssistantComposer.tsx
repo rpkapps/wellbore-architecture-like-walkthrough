@@ -1,5 +1,5 @@
-import { cloneElement, isValidElement, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { CameraIcon, EyeIcon, FileTextIcon, ImageIcon, PaperclipIcon, ShieldCheckIcon, TriangleAlertIcon, XIcon, ZapIcon } from 'lucide-react';
+import { cloneElement, isValidElement, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
+import { ArrowUpIcon, CameraIcon, EyeIcon, FileTextIcon, ImageIcon, PaperclipIcon, ShieldCheckIcon, TriangleAlertIcon, XIcon, ZapIcon } from 'lucide-react';
 import { Button } from '@tecton/react/components/button';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger, DropdownMenuGroup } from '@tecton/react/components/dropdown-menu';
 import { InputGroupButton } from '@tecton/react/components/input-group';
@@ -17,9 +17,10 @@ import {
   type ComposerAttachmentItem,
   type ComposerCommandItem,
 } from '@tecton/react/tecton/composer';
-import type { AutonomyMode, ContextItem, FilePart, ImagePart } from '../core/types';
+import type { AssistantController, AutonomyMode, ContextItem, FilePart, ImagePart } from '../core/types';
 import { usePanel } from './context';
 import { readAttachment, TEXT_FILE_EXTENSIONS } from './format';
+import { ContextMeter } from './parts/ContextMeter';
 import { shallowEqual, useAssistantSelector } from './useAssistant';
 
 /** The autonomy modes, for the composer's picker and the settings. */
@@ -55,10 +56,19 @@ function useHostContext(): ContextItem[] {
   return items;
 }
 
+/**
+ * The drafts and focus requests a composer has applied, per controller: the
+ * controller outlives the composer (a new chat remounts it, the panel may
+ * close), and neither must be applied twice.
+ */
+const applied = new WeakMap<AssistantController, { draft?: number; focus?: number }>();
+
 export interface AssistantComposerProps {
   commands: ComposerCommandItem[];
   onCommand: (id: string) => void;
   handle?: Ref<ComposerHandle>;
+  /** a new value moves focus to the message box (see `AssistantPanelProps.focusRequest`) */
+  focusRequest?: number;
 }
 
 /**
@@ -66,7 +76,7 @@ export interface AssistantComposerProps {
  * slash commands, attach / capture / autonomy in the toolbar, send or stop.
  * It subscribes to the status and a few settings only, never to the stream.
  */
-export function AssistantComposer({ commands, onCommand, handle }: AssistantComposerProps) {
+export function AssistantComposer({ commands, onCommand, handle, focusRequest }: AssistantComposerProps) {
   const { controller, focusComposer } = usePanel();
   const { host } = controller;
   const status = useAssistantSelector(controller, (s) => s.status);
@@ -78,6 +88,7 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
   const provider = useAssistantSelector(controller, (s) => s.provider);
   const autonomy = useAssistantSelector(controller, (s) => s.settings.autonomy);
   const threadId = useAssistantSelector(controller, (s) => s.thread.id);
+  const draft = useAssistantSelector(controller, (s) => s.draft);
 
   const context = useHostContext();
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
@@ -85,8 +96,33 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
   const [files, setFiles] = useState<FilePart[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
+  const [value, setValue] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  // bumped to focus the box with the caret after its text, once the text is in
+  const [caretTick, setCaretTick] = useState(0);
+  const seen = applied.get(controller) ?? applied.set(controller, {}).get(controller)!;
+
+  // the app put text in the box ("Ask the assistant about this"): the person edits and sends it
+  useEffect(() => {
+    if (!draft || seen.draft === draft.id) return;
+    seen.draft = draft.id;
+    setValue(draft.text);
+    setCaretTick((n) => n + 1);
+  }, [draft, seen]);
+
+  useEffect(() => {
+    if (focusRequest === undefined || seen.focus === focusRequest) return;
+    seen.focus = focusRequest;
+    setCaretTick((n) => n + 1);
+  }, [focusRequest, seen]);
+
+  useLayoutEffect(() => {
+    const el = input.current;
+    if (!caretTick || !el || el.disabled) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [caretTick]);
 
   // a removed chip stays removed while its id is current; once the host drops it, it may come back
   useEffect(() => {
@@ -146,7 +182,7 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
     () => ({
       addFiles: (list) => void addFiles(list),
       sendText: send,
-      focus: () => formRef.current?.querySelector('textarea')?.focus(),
+      focus: () => input.current?.focus(),
     }),
     [addFiles, send],
   );
@@ -189,11 +225,19 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
   const mode = AUTONOMY.find((m) => m.id === autonomy) ?? AUTONOMY[1];
   const ModeIcon = mode.icon;
   const noProvider = provider === null;
+  const busy = status === 'submitted' || status === 'streaming';
+  // the Composer sends only with text: images and files may go on their own
+  const sendsAttachmentsOnly = !noProvider && !busy && images.length + files.length > 0 && value.trim() === '';
+  const sendAttachments = () => {
+    send('');
+    input.current?.focus();
+  };
 
   return (
     <div data-slot="assistant-composer" className="contents">
       <Composer
-        ref={formRef}
+        value={value}
+        onValueChange={setValue}
         status={status}
         onStop={() => controller.stop()}
         onSubmit={({ text }) => send(text)}
@@ -214,7 +258,16 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
         <ComposerField>
           <ComposerCommands items={commands} onCommand={(item) => onCommand(item.id)} countMessage={(n) => `${n} command${n === 1 ? '' : 's'}`} />
           <ComposerAttachments items={attachmentItems} onRemove={(key) => remove(String(key))} aria-label="Context and attachments" />
-          <ComposerInput placeholder={noProvider ? 'Connect a model to start…' : `Ask ${host.appName} anything…`} rows={1} />
+          <ComposerInput
+            ref={input}
+            placeholder={noProvider ? 'Connect a model to start…' : sendsAttachmentsOnly ? 'Add a message, or press Enter to send' : `Ask ${host.appName} anything…`}
+            rows={1}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || !sendsAttachmentsOnly) return;
+              e.preventDefault();
+              sendAttachments();
+            }}
+          />
           <ComposerToolbar aria-label="Message tools">
             <TooltipTrigger>
               <InputGroupButton size="icon-xs" aria-label="Attach images or files" isDisabled={noProvider} onPress={() => fileInput.current?.click()}>
@@ -260,7 +313,14 @@ export function AssistantComposer({ commands, onCommand, handle }: AssistantComp
               </DropdownMenu>
             </DropdownMenuTrigger>
             <span className="flex-1" />
-            <ComposerSubmit />
+            <ContextMeter />
+            {sendsAttachmentsOnly ? (
+              <InputGroupButton data-slot="composer-submit" data-action="send" size="icon-sm" variant="default" aria-label="Send message" className="rounded-full" onPress={sendAttachments}>
+                <ArrowUpIcon />
+              </InputGroupButton>
+            ) : (
+              <ComposerSubmit />
+            )}
           </ComposerToolbar>
         </ComposerField>
         <ComposerHint className="truncate px-1 text-[0.6875rem]">

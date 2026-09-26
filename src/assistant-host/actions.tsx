@@ -23,6 +23,13 @@ async function ask(app: App, prompt: string) {
   c.send({ text: prompt, context: c.host.context?.() });
 }
 
+/** Opens the panel with `prompt` in the message box, for the person to edit and send (the selection shows as a chip). */
+async function compose(app: App, prompt: string) {
+  openAssistant(app);
+  const { ensureAssistant } = await loadAssistant();
+  ensureAssistant(app).compose(prompt);
+}
+
 export function assistantActions(): AnyAction<App>[] {
   const A = <S extends z.ZodType = z.ZodUndefined>(a: Action<S, App>) => defineAction<App, S>(a);
   return [
@@ -55,7 +62,7 @@ export function assistantActions(): AnyAction<App>[] {
     A({
       id: 'assistant.ask_about',
       title: 'Ask the assistant about this',
-      description: 'Opens the AI assistant with the selected object attached to the next message, ready for a question about it (or sends one).',
+      description: 'Opens the AI assistant with the selected object attached to the next message, ready for a question about it (a prompt is put in the message box to edit and send).',
       category: 'Panels',
       icon: <SparklesIcon />,
       keywords: ['ai', 'chat', 'explain', 'what is this'],
@@ -64,7 +71,7 @@ export function assistantActions(): AnyAction<App>[] {
       onSelection: (sel) => ({ input: { selection: sel }, label: 'Ask the assistant' }),
       run: async (app, input) => {
         if (input?.selection) app.select(input.selection);
-        if (input?.prompt?.trim()) await ask(app, input.prompt.trim());
+        if (input?.prompt?.trim()) await compose(app, input.prompt.trim());
         else openAssistant(app);
       },
     }),

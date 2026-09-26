@@ -54,9 +54,16 @@ const stateOf = (text: string) => {
 /** What the mock model says to a request: tool calls step by step, then an answer. */
 function brain(req: MockRequest): MockTurn {
   const raw = req.lastUserText;
-  const q = raw.replace(/<app_state>[\s\S]*?<\/app_state>/, '').replace(/<context>[\s\S]*?<\/context>/, '').toLowerCase();
+  const q = raw.replace(/<conversation_summary>[\s\S]*?<\/conversation_summary>/, '').replace(/<app_state>[\s\S]*?<\/app_state>/, '').replace(/<context>[\s\S]*?<\/context>/, '').toLowerCase();
   const st = stateOf(raw);
   const well = st.openWell?.id ?? 'F-11B';
+  // the kit asking for a summary of the conversation (automatic compaction or /compact)
+  if (/You condense a conversation/.test(req.system)) {
+    log.push(`[${req.protocol}] summary requested`);
+    return {
+      text: '## Goal\nExplore well 15/9-F-11 B: what is on screen, its logs, net pay and field production.\n\n## Key facts\n- The Hugin Fm. is the reservoir: low GR (< 60 API), high deep resistivity (tens of ohm·m), from `data.log_samples` (dataset ds_1).\n- Net pay sits almost entirely in the Hugin zone (`data.zone_summary`).\n- Field oil production peaked in 2009–2010 (`data.production_history`).\n\n## App state\nThe well is coloured by hydrocarbons (approved `view.color_by`).\n\n## Next steps\nNone pending.',
+    };
+  }
   log.push(`[${req.protocol}] step ${req.stepIndex} q="${q.trim().slice(0, 60)}" results=${req.toolResults.map((r) => r.name).join(',')}`);
 
   if (q.includes('<ui_event>') || q.includes('ui_event')) {

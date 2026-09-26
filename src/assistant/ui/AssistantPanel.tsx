@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { cn } from 'cn';
-import { CircleHelpIcon, DownloadIcon, EyeIcon, FileUpIcon, KeyRoundIcon, ShieldCheckIcon, SlidersHorizontalIcon, SquarePenIcon, Trash2Icon, ZapIcon } from 'lucide-react';
+import { CircleHelpIcon, DownloadIcon, EyeIcon, FileUpIcon, FoldVerticalIcon, KeyRoundIcon, ShieldCheckIcon, SlidersHorizontalIcon, SquarePenIcon, Trash2Icon, ZapIcon } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +28,7 @@ import './assistant.css';
 
 const COMMANDS: ComposerCommandItem[] = [
   { id: 'new', command: 'new', label: 'Start a new chat', group: 'Chat', icon: <SquarePenIcon /> },
+  { id: 'compact', command: 'compact', label: 'Summarise the conversation so far', group: 'Chat', icon: <FoldVerticalIcon /> },
   { id: 'export', command: 'export', label: 'Export the chat as Markdown', group: 'Chat', icon: <DownloadIcon /> },
   { id: 'clear', command: 'clear', label: 'Delete this chat', group: 'Chat', icon: <Trash2Icon /> },
   { id: 'model', command: 'model', label: 'Change the model', group: 'Settings', icon: <KeyRoundIcon /> },
@@ -45,6 +46,12 @@ export interface AssistantPanelProps {
   className?: string;
   /** the header's title while the chat has none of its own (defaults to "<appName> Assistant") */
   title?: string;
+  /**
+   * Focus the message box: each new value moves focus there (with the caret
+   * after its text), also when the panel mounts with a value it has not
+   * taken yet. A host's "open the assistant" shortcut bumps it.
+   */
+  focusRequest?: number;
 }
 
 /**
@@ -53,7 +60,7 @@ export interface AssistantPanelProps {
  * the transcript, and the composer. Everything it shows comes from
  * `controller`; it holds only view state (dialogs, the composer's draft).
  */
-export function AssistantPanel({ controller, onClose, className, title }: AssistantPanelProps) {
+export function AssistantPanel({ controller, onClose, className, title, focusRequest }: AssistantPanelProps) {
   const heading = title ?? `${controller.host.appName} Assistant`;
   const hasMessages = useAssistantSelector(controller, (s) => s.thread.messages.length > 0);
   const hasProvider = useAssistantSelector(controller, (s) => s.provider !== null);
@@ -111,6 +118,10 @@ export function AssistantPanel({ controller, onClose, className, title }: Assist
       switch (id) {
         case 'new':
           controller.newThread();
+          break;
+        case 'compact':
+          if (controller.getSnapshot().thread.messages.length > 1) controller.compact();
+          else setFlash('Nothing to summarise yet');
           break;
         case 'export':
           if (controller.getSnapshot().thread.messages.length) exportChat();
@@ -191,7 +202,7 @@ export function AssistantPanel({ controller, onClose, className, title }: Assist
           </div>
         </div>
         <PanelFooter className="flex-col items-stretch gap-1.5 border-t-0 px-3 pt-0 pb-3">
-          <AssistantComposer key={threadId} handle={composer} commands={COMMANDS} onCommand={onCommand} />
+          <AssistantComposer key={threadId} handle={composer} commands={COMMANDS} onCommand={onCommand} focusRequest={focusRequest} />
         </PanelFooter>
         {dragging && (
           <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-background/85 text-sm text-foreground">

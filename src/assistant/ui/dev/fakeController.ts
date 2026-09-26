@@ -14,7 +14,9 @@ import type {
   AssistantTool,
   ChatMessage,
   ChatStatus,
+  Compaction,
   ContextItem,
+  ContextUsage,
   ErrorPart,
   ModelInfo,
   OutgoingMessage,
@@ -25,7 +27,7 @@ import type {
   UIEventPart,
 } from '../../core/types';
 
-export type FakeScenario = 'empty' | 'onboarding' | 'conversation' | 'approval' | 'error';
+export type FakeScenario = 'empty' | 'onboarding' | 'conversation' | 'approval' | 'error' | 'compacted';
 
 export interface FakeControllerOptions {
   scenario?: FakeScenario;
@@ -158,6 +160,16 @@ const A2UI_SAMPLE: unknown[] = [
   },
 ];
 
+const SUMMARY_MD = `**Goal.** Review the Hugin Fm. in **15/9-F-11 A**: gamma ray by zone, then show it in 3D.
+
+- Tops: Hugin 3 012.4 m MD, Sleipner 3 098.8 m MD (operator picks).
+- GR zones: Upper Hugin 38.2 API (N/G 0.86), shale break 3 041–3 046.5 m (96.7 API), Lower Hugin 41.9 API (N/G 0.81). Dataset \`ds_1\` holds 1 001 GR samples.
+- The tube is coloured by GR and the camera sits at the top of the Hugin; a seismic layer does not exist in this project.
+- Open question: compare with F-15 D.`;
+
+/** A compaction of the seeded conversation's first four messages. */
+const SEEDED_COMPACTION: Compaction = { id: 'cmp_1', throughMessageId: 'm4', summary: SUMMARY_MD, createdAt: now - 10 * 60_000, auto: true, messages: 4, tokensBefore: 48_210, tokensAfter: 2_980 };
+
 function tool(name: string, args: unknown, state: ToolCallPart['state'], extra: Partial<ToolCallPart> = {}): ToolCallPart {
   return { type: 'tool-call', id: uid('call'), name, args, argsText: JSON.stringify(args), state, startedAt: now - 60_000, endedAt: state === 'done' || state === 'error' ? now - 60_000 + 640 : undefined, ...extra };
 }
@@ -278,9 +290,17 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
   const host = fakeHost(options.host);
   const listeners = new Set<() => void>();
 
-  const seeded = scenario === 'conversation' || scenario === 'approval' || scenario === 'error';
+  const seeded = scenario === 'conversation' || scenario === 'approval' || scenario === 'error' || scenario === 'compacted';
   let threads: Thread[] = [
-    { id: 't_main', title: seeded ? 'Gamma ray across the Hugin' : 'New chat', createdAt: now - 900_000, updatedAt: now - 60_000, messages: seeded ? seedConversation(scenario) : [], datasets: {} },
+    {
+      id: 't_main',
+      title: seeded ? 'Gamma ray across the Hugin' : 'New chat',
+      createdAt: now - 900_000,
+      updatedAt: now - 60_000,
+      messages: seeded ? seedConversation(scenario) : [],
+      datasets: {},
+      ...(scenario === 'compacted' ? { compactions: [SEEDED_COMPACTION] } : {}),
+    },
     ...(seeded
       ? [
           { id: 't_2', title: 'Casing design of F-1 C', createdAt: now - 3 * 3_600_000, updatedAt: now - 3 * 3_600_000, messages: [], datasets: {} },
@@ -301,11 +321,17 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
     showReasoning: true,
   };
   let turn = 0;
+  // estimated tokens of the next request, and whether a summary is being written
+  let used = scenario === 'compacted' ? 99_840 : seeded ? 21_500 : 3_200;
+  let compacting = false;
+  let draft: AssistantSnapshot['draft'] = null;
   let approvalWaiter: ((approved: boolean) => void) | null = null;
   const alwaysAllowed = new Set<string>();
 
   const active = () => threads.find((t) => t.id === activeId) ?? threads[0];
   const provider = () => settings.providers.find((p) => p.id === settings.activeProviderId) ?? null;
+  const contextWindow = () => provider()?.contextWindow ?? 128_000;
+  const contextUsage = (): ContextUsage | null => (provider() ? { used, window: contextWindow(), compacting } : null);
 
   let snapshot: AssistantSnapshot;
   const build = (): AssistantSnapshot => {
@@ -319,6 +345,8 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
       settings,
       provider: provider(),
       error,
+      context: contextUsage(),
+      draft,
     };
   };
   snapshot = build();
@@ -383,6 +411,26 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
     return true;
   }
 
+  /** Summarises everything but the last turn (the last two messages), as the kit does with more care. */
+  async function summarise(auto: boolean, token?: number): Promise<boolean> {
+    const ms = active().messages;
+    const through = ms.length - 3;
+    const already = active().compactions?.at(-1);
+    const from = already ? ms.findIndex((m) => m.id === already.throughMessageId) + 1 : 0;
+    if (through < from || through < 0) return true;
+    compacting = true;
+    emit();
+    await new Promise((r) => setTimeout(r, 1600 * speed));
+    compacting = false;
+    if (token !== undefined && token !== turn) return false;
+    const before = used;
+    used = Math.round(contextWindow() * 0.14);
+    const c: Compaction = { id: uid('cmp'), throughMessageId: ms[through].id, summary: SUMMARY_MD, createdAt: Date.now(), auto, messages: through - from + 1, tokensBefore: before, tokensAfter: 3_050 };
+    setThread((t) => ({ ...t, compactions: [...(t.compactions ?? []), c] }));
+    emit();
+    return true;
+  }
+
   async function runTurn(prompt: string) {
     const token = ++turn;
     error = null;
@@ -391,6 +439,8 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
     const msgId = uid('msg');
     setMessages((ms) => [...ms, { id: msgId, role: 'assistant', parts: [], createdAt: Date.now(), status: 'streaming', provider: conf?.presetId, model: conf?.model }]);
     emit();
+    // past 85 % of the window the conversation is summarised before the model is asked
+    if (used / contextWindow() > 0.85 && !(await summarise(true, token))) return;
     if (!(await sleep(900, token))) return;
     if (/error|fail/i.test(prompt)) {
       addPart(msgId, { type: 'error', message: 'The provider is overloaded (529). Try again in a moment.', detail: 'HTTP 529\n{"type":"overloaded_error"}', retryable: true });
@@ -411,6 +461,7 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
       if (!(await streamText(msgId, ok ? '\n\nDone: the top is deleted and net pay is now **74.1 m**.' : '\n\nUnderstood, I left the top in place.', token, 'text'))) return;
     } else if (!(await streamText(msgId, ANSWER_MD, token, 'text'))) return;
     patchMessage(msgId, (m) => ({ ...m, status: 'done', finishReason: 'stop', usage: { inputTokens: 3000 + Math.round(Math.random() * 3000), outputTokens: 200 + Math.round(Math.random() * 600) } }));
+    used = Math.min(contextWindow(), used + 9_000);
     status = 'ready';
     emit();
   }
@@ -508,6 +559,7 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
       threads = [t, ...threads];
       activeId = t.id;
       status = 'ready';
+      used = 3_200;
       emit();
     },
     openThread: (id) => {
@@ -556,7 +608,16 @@ export function createFakeController(options: FakeControllerOptions = {}): Assis
         anthropic: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
         gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
       };
-      return byKind[config.kind].map((id) => ({ id }));
+      const windows: Record<string, number> = { openai: 400_000, anthropic: 200_000, gemini: 1_048_576 };
+      return byKind[config.kind].map((id) => ({ id, contextWindow: id.startsWith('deepseek') ? 128_000 : windows[config.kind] }));
+    },
+    compact: () => {
+      if (status === 'submitted' || status === 'streaming' || compacting) return;
+      void summarise(false);
+    },
+    compose: (text) => {
+      draft = { id: (draft?.id ?? 0) + 1, text };
+      emit();
     },
     exportMarkdown: (threadId) => {
       const t = threads.find((x) => x.id === (threadId ?? activeId)) ?? active();

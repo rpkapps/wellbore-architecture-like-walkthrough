@@ -57,11 +57,25 @@ const INLINE_ROWS = 40;
 
 type DS = Omit<Dataset, 'id' | 'createdAt'>;
 
-const strip = (s: Record<string, unknown>) => {
-  const { $schema: _drop, ...rest } = s;
-  void _drop;
-  return rest;
-};
+/**
+ * A JSON Schema without what a model does not need: Zod's `$schema`, the
+ * integer bounds it adds (±2^53−1), `propertyNames: {type: string}`, empty
+ * `additionalProperties` (both the default) and empty defaults.
+ */
+export function leanSchema(s: unknown): unknown {
+  if (Array.isArray(s)) return s.map(leanSchema);
+  if (!s || typeof s !== 'object') return s;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(s as Record<string, unknown>)) {
+    if (k === '$schema') continue;
+    if ((k === 'maximum' || k === 'minimum') && Math.abs(v as number) === Number.MAX_SAFE_INTEGER) continue;
+    if (k === 'propertyNames' || (k === 'additionalProperties' && v && typeof v === 'object' && !Object.keys(v).length)) continue;
+    // an empty default says no more than the property being optional
+    if (k === 'default' && (v === '' || (typeof v === 'object' && v !== null && !Object.keys(v).length))) continue;
+    out[k] = k === 'properties' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([p, x]) => [p, leanSchema(x)])) : leanSchema(v);
+  }
+  return out;
+}
 
 /** A tool with a Zod input: validated before it runs, its JSON Schema sent to the model. */
 export function zodTool<S extends z.ZodType>(t: {
@@ -77,7 +91,7 @@ export function zodTool<S extends z.ZodType>(t: {
     title: t.title,
     description: t.description,
     kind: t.kind ?? 'read',
-    parameters: strip(z.toJSONSchema(t.input, { io: 'input', unrepresentable: 'any' }) as Record<string, unknown>),
+    parameters: leanSchema(z.toJSONSchema(t.input, { io: 'input', unrepresentable: 'any' })) as Record<string, unknown>,
     execute: (args, ctx) => {
       const r = t.input.safeParse(args ?? {});
       if (!r.success) throw new Error(`Invalid arguments for ${t.name}: ${z.prettifyError(r.error)}`);
@@ -97,7 +111,7 @@ function out(content: Record<string, Json>, datasets: DS[] = []): ToolOutput {
   return { content: c, datasets };
 }
 
-const optWell = z.string().optional().describe('Well id or name, e.g. "F-11B" or "15/9-F-11 B" (data.field_overview lists them); default: the well open in the 3D view');
+const optWell = z.string().optional().describe('Well id or name (default: the open well)');
 const curvesArg = z.array(z.string()).min(1).max(16).describe('Curve mnemonics or aliases: GR, RT, RDEEP, RSHAL, RHOB, NPHI, DT, DTS, CALI, BS, PEF, DRHO, ROP; CPI names; or VSH, PHIE, SW, SO, BVW, HCPV, NET, PAY (interpretation)');
 
 const fname = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -237,7 +251,7 @@ export function dataTools(dc: DataContext): AssistantTool[] {
       name: 'data.log_samples',
       title: 'Log samples',
       description:
-        'Log curves of a well over a depth range as a dataset (columns md, tvdss, zone and one per curve, with units), resampled to `step` metres (block mean; geometric for resistivity). Default step keeps ≤ 4,000 rows. Also returns the tops in range (for markers). Use it to plot logs (DepthChart: depth down, resistivity on a log scale) or to look at values.',
+        'Log curves of a well over a depth range as a dataset (columns md, tvdss, zone and one per curve, with units), resampled to `step` metres (block mean; geometric for resistivity). Default step keeps ≤ 4,000 rows. Also returns the tops in range (for markers).',
       input: z.object({
         well: optWell,
         curves: curvesArg,

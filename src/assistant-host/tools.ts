@@ -5,7 +5,7 @@ import type { ContactsFeature } from '../features/contacts';
 import type { SimulationFeature } from '../features/simulation';
 import type { App } from '../ui/app';
 import { locate } from '../ui/workspace/layout';
-import { dataTools, zodTool, type DataContext } from './dataTools';
+import { dataTools, leanSchema, zodTool, type DataContext } from './dataTools';
 
 /*
  * The tools BoreWalk gives its assistant: every action of the app (the same
@@ -34,8 +34,39 @@ const ALWAYS_ASK = new Set(['data.connect', 'workspace.reset']);
 /** Whether an action waits for the person's approval (the assistant asks first; an answer's `app://action` link refuses it). */
 export const actionNeedsApproval = (a: Pick<AnyAction<App>, 'id' | 'needsApproval'>): boolean => !!a.needsApproval || ALWAYS_ASK.has(a.id);
 
-/** Most choices listed in a tool's description. */
-const MAX_CHOICES = 30;
+/** Most choices listed in a tool's description; a call that misses is told every one. */
+const MAX_CHOICES = 12;
+
+/**
+ * The tools the assistant needs most often (reading the app and the data,
+ * travelling, colouring, the formations, the selection, the main views):
+ * always offered, even when a small context window leaves room only for
+ * these and the kit's `find_tools` finds the rest.
+ */
+const CORE = new Set([
+  'app.state',
+  'ui.selection_details',
+  'nav.go_to_depth',
+  'nav.select_well',
+  'nav.overview',
+  'nav.set_mode',
+  'view.color_by',
+  'view.display',
+  'scene.isolate',
+  'scene.formation',
+  'selection.set',
+  'selection.clear',
+  'panels.reveal',
+  'views.logs',
+  'views.correlate',
+  'views.section',
+  'views.crossplot_zone',
+  'features.set',
+  'interp.set_parameter',
+]);
+
+/** A core tool: one of `CORE`, or any tool that reads data (`data.*` reads). */
+export const isCoreTool = (t: Pick<AssistantTool, 'name' | 'kind'>): boolean => CORE.has(t.name) || (t.kind === 'read' && t.name.startsWith('data.'));
 
 const schemaCache = new WeakMap<AnyAction<App>, JSONSchema>();
 
@@ -51,7 +82,7 @@ function schemaOf(a: AnyAction<App>): JSONSchema {
       void _drop;
       // an optional object input comes out as anyOf [object, null-ish]: keep the object
       const obj = rest.type === 'object' ? rest : ((rest.anyOf as JSONSchema[] | undefined)?.find((x) => x.type === 'object') ?? null);
-      if (obj) s = obj;
+      if (obj) s = leanSchema(obj) as JSONSchema;
     } catch {
       /* not representable: the registry still validates what the model sends */
     }
@@ -59,45 +90,112 @@ function schemaOf(a: AnyAction<App>): JSONSchema {
   return s;
 }
 
-/** Does the schema take a free id (a string without an enum, or an index) the model can only learn from the choices? */
-function takesIds(s: JSONSchema): boolean {
+/** The keys of an input the model can only fill from the choices: strings without an enum, integers (an index). */
+function idKeys(s: JSONSchema): string[] {
   const props = (s.properties ?? {}) as Record<string, JSONSchema>;
-  return Object.values(props).some((p) => (p.type === 'string' && !p.enum) || p.type === 'integer');
+  return Object.entries(props)
+    .filter(([, p]) => (p.type === 'string' && !p.enum) || p.type === 'integer')
+    .map(([k]) => k);
 }
 
-/** The action's current choices, in a line the model can copy from: `Well logs {"panel":"logs"}`. */
-function choicesLine(app: App, a: AnyAction<App>): string {
-  if (!a.choices || !takesIds(schemaOf(a))) return '';
-  let list: ReturnType<NonNullable<typeof a.choices>>;
+const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/** What the labels of several choices with the same id share, up to a separator: "Scene: undock", "Scene: move to…" → "Scene". */
+function sharedLabel(labels: string[]): string {
+  let p = labels[0];
+  for (const l of labels) while (!l.startsWith(p)) p = p.slice(0, -1);
+  if (p === labels[0]) return p;
+  const cut = Math.max(p.lastIndexOf(': '), p.lastIndexOf(' · '), p.lastIndexOf(' — '));
+  return cut > 0 ? p.slice(0, cut) : '';
+}
+
+type Choice = { value: string; label: string; current: boolean };
+
+/**
+ * The action's current choices, one per value of the ids the model must copy
+ * (`panel`, `id`, `index`…), with its label where the label says more than
+ * the value: `panel: scene (current), logs (Well logs), …`. Values an enum in
+ * the schema already lists are not repeated.
+ */
+function choicesOf(app: App, a: AnyAction<App>): { keys: string[]; list: Choice[] } | null {
+  if (!a.choices) return null;
+  let raw: ReturnType<NonNullable<typeof a.choices>>;
   try {
-    list = a.choices(app);
+    raw = a.choices(app);
   } catch {
-    return '';
+    return null;
   }
-  if (!list.length) return '';
-  const shown = list.slice(0, MAX_CHOICES).map((c) => `${c.label}${c.current ? ' (current)' : ''} ${JSON.stringify(c.input)}`);
-  return ` Current choices: ${shown.join('; ')}${list.length > MAX_CHOICES ? `; … ${list.length - MAX_CHOICES} more` : ''}.`;
+  // the id keys the choices fill (not a free `name` beside the `id`)
+  const keys = idKeys(schemaOf(a)).filter((k) => raw.some((c) => (c.input as Record<string, unknown> | undefined)?.[k] !== undefined));
+  if (!keys.length) return null;
+  const byValue = new Map<string, { labels: string[]; current: boolean }>();
+  for (const c of raw) {
+    const input = (c.input ?? {}) as Record<string, unknown>;
+    const ids = keys.filter((k) => input[k] !== undefined);
+    if (!ids.length) continue;
+    const value = keys.length === 1 ? String(input[keys[0]]) : JSON.stringify(Object.fromEntries(ids.map((k) => [k, input[k]])));
+    const label = c.label.replace(/^\d+\.\s+/, '');
+    const hit = byValue.get(value);
+    if (hit) {
+      hit.labels.push(label);
+      hit.current ||= !!c.current;
+    } else byValue.set(value, { labels: [label], current: !!c.current });
+  }
+  if (!byValue.size) return null;
+  const list = [...byValue].map(([value, { labels, current }]) => {
+    const label = sharedLabel(labels);
+    return { value, label: squash(label) === squash(value) ? '' : label, current };
+  });
+  return { keys, list };
+}
+
+/** Choices as a line: `panel: scene (current), logs (Well logs); +3 more`. */
+function choicesText(c: { keys: string[]; list: Choice[] }, max = Infinity): string {
+  const shown = c.list.slice(0, max).map(({ value, label, current }) => {
+    const note = [label, current ? 'current' : ''].filter(Boolean).join(', ');
+    return note ? `${value} (${note})` : value;
+  });
+  const more = c.list.length > max ? `; +${c.list.length - max} more` : '';
+  return `${c.keys.length === 1 ? `${c.keys[0]}: ` : 'Choices: '}${shown.join(', ')}${more}`;
+}
+
+/** Whether a title says nothing the tool's name and description do not (its words of four letters or more all appear there). */
+function titleAddsNothing(title: string, name: string, description: string): boolean {
+  const known = `${name.replace(/[._]/g, ' ')} ${description}`.toLowerCase();
+  return title
+    .toLowerCase()
+    .split(/[^\p{L}]+/u)
+    .filter((w) => w.length >= 4)
+    .every((w) => known.includes(w.replace(/s$/, '')));
 }
 
 /** One action as a tool. */
 function actionTool(app: App, a: AnyAction<App>): AssistantTool {
-  const where = a.where ? ` Where in the UI: ${a.where}.` : '';
-  const applies = a.appliesTo ? ` Acts on a selected ${a.appliesTo.join(' / ')} (its id from app.state.selection).` : '';
+  const title = titleAddsNothing(a.title, a.id, a.description) ? '' : `${a.title.replace(/[.…]+$/, '')}. `;
+  const where = a.where ? ` UI: ${a.where}.` : '';
+  const applies = a.appliesTo ? ` Acts on a selected ${a.appliesTo.join('/')}.` : '';
   const shortcut = a.shortcut ? ` Key: ${a.shortcut}.` : '';
-  return {
+  const choices = choicesOf(app, a);
+  const tool: AssistantTool = {
     name: a.id,
     title: a.title,
-    description: `${a.title}. ${a.description}${where}${applies}${shortcut}${choicesLine(app, a)}`,
+    description: `${title}${a.description}${where}${applies}${shortcut}${choices ? ` ${choicesText(choices, MAX_CHOICES)}.` : ''}`,
     parameters: schemaOf(a),
     kind: READS.has(a.id) ? 'read' : 'write',
     needsApproval: actionNeedsApproval(a),
     execute: async (args) => {
       if (!app.actions.enabled(a)) throw new Error(`“${a.title}” (${a.id}) is not available right now. Read app.state to see why (e.g. no selection, the well has no logs, the feature is off).`);
       const r = await keepChatInView(app, () => app.actions.run(a.id, a.input ? (args ?? {}) : undefined));
-      if (!r.ok) throw new Error(r.error);
+      if (!r.ok) {
+        // the description lists a few choices: a miss is told all of them
+        const all = choicesOf(app, a);
+        throw new Error(all ? `${r.error} ${choicesText(all)}.` : r.error);
+      }
       return (r.result ?? { done: true }) as Json;
     },
   };
+  if (isCoreTool(tool)) tool.core = true;
+  return tool;
 }
 
 /**
@@ -164,12 +262,58 @@ export function inspectorRows(rows: NonNullable<App['inspector']['value']>['rows
 /** The tools that do not change with the app's state, built once per app. */
 const fixedTools = new WeakMap<App, AssistantTool[]>();
 
+/** Sub-schemas this long are sent once: another tool's copy points at the core tool that has it. */
+const SHARED_SCHEMA = 120;
+
+/** A property schema without its `null` alternative (a nullable selection and an optional one are the same object). */
+const nonNull = (p: JSONSchema): JSONSchema => {
+  const alts = (p.anyOf as JSONSchema[] | undefined)?.filter((x) => x.type !== 'null');
+  return alts?.length === 1 ? alts[0] : p;
+};
+
+const sharedCache = new WeakMap<JSONSchema, JSONSchema>();
+
+/**
+ * Replaces a property schema that a core tool already spells out under the
+ * same name (the selection object, the formation ids) with a pointer to that
+ * tool: the core tools are always offered, so the model has the full one.
+ */
+function shareSchemas(tools: AssistantTool[]): AssistantTool[] {
+  const known = new Map<string, string>();
+  for (const t of tools)
+    if (t.core)
+      for (const [k, p] of Object.entries((t.parameters.properties ?? {}) as Record<string, JSONSchema>)) {
+        const json = JSON.stringify(nonNull(p));
+        if (json.length >= SHARED_SCHEMA && !known.has(`${k} ${json}`)) known.set(`${k} ${json}`, t.name);
+      }
+  return tools.map((t) => {
+    if (!t.parameters.properties) return t;
+    let params = sharedCache.get(t.parameters);
+    if (!params) {
+      const props = t.parameters.properties as Record<string, JSONSchema>;
+      const next = Object.fromEntries(
+        Object.entries(props).map(([k, p]) => {
+          const plain = nonNull(p);
+          const owner = known.get(`${k} ${JSON.stringify(plain)}`);
+          if (!owner || owner === t.name) return [k, p];
+          const ref: JSONSchema = { type: plain.type ?? 'object', description: `As \`${k}\` of ${owner}` };
+          if (plain.type === 'object') ref.properties = {};
+          return [k, p === plain ? ref : { anyOf: [ref, { type: 'null' }] }];
+        }),
+      );
+      params = Object.entries(next).some(([k, p]) => p !== props[k]) ? { ...t.parameters, properties: next } : t.parameters;
+      sharedCache.set(t.parameters, params);
+    }
+    return params === t.parameters ? t : { ...t, parameters: params };
+  });
+}
+
 /** Every tool the assistant may call in BoreWalk: the app's actions, the data tools and the selection read-out. */
 export function appTools(app: App): AssistantTool[] {
   const actions = app.actions
     .list()
     .filter((a) => !EXCLUDED(a.id))
     .map((a) => actionTool(app, a));
-  const fixed = fixedTools.get(app) ?? fixedTools.set(app, [...dataTools(dataContext(app)), selectionTool(app)]).get(app)!;
-  return [...actions, ...fixed];
+  const fixed = fixedTools.get(app) ?? fixedTools.set(app, [...dataTools(dataContext(app)), selectionTool(app)].map((t) => (isCoreTool(t) ? { ...t, core: true } : t))).get(app)!;
+  return shareSchemas([...actions, ...fixed]);
 }

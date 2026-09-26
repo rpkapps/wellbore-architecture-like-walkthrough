@@ -11,6 +11,7 @@ import { usePanel } from '../context';
 import { formatUsage, messageText } from '../format';
 import { Markdown } from '../markdown/Markdown';
 import { ApprovalCard } from '../parts/ApprovalCard';
+import { CompactingLine } from '../parts/Compaction';
 import { ErrorNotice } from '../parts/ErrorNotice';
 import { Reasoning } from '../parts/Reasoning';
 import { ToolGroup } from '../parts/ToolCalls';
@@ -95,10 +96,12 @@ export interface AssistantMessageProps {
   /** a turn is running (hides Regenerate and Retry) */
   busy: boolean;
   showReasoning: boolean;
+  /** a summary of the conversation is being written before the reply's next step */
+  compacting?: boolean;
 }
 
 /** One reply: reasoning, text, tool activity, approvals, generated interfaces and errors, then its footer. */
-export const AssistantMessage = memo(function AssistantMessage({ message, isLast, busy, showReasoning }: AssistantMessageProps) {
+export const AssistantMessage = memo(function AssistantMessage({ message, isLast, busy, showReasoning, compacting = false }: AssistantMessageProps) {
   const { controller } = usePanel();
   const streaming = message.status === 'streaming';
   const items = toItems(message, showReasoning);
@@ -139,7 +142,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
               return <ErrorNotice key={item.key} part={item.part} canRetry={isLast && !busy} />;
           }
         })}
-        {between && <ThinkingLine label={items.length === 0 ? 'Thinking…' : 'Working…'} />}
+        {streaming && compacting ? <CompactingLine /> : between && <ThinkingLine label={items.length === 0 ? 'Thinking…' : 'Working…'} />}
         {!streaming && (text || caption) && (
           <MessageFooter
             className={cn('-mt-1 min-h-6 gap-0.5 font-normal transition-opacity motion-reduce:transition-none', !isLast && 'opacity-0 group-hover/message:opacity-100 focus-within:opacity-100')}

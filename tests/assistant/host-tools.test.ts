@@ -164,9 +164,9 @@ describe('the app’s actions as tools', () => {
     expect(by.get('app.state')!.kind).toBe('read');
     const go = by.get('nav.go_to_depth')!;
     expect(go.kind).toBe('write');
-    expect(go.description).toContain('Where in the UI: Timeline');
+    expect(go.description).toContain('UI: Timeline');
     expect(go.parameters).toMatchObject({ type: 'object', properties: { md: { type: 'number' } } });
-    expect(by.get('panels.show')!.description).toContain('Well logs {"panel":"logs"}');
+    expect(by.get('panels.show')!.description).toContain('panel: logs (Well logs)');
     expect(by.get('workspace.delete')!.needsApproval).toBe(true);
     expect(await go.execute({ md: 3200 }, ctx)).toEqual({ md: 3200 });
     await expect(go.execute({ md: -1 }, ctx)).rejects.toThrow(/Invalid input/);
