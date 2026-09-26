@@ -1,33 +1,24 @@
+import { Popover, PopoverHeader, PopoverTitle, PopoverTrigger } from '@tecton/react/components/popover';
 import { Skeleton } from '@tecton/react/components/skeleton';
 import { MinusIcon, PlusIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { App } from '../app';
-import { openWindows, ToolWindow, toolWindows } from '../toolWindow';
 import { IconButton } from '../icon-button';
 import type { LogTracks } from '../logTracks';
 import { ProvBadge } from '../prov';
 import { useSignal } from '../signal';
 import { TrackEditor } from './TrackEditor';
 
-const editors = new WeakMap<App, ToolWindow>();
-
-/** The track editor opens as a panel beside the logs, so the tracks redraw as they change. Created once, outside render. */
-export function trackEditor(app: App): ToolWindow {
-  let p = editors.get(app);
-  if (!p) {
-    p = new ToolWindow({ id: 'log-tracks', title: 'Log tracks', body: () => <TrackEditor app={app} /> });
-    editors.set(app, p);
-  }
-  return p;
-}
-
-/** The log panel's header controls: provenance key, track editor and depth window. */
+/**
+ * The log panel's header controls: provenance key, track editor and depth
+ * window. The track editor is a popover on its button rather than a panel of
+ * its own: it only changes how these tracks draw, and they stay in view
+ * beside it while it is open.
+ */
 export function LogsActions({ app }: { app: App }) {
   const logs = app.logs;
   const win = useSignal(logs.windowSize);
-  useSignal(toolWindows);
-  const editor = editors.get(app);
-  const editing = useSignal(openWindows).some((w) => w === editor);
+  const editing = useSignal(app.tracksOpen);
   return (
     <>
       <span className="mr-1 flex items-center gap-0.5">
@@ -35,9 +26,19 @@ export function LogsActions({ app }: { app: App }) {
         <ProvBadge prov="calculated" short />
         <ProvBadge prov="interpreted" short />
       </span>
-      <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'} isDisabled={!editor} onPress={() => editor?.toggle()}>
-        <SlidersHorizontalIcon />
-      </IconButton>
+      <PopoverTrigger isOpen={editing} onOpenChange={(o) => app.tracksOpen.set(o)}>
+        <IconButton label="Add, remove and edit tracks" size="icon-xs" variant={editing ? 'secondary' : 'ghost'}>
+          <SlidersHorizontalIcon />
+        </IconButton>
+        <Popover placement="bottom end" className="w-96">
+          <PopoverHeader>
+            <PopoverTitle>Log tracks</PopoverTitle>
+          </PopoverHeader>
+          <div className="flex max-h-[70vh] min-h-0 flex-col">
+            <TrackEditor app={app} />
+          </div>
+        </Popover>
+      </PopoverTrigger>
       <IconButton label="Zoom out" size="icon-xs" onPress={() => logs.zoom(1.6)}>
         <MinusIcon />
       </IconButton>

@@ -14,7 +14,6 @@ import {
   RulerIcon,
   ScissorsIcon,
   Settings2Icon,
-  SlidersHorizontalIcon,
   SquareMousePointerIcon,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
@@ -66,7 +65,7 @@ export const RAIL_ENTRIES: { id: string; short: string }[] = [
 /** The analysis and tool windows by workflow phase; a panel named nowhere here or on the rail goes under Other. */
 export const VIEW_PHASES: { phase: ViewPhase; ids: string[] }[] = [
   { phase: 'Explore', ids: ['mapview', 'section'] },
-  { phase: 'Interpret', ids: ['correlation', 'crossplot', 'log-tracks'] },
+  { phase: 'Interpret', ids: ['correlation', 'crossplot'] },
   { phase: 'Steer', ids: ['geosteer'] },
   { phase: 'Model', ids: ['simulation'] },
   { phase: 'Monitor', ids: ['live', 'sources'] },
@@ -91,7 +90,6 @@ const TOOL_ICONS: Record<string, ReactNode> = {
   mapview: <MapIcon />,
   simulation: <BoxesIcon />,
   views: <BookmarkIcon />,
-  'log-tracks': <SlidersHorizontalIcon />,
   measure: <RulerIcon />,
 };
 

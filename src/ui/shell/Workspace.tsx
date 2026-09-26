@@ -12,7 +12,6 @@ import { DataEntry, RailFooter } from '../workspace/Rail';
 import { HudPrompts } from './Hud';
 import { InspectorCard } from './Inspector';
 import { Legend } from './Legend';
-import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
 import { SelectionContextMenu } from './SelectionMenu';
 import { Morph } from './overlay';
@@ -64,7 +63,6 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
 function useToolSync(app: App) {
   useEffect(() => {
     const ws = app.workspace;
-    trackEditor(app);
     const sync = () => {
       const visible = new Set(openWindows.value.map((w) => w.opts.id));
       const known = new Set(toolWindows.value.map((w) => w.opts.id));

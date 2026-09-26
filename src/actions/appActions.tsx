@@ -1020,6 +1020,18 @@ export function appActions(): AnyAction<App>[] {
       run: (app) => app.personaliseOpen.set(true),
     }),
     A({
+      id: 'logs.tracks',
+      title: 'Edit log tracks',
+      description: 'Opens the track editor of the Well logs panel: show, hide, reorder and add tracks, and set their scales and colours.',
+      category: 'Panels',
+      where: 'Well logs › Tracks',
+      keywords: ['tracks', 'curves', 'scales', 'log layout', 'template'],
+      run: (app) => {
+        withTransition(() => app.workspace.open('logs'));
+        app.tracksOpen.set(true);
+      },
+    }),
+    A({
       id: 'help.open',
       title: 'Controls and data notes',
       description: 'Opens the help: keys, mouse controls and where the data comes from.',

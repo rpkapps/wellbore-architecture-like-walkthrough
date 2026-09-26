@@ -177,6 +177,8 @@ export class App {
   readonly productionOpen = new Signal(false);
   readonly dataOpen = new Signal(false);
   readonly helpOpen = new Signal(false);
+  /** the Well logs track editor: a popover on the logs header, so the tracks redraw beside it as they change */
+  readonly tracksOpen = new Signal(false);
   readonly personaliseOpen = new Signal(false);
   readonly paletteOpen = new Signal(false);
   /** every operation as a typed action: the command palette runs these, and an assistant can (actions/tanstack.ts) */
