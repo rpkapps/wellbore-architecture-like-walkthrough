@@ -1044,14 +1044,15 @@ export class App {
       if (Math.hypot(e.clientX - r.x, e.clientY - r.y) > 5) return;
       this.rightClickAt(e.clientX, e.clientY);
     });
-    // A right-click while a menu is open lands on the menu's underlay (which covers the page and
-    // closes the menu only for a left click): close the menu, and pass the right-click on to what
-    // is under the pointer, so it opens that thing's menu as it would have with none open.
+    // A right-click while a menu is open never reaches the page (an open menu leaves the rest of
+    // the page deaf to the pointer, and closes only for a left click): close the menu, and once it
+    // has gone pass the right-click on to what is under the pointer, so it opens that thing's menu
+    // as it would have with none open.
     let passOn: { x: number; y: number } | null = null;
     window.addEventListener(
       'pointerdown',
       (e) => {
-        if (e.button !== 2 || !(e.target as Element | null)?.closest?.('[data-testid="underlay"]') || !document.querySelector('[role="menu"]')) return;
+        if (e.button !== 2 || !document.querySelector('[role="menu"]') || (e.target as Element | null)?.closest?.('[role="menu"]')) return;
         e.preventDefault();
         e.stopPropagation();
         passOn = { x: e.clientX, y: e.clientY };
@@ -1069,13 +1070,16 @@ export class App {
         if (e.button !== 2 || !at) return;
         passOn = null;
         e.stopPropagation();
-        // once the menu and its underlay are gone
-        requestAnimationFrame(() => {
+        // once the menu has gone (and the page hears the pointer again), half a second at most
+        const t0 = performance.now();
+        const send = () => {
+          if (document.querySelector('[role="menu"]') && performance.now() - t0 < 500) return void requestAnimationFrame(send);
           const el = document.elementsFromPoint(at.x, at.y).find((x) => !x.closest('[data-testid="underlay"], [role="menu"], [role="dialog"]'));
           if (!el) return;
           if (el === cv) this.rightClickAt(at.x, at.y);
           else el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2, buttons: 0 }));
-        });
+        };
+        requestAnimationFrame(send);
       },
       true,
     );
