@@ -774,8 +774,12 @@ export class Engine {
     }
     ensureBVHFor(targets);
     const hits = this.raycaster.intersectObjects(targets, true);
+    // What a click passes through on its way to what it means: a see-through envelope around
+    // the well (the uncertainty cones) gives way to the well behind it; a formation drawn as
+    // glass gives way to what shows through it (the well, an overlay, another well), but not
+    // to a solid formation behind (then the glass one was clicked).
     const WELL_PARTS = new Set(['wall', 'casing', 'cement', 'fracture', 'top', 'pay']);
-    let soft: PickResult | null = null;
+    let soft: { hit: PickResult; glass: boolean } | null = null;
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object;
       while (o && !o.userData?.kind) o = o.parent;
@@ -783,12 +787,16 @@ export class Engine {
       // a hidden part is not the thing drawn
       if (!h.object.visible) continue;
       const kind = o.userData.kind as string;
-      // a see-through envelope around the well: the well wins if the ray goes on to hit it
-      if (!soft && o.userData.soft) {
-        soft = { kind, point: h.point.clone(), object: o };
+      const glass = kind === 'formation' && ((h.object as THREE.Mesh).material as THREE.Material).opacity < 0.7;
+      if (!soft && (glass || o.userData.soft)) {
+        soft = { hit: { kind, point: h.point.clone(), object: o }, glass };
         continue;
       }
-      if (soft && !WELL_PARTS.has(kind)) return soft;
+      if (soft) {
+        // more glass on the way through
+        if (soft.glass && glass) continue;
+        if (soft.glass ? kind === 'formation' : !WELL_PARTS.has(kind)) return soft.hit;
+      }
       // respect the wall cutaway: skip hits on the removed wedge
       if ((kind === 'wall' || kind === 'casing') && wb && wb.uniforms.uCut.value > 0.5) {
         const md = h.uv ? h.uv.y : undefined;
@@ -802,7 +810,7 @@ export class Engine {
       }
       return { kind, point: h.point.clone(), md: h.uv && (kind === 'wall' || kind === 'casing') ? h.uv.y : undefined, object: o };
     }
-    return soft;
+    return soft?.hit ?? null;
   }
 
   /** Viewpoint that frames the whole model. */

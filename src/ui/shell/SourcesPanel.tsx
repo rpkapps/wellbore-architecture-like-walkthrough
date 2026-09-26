@@ -3,7 +3,7 @@ import { Button } from '@tecton/react/components/button';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@tecton/react/components/dropdown-menu';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@tecton/react/components/empty';
 import { Toggle } from '@tecton/react/components/toggle';
-import { CrosshairIcon, EllipsisIcon, PauseIcon, PlayIcon, PlusIcon, RadioTowerIcon, RotateCwIcon, SquareIcon } from 'lucide-react';
+import { CableIcon, CrosshairIcon, EllipsisIcon, PauseIcon, PlayIcon, RadioTowerIcon, RotateCwIcon, SquareIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { ConnectionState } from '../../connect/hub';
 import type { App } from '../app';
@@ -59,8 +59,9 @@ export function SourcesActions({ app }: { app: App }) {
           <CrosshairIcon />
         </Toggle>
       </Tip>
+      {/* a cable, not a +: the group's own + (open a view) sits beside it */}
       <IconButton label="Connect a data source" onPress={() => app.connectRequest.set({})}>
-        <PlusIcon />
+        <CableIcon />
       </IconButton>
     </>
   );
@@ -89,7 +90,7 @@ export function SourcesBody({ app }: { app: App }) {
             Replay a well live
           </Button>
           <Button size="sm" variant="outline" onPress={() => app.connectRequest.set({})}>
-            <PlusIcon data-icon="inline-start" />
+            <CableIcon data-icon="inline-start" />
             Connect a source
           </Button>
         </EmptyContent>
