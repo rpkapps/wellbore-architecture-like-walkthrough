@@ -338,7 +338,7 @@ export async function runTurn(opts: TurnOptions): Promise<TurnResult> {
             if (takenIds().has(id)) id = `${id}_${Math.random().toString(36).slice(2, 7)}`;
             providerToPart.set(ev.id, id);
             const kit = offered.names.toKit(ev.name) ?? ev.name;
-            const part: ToolCallPart = { type: 'tool-call', id, name: kit, args: {}, argsText: '', state: 'streaming' };
+            const part: ToolCallPart = { type: 'tool-call', id, name: kit, args: {}, argsText: '', state: 'streaming', step };
             if (ev.providerMeta) part.providerMeta = ev.providerMeta;
             callIds.push(id);
             const render = kit === RENDER_UI;

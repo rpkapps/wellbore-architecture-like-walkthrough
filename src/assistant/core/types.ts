@@ -116,6 +116,12 @@ export interface ToolCallPart {
   endedAt?: number;
   /** provider-specific data replayed with the call, namespaced by provider kind (`{ gemini: { thoughtSignature } }`) */
   providerMeta?: Record<string, unknown>;
+  /**
+   * The model round-trip that made the call, within its message: calls of
+   * one step were made together (in parallel); the next step's came after
+   * their results. Adapters replay each step as its own model turn.
+   */
+  step?: number;
 }
 
 /**

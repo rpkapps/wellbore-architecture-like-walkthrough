@@ -89,6 +89,18 @@ describe('OpenAI stream parsing', () => {
 });
 
 describe('OpenAI request conversion', () => {
+  it('replays consecutive tool-only steps as separate model turns', () => {
+    const call = (id: string, step: number) => ({ type: 'tool-call' as const, id, name: 'data__read', args: {}, state: 'done' as const, result: { ok: true }, step });
+    const out = toOpenAIMessages({
+      config: config(),
+      system: '',
+      messages: [msg('user', [{ type: 'text', text: 'plot it' }]), msg('assistant', [call('a', 0), call('b', 0), call('c', 1), { type: 'text', text: 'Done.' }])],
+    });
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'assistant', 'tool', 'assistant']);
+    expect((out[1] as { tool_calls: unknown[] }).tool_calls).toHaveLength(2);
+    expect((out[4] as { tool_calls: unknown[] }).tool_calls).toHaveLength(1);
+  });
+
   it('converts the transcript: system, context as text, images per vision, tool calls and results', () => {
     const req = sampleRequest(config({ vision: true }));
     const msgs = toOpenAIMessages(req);

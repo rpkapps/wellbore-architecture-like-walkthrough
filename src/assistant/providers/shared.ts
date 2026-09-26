@@ -165,6 +165,9 @@ export function assistantSteps(message: ChatMessage): AssistantStep[] {
       else cur.reasoning.push(p);
       cur.content.push(p);
     } else if (p.type === 'tool-call') {
+      // a call from a later round-trip starts a new step, even with no text between
+      const last = cur.calls[cur.calls.length - 1];
+      if (last && p.step !== undefined && last.step !== undefined && p.step !== last.step) flush();
       cur.calls.push(p);
     }
   }
