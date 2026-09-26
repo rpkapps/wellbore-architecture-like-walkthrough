@@ -329,8 +329,9 @@
   transform: scale(0.985);
 }
 /* the intro: the 3D view first, alone; the workspace around it fades in as the
-   camera settles (html[data-intro] is 'scene', then 'chrome', then removed) */
-html[data-intro] :is([data-chrome], [data-col], [data-rail]) {
+   camera settles (html[data-intro] is 'scene' from before the loader leaves,
+   so the workspace is hidden at once; then 'chrome', then removed) */
+html[data-intro='chrome'] :is([data-chrome], [data-col], [data-rail]) {
   transition:
     opacity 1100ms cubic-bezier(0.4, 0, 0.2, 1),
     translate 1200ms cubic-bezier(0.2, 0.8, 0.2, 1);

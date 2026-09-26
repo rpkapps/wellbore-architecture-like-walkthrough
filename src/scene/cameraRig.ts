@@ -207,6 +207,11 @@ export class CameraRig {
     return !!this.flight;
   }
 
+  /** How far the current flight has got (0–1), or null when none is under way. */
+  flightProgress(): number | null {
+    return this.flight ? Math.min(1, this.flight.t) : null;
+  }
+
   update(dt: number) {
     if (this.flight) {
       const f = this.flight;

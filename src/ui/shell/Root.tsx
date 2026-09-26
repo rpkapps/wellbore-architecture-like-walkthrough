@@ -77,14 +77,15 @@ export function Root() {
             wait(8000),
           ]);
           setProgress({ msg: 'Ready', f: 1 });
+          // the intro starts on the 3D view alone: the workspace hides now, under the loader
+          const html = document.documentElement;
+          const motion = !html.hasAttribute('data-reduce-motion');
+          if (motion) html.setAttribute('data-intro', 'scene');
           // the line fills, and the loader has been up for at least LOADER_MIN_MS
           await wait(Math.max(700, LOADER_MIN_MS - (performance.now() - shownAt)));
           // The intro: the loader fades away onto the 3D view alone, high above the field, and the
           // camera sweeps down around it to the overview; as it settles, the workspace (top bar,
           // rail, panels, timeline, overlays) fades in around it. Any input brings it in at once.
-          const html = document.documentElement;
-          const motion = !html.hasAttribute('data-reduce-motion');
-          if (motion) html.setAttribute('data-intro', 'scene');
           let chromeShown = false;
           const showChrome = () => {
             if (chromeShown) return;
@@ -100,8 +101,18 @@ export function Root() {
           e.rig.flyTo(o.pos, o.target, INTRO_FLIGHT_S, undefined, { around: true });
           await wait(LOADER_FADE_MS);
           setLoader('gone');
-          if (motion) setTimeout(showChrome, INTRO_FLIGHT_S * 1000 * 0.62 - LOADER_FADE_MS);
-          else showChrome();
+          // the workspace comes in as the camera settles (at 62% of the sweep, by the flight itself,
+          // so a slow machine does not bring it in over a camera still high above)
+          if (!motion) showChrome();
+          else {
+            const watch = () => {
+              if (chromeShown) return;
+              const k = e.rig.flightProgress();
+              if (k === null || k >= 0.62) showChrome();
+              else requestAnimationFrame(watch);
+            };
+            requestAnimationFrame(watch);
+          }
         });
         setBoot({ stage: 'running', app });
       })
