@@ -9,7 +9,7 @@ import { fmt } from '../ui/dom';
 import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
 import { font, ink, wash } from '../ui/tokens';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 import type { UncertaintyFeature } from './uncertainty';
 
 /**
@@ -50,7 +50,7 @@ export class GeosteerFeature implements FeatureModule {
       id: 'geosteer',
       title: 'Geosteering',
       badge: 'calculated',
-      onClose: () => app.flags.set('geosteer', false),
+      onClose: () => windowClosed(app.flags, 'geosteer', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect

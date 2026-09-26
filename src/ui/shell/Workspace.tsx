@@ -19,7 +19,7 @@ import { Timeline } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewToolbar } from './ViewControls';
 
-const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'features', 'logs']);
+const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
 const TIMELINE_H = 64;
 
 /**

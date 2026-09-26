@@ -213,7 +213,7 @@ const DISPLAY_KEYS = new Set<keyof SceneDisplay>(['labels', 'otherWells', 'sea',
 const WELLBORE_KEYS = new Set<keyof WellboreDisplay>(['casing', 'fractures', 'markers']);
 const noRev = new Rev();
 
-/** The settings an object has (null when it has none): the same controls as its tree row and the Features panel. */
+/** The settings an object has (null when it has none): its tree row's controls, and an overlay feature's own settings. */
 function settingsFor(app: App, sel: Selection): ReactNode | null {
   if (sel.kind === 'formation' && FORMATION_BY_ID.has(sel.id)) return <FormationSettings app={app} id={sel.id} />;
   if (sel.kind === 'overlay' || sel.kind === 'contact') {
@@ -250,14 +250,14 @@ function WellboreLayerSettings({ app, k }: { app: App; k: keyof WellboreDisplay 
   return <SwitchField label="Visible" isSelected={!!app.wellbore[k]} onChange={(v) => app.setWellboreDisplay({ [k]: v })} />;
 }
 
-/** An overlay feature: its switch, and while it is on, its own settings (`FeatureModule.settings`). */
+/** An overlay feature: its visibility (the tree row's eye), and while it shows, its own settings (`FeatureModule.settings`). */
 function FeatureSettings({ app, id }: { app: App; id: FeatureId }) {
   const [on, setOn] = useState(() => app.flags.on(id));
   useEffect(() => app.flags.watch(id, setOn), [app, id]);
   const m = app.modules.get(id);
   return (
     <div className="flex flex-col gap-1.5">
-      <SwitchField label="On" isSelected={on} onChange={(v) => app.flags.set(id, v)} />
+      <SwitchField label="Visible" isSelected={on} onChange={(v) => app.flags.set(id, v)} />
       {on && m?.settings && <ModuleSettings m={m} />}
     </div>
   );

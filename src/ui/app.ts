@@ -188,7 +188,7 @@ export class App {
    * the 3D view fills the window and this caption sits over it.
    */
   readonly presentation = new Signal<ReactNode>(null);
-  /** property modes switched on by features (ROP) */
+  /** property modes features offer (ROP, when the well has the log) */
   readonly optionalModes = new Signal<ReadonlySet<PropertyMode>>(new Set());
 
   readonly wellbore: WellboreDisplay = { casingOpacity: 0.42, wallOpacity: 1, shellOpacity: 1, casing: true, fractures: true, markers: true };
@@ -542,7 +542,7 @@ export class App {
     this.viewRev.bump();
   }
 
-  /** Offer or withdraw an optional property mode (ROP, from the Features panel). */
+  /** Offer or withdraw an optional property mode (ROP, while the active well has an ROP log). */
   setPropertyAvailable(m: PropertyMode, on: boolean) {
     const next = new Set(this.optionalModes.value);
     if (on) next.add(m);

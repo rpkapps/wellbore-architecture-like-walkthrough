@@ -15,7 +15,7 @@ import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { IconButton } from '../ui/icon-button';
 import { Rev, SCENE } from '../ui/signal';
 import { font, ink } from '../ui/tokens';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 import { FOCUS } from '../scene/rockMaterial';
 
 type Palette = 'turbo' | 'viridis' | 'fluid' | 'inferno';
@@ -64,7 +64,7 @@ export class SimulationFeature implements FeatureModule {
   private mesh?: THREE.Mesh;
   private mat?: THREE.ShaderMaterial;
   private valAttr?: THREE.InstancedBufferAttribute;
-  /** bump when the model or its loading state changes (Features panel settings) */
+  /** bump when the model or its loading state changes (its settings) */
   readonly rev = new Rev(SCENE);
   private panel: ToolWindow;
   private chart = new PanelCanvas({ draw: (g, W, H) => this.drawChart(g, W, H), visible: () => this.panel.visible });
@@ -90,7 +90,7 @@ export class SimulationFeature implements FeatureModule {
       id: 'simulation',
       title: 'Reservoir simulation',
       badge: 'calculated',
-      onClose: () => app.flags.set('simulation', false),
+      onClose: () => windowClosed(app.flags, 'simulation', () => this.panel.hide()),
       body: () => (
         <>
           <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">

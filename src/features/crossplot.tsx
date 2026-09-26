@@ -11,7 +11,7 @@ import { CanvasBox, PanelCanvas, ToolWindow } from '../ui/toolWindow';
 import { Live, Signal } from '../ui/signal';
 import { font, ink, wash } from '../ui/tokens';
 import { CURVE_BY_KEY } from './curves';
-import type { FeatureModule } from './registry';
+import { type FeatureModule, windowClosed } from './registry';
 
 type ColourBy = 'formation' | 'gr' | 'sw' | 'md';
 
@@ -56,7 +56,7 @@ export class CrossplotFeature implements FeatureModule {
       id: 'crossplot',
       title: 'Crossplot',
       badge: 'calculated',
-      onClose: () => app.flags.set('crossplot', false),
+      onClose: () => windowClosed(app.flags, 'crossplot', () => this.panel.hide()),
       header: () => (
         <>
           <CompactSelect

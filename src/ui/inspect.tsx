@@ -7,7 +7,7 @@ import { Trajectory } from '../data/trajectory';
 import type { HorizonGrid, Zone } from '../data/types';
 import type { PickResult } from '../scene/engine';
 import type { Fracture } from '../scene/wellbore';
-import { FEATURE_BY_ID, type FeatureId } from '../features/registry';
+import { FEATURE_BY_ID, labelOf, type FeatureId } from '../features/registry';
 import type { App } from './app';
 import { fmt } from './dom';
 import type { Provenance } from './prov';
@@ -152,7 +152,7 @@ class Inspect {
   /** A scene layer (the near-well geometry, labels, sea…) or an optional overlay feature. */
   overlay(id: string): InspectorView | null {
     const f = FEATURE_BY_ID.get(id as FeatureId);
-    if (f) return view(f.name, `Overlay · ${f.group}`, '#7fe3ff', [], f.desc, [], f.prov ? { prov: f.prov } : undefined);
+    if (f) return view(labelOf(f.id), `Overlay · ${f.group}`, '#7fe3ff', [], f.desc, [], f.prov ? { prov: f.prov } : undefined);
     if (id === 'sea') {
       const m = this.app.field.meta;
       return view(

@@ -14,7 +14,7 @@ import { SnapshotFeature } from './snapshot';
 import { UncertaintyFeature } from './uncertainty';
 import { ViewsFeature } from './views';
 
-/** One instance of every optional feature; the Features panel switches them on and off. */
+/** One instance of every optional feature; each is switched where it lives (its `home` in the registry). */
 export function createFeatureModules(app: App): FeatureModule[] {
   return [
     new GeosteerFeature(app),

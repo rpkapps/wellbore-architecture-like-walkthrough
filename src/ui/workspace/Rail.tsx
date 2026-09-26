@@ -332,7 +332,7 @@ export function DataEntry({ app }: { app: App }) {
   );
 }
 
-/** Settings (the Personalise dialog) and help, at the foot of the rail. */
+/** Settings (appearance, graphics, motion) and help, at the foot of the rail. */
 export function RailFooter({ app }: { app: App }) {
   return (
     <>
