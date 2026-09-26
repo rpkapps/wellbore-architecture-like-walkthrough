@@ -4,6 +4,7 @@ import { ContactsFeature } from './contacts';
 import { CorrelationFeature } from './correlation';
 import { CrossplotFeature } from './crossplot';
 import { CurtainFeature } from './curtain';
+import { CylinderFeature } from './cylinder';
 import { GeosteerFeature } from './geosteer';
 import { MapViewFeature } from './mapview';
 import { MeasureFeature } from './measure';
@@ -27,6 +28,7 @@ export function createFeatureModules(app: App): FeatureModule[] {
     new RopFeature(app),
     new UncertaintyFeature(app),
     new AntiCollisionFeature(app),
+    new CylinderFeature(app),
     new ExtraWellsFeature(app),
     new SimulationFeature(app),
     new MapViewFeature(app),

@@ -1,5 +1,5 @@
 import { LogCurveIcon, TrajectoryIcon } from '@tecton/react/icons';
-import { ChartScatterIcon, ColumnsIcon, FocusIcon, FoldVerticalIcon, NavigationIcon, ScissorsIcon, TargetIcon } from 'lucide-react';
+import { ChartScatterIcon, ColumnsIcon, FocusIcon, FoldVerticalIcon, NavigationIcon, RadarIcon, ScissorsIcon, TargetIcon } from 'lucide-react';
 import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
 import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
@@ -55,6 +55,7 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
   geosteer: { title: 'Geosteering', keywords: ['distance to boundary', 'dtb', 'target', 'landing'] },
   section: { title: 'Section along the well', keywords: ['cross-section', 'profile'] },
   correlation: { title: 'Well correlation', keywords: ['tops', 'flatten', 'side by side'] },
+  cylinder: { title: 'Anti-collision · travelling cylinder', keywords: ['anti-collision', 'collision', 'separation factor', 'close approach', 'offset wells', 'tc', 'polar'] },
   crossplot: { title: 'Crossplot', keywords: ['porosity', 'density', 'neutron', 'rhob', 'nphi', 'pickett', 'buckles', 'scatter'] },
   mapview: { title: 'Map', keywords: ['plan view', 'top view'] },
   simulation: { title: 'Reservoir simulation', keywords: ['eclipse', 'pressure', 'saturation', 'grid'] },
@@ -593,6 +594,26 @@ export function appActions(): AnyAction<App>[] {
       },
     }),
     A({
+      id: 'views.cylinder',
+      title: 'Travelling cylinder around the well',
+      description:
+        'Opens the anti-collision travelling cylinder for a well (opening it first): the other wellbores around it at the depth cursor, looking down the hole, coloured by separation factor.',
+      category: 'Panels',
+      where: 'Task bar',
+      icon: <RadarIcon />,
+      keywords: ['anti-collision', 'collision', 'separation factor', 'close approach', 'offset wells', 'polar'],
+      input: z.object({ well: z.string().optional().meta({ description: 'The well to look down (default: the open one)' }) }),
+      appliesTo: ['well', 'overlay'],
+      onSelection: (sel, app) => {
+        if (sel.kind === 'overlay') return sel.id === 'anticollision' ? { input: {}, label: 'Travelling cylinder' } : null;
+        return fieldWell(app, sel.id) ? { label: 'Travelling cylinder' } : null;
+      },
+      run: async (app, { well }) => {
+        if (well) await openWell(app, well);
+        openView(app, 'cylinder');
+      },
+    }),
+    A({
       id: 'views.crossplot_zone',
       title: 'Crossplot this zone',
       description: "Opens the crossplot of the open well limited to one formation's samples.",
@@ -928,7 +949,7 @@ export function appActions(): AnyAction<App>[] {
       id: 'features.set',
       title: 'Feature',
       description:
-        'Turns an optional feature on or off: an overlay in 3D (log curtain, oil–water contact, uncertainty cones, geosteering band), a view (cross-section, correlation, crossplots, map, simulation: on opens its window), a graphics effect, the further Volve wells, the ROP colouring or a toolbar tool.',
+        'Turns an optional feature on or off: an overlay in 3D (log curtain, oil–water contact, uncertainty cones, geosteering band), a view (cross-section, correlation, crossplots, travelling cylinder, map, simulation: on opens its window), a graphics effect, the further Volve wells, the ROP colouring or a toolbar tool.',
       category: 'Features',
       where: 'Scene › Overlays · Rail › Views · Settings › Graphics · Well picker',
       input: z.object({ feature: z.enum(FEATURE_IDS), on: z.boolean() }),

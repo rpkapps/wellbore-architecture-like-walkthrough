@@ -14,6 +14,7 @@ export const TASKBAR_PLAN: Record<SelectionKind, { id: string; short: string }[]
     { id: 'views.correlate', short: 'Correlate' },
     { id: 'views.section', short: 'Section along well' },
     { id: 'views.geosteer', short: 'Geosteer' },
+    { id: 'views.cylinder', short: 'Travelling cylinder' },
   ],
   formation: [
     { id: 'scene.isolate', short: 'Isolate' },
@@ -32,7 +33,7 @@ export const TASKBAR_PLAN: Record<SelectionKind, { id: string; short: string }[]
     { id: 'views.logs', short: 'Show in logs' },
   ],
   contact: [],
-  overlay: [],
+  overlay: [{ id: 'views.cylinder', short: 'Travelling cylinder' }],
 };
 
 /** The most buttons the bar shows before the ⋯ menu. */

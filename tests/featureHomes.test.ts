@@ -36,7 +36,7 @@ afterEach(() => {
 
 describe('where each feature lives', () => {
   it('gives every feature a home, as the Features panel is gone', () => {
-    expect(featuresAt('view').map((f) => f.id)).toEqual(['section', 'correlation', 'crossplot', 'simulation', 'mapview']);
+    expect(featuresAt('view').map((f) => f.id)).toEqual(['section', 'correlation', 'crossplot', 'cylinder', 'simulation', 'mapview']);
     expect(featuresAt('overlay').map((f) => f.id)).toEqual(['geosteer', 'curtain', 'owc', 'uncertainty', 'anticollision']);
     expect(featuresAt('graphics').map((f) => f.id)).toEqual(GRAPHICS_IDS);
     expect(featuresAt('tool').map((f) => f.id)).toEqual(['measure', 'views', 'snapshot']);
@@ -48,7 +48,7 @@ describe('closing a view’s window', () => {
   it('turns a window-only feature off, so it stops computing', () => {
     const flags = new FeatureFlags(false, '?features=crossplot,geosteer');
     const hide = vi.fn();
-    for (const id of ['section', 'correlation', 'crossplot', 'mapview', 'simulation'] as FeatureId[]) expect(closesWithWindow(id)).toBe(true);
+    for (const id of ['section', 'correlation', 'crossplot', 'cylinder', 'mapview', 'simulation'] as FeatureId[]) expect(closesWithWindow(id)).toBe(true);
     windowClosed(flags, 'crossplot', hide);
     expect(flags.on('crossplot')).toBe(false);
     expect(hide).not.toHaveBeenCalled();

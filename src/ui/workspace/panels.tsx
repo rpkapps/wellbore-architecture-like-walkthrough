@@ -10,6 +10,7 @@ import {
   LayersIcon,
   MapIcon,
   PanelTopIcon,
+  RadarIcon,
   RadioTowerIcon,
   RulerIcon,
   ScissorsIcon,
@@ -67,7 +68,7 @@ export const RAIL_ENTRIES: { id: string; short: string }[] = [
 export const VIEW_PHASES: { phase: ViewPhase; ids: string[] }[] = [
   { phase: 'Explore', ids: ['mapview', 'section'] },
   { phase: 'Interpret', ids: ['correlation', 'crossplot'] },
-  { phase: 'Steer', ids: ['geosteer'] },
+  { phase: 'Steer', ids: ['geosteer', 'cylinder'] },
   { phase: 'Model', ids: ['simulation'] },
   { phase: 'Monitor', ids: ['live', 'sources'] },
   { phase: 'Present', ids: ['views'] },
@@ -92,6 +93,7 @@ const TOOL_ICONS: Record<string, ReactNode> = {
   simulation: <BoxesIcon />,
   views: <BookmarkIcon />,
   measure: <RulerIcon />,
+  cylinder: <RadarIcon />,
 };
 
 /** Scrolling content of the built-in panels. */

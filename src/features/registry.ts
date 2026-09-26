@@ -20,6 +20,7 @@ export type FeatureId =
   | 'rop'
   | 'uncertainty'
   | 'anticollision'
+  | 'cylinder'
   | 'extraWells'
   | 'simulation'
   | 'mapview'
@@ -153,6 +154,15 @@ export const FEATURES: FeatureDef[] = [
     default: false,
     desc: 'How close the active well comes to every other wellbore: a separation factor (centre-to-centre distance over the summed uncertainty-ellipse radii, simplified MWD model) every 10 m from the seabed, with the close approaches drawn in 3D and the offset wells listed by risk. Hole shared with a parent or sidetrack above the kick-off is not counted.',
     read: 'A line joins the active well to the nearest point of each well it passes closely: red where the separation factor is under 1 (the uncertainty ellipses overlap, collision risk), amber under the caution threshold. The same colours mark those stretches along the active well; each label names the other well, the centre-to-centre distance and the separation factor.',
+  },
+  {
+    id: 'cylinder',
+    home: 'view',
+    name: 'Anti-collision travelling cylinder',
+    group: 'Drilling & survey',
+    prov: 'calculated',
+    default: false,
+    desc: 'Looking down the active well at the depth cursor, high side up: every other wellbore within 100 m projected onto the plane across the hole, coloured by separation factor, with the distance and SF at its closest point and the well’s own uncertainty at the centre. Shares the ellipse size and caution threshold with the anti-collision overlay. Click a well to travel to its closest approach.',
   },
   {
     id: 'extraWells',
