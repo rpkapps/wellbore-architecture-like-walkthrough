@@ -2,6 +2,7 @@ import { Canvas, CanvasSurface } from '@tecton/react/tecton/canvas';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Engine } from '../../scene/engine';
 import type { App } from '../app';
+import { useTextScale } from '../prefs';
 import { useSignal, useSignalPart } from '../signal';
 import { activeWindow, openWindows, toolWindows } from '../toolWindow';
 import { WorkspaceFrame } from '../workspace/Frame';
@@ -15,12 +16,11 @@ import { trackEditor } from './LogsPanel';
 import { Narrative } from './Narrative';
 import { SelectionContextMenu } from './SelectionMenu';
 import { Morph } from './overlay';
-import { Timeline } from './Timeline';
+import { Timeline, timelineHeight } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewToolbar } from './ViewControls';
 
-const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'features', 'logs']);
-const TIMELINE_H = 64;
+const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
 
 /**
  * The application: the top bar, then the workspace, where the 3D view fills
@@ -32,6 +32,8 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
   const panels = usePanels(app);
   useToolSync(app);
   const chrome = ready && !presenting;
+  // the timeline grows a little with the density's text
+  const timelineH = timelineHeight(useTextScale());
   // the app's own rail entries: Data after Views, settings and help at the foot
   const rail = useMemo(() => ({ extra: <DataEntry app={app} />, footer: <RailFooter app={app} /> }), [app]);
   return (
@@ -45,7 +47,7 @@ export const Workspace = memo(function Workspace({ app, brand = true }: { app: A
         viewport={<Viewport app={app} />}
         overlay={ready && <Overlays app={app} />}
         timeline={chrome && <Timeline app={app} />}
-        timelineHeight={chrome ? TIMELINE_H : 0}
+        timelineHeight={chrome ? timelineH : 0}
         onFree={(f) => app.engine?.setInsets(f.left, f.right, f.bottom)}
       />
       {ready && <SelectionContextMenu app={app} />}

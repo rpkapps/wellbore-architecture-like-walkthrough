@@ -95,7 +95,7 @@ describe('describeLocation', () => {
   const stack = (id: string, ...panels: string[]) => ({ id, panels, active: panels[0], weight: 1 });
   const L: Layout = {
     v: 2,
-    left: { size: 300, collapsed: false, stacks: [stack('s1', 'scene', 'interpretation', 'features'), stack('s2', 'properties')] },
+    left: { size: 300, collapsed: false, stacks: [stack('s1', 'scene', 'interpretation', 'live'), stack('s2', 'properties')] },
     right: { size: 400, collapsed: true, stacks: [stack('s3', 'logs')] },
     bottom: { size: 260, collapsed: false, stacks: [stack('s4', 'crossplot')] },
     floating: [{ id: 'f1', panels: ['mapview', 'views'], active: 'mapview', x: 0, y: 0, w: 300, h: 200 }],

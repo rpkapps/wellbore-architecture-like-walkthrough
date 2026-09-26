@@ -750,30 +750,37 @@ function StackView({
                   dnd.start(e, group.id, id, d.title, () => activate(id));
                 }}
                 onDoubleClick={onDockBack && !maxed ? undefined : toggleMax}
+                onAuxClick={(e) => {
+                  if (e.button === 1) close(id);
+                }}
                 onKeyDown={(e) => {
                   if (e.ctrlKey) return;
                   if (e.key === 'Enter' || e.key === ' ') activate(id);
                   if (e.key === 'Delete') close(id);
                 }}
-                // the tabs behind give up their room first; their close button shows over the label on hover
+                // the tabs behind give up their room first. Only the active tab has a close button: over a
+                // tab shrunk to its icon, a hover button took the whole tab and a click closed it instead of
+                // opening it. The ones behind close with a middle click, Delete or the ⋯ menu.
                 className={`group/tab relative flex h-6 max-w-44 min-w-0 cursor-default items-center gap-1.5 rounded-md pl-2 text-xs font-medium whitespace-nowrap outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0 ${
-                  on ? 'shrink-0 bg-ghost-active pr-1 text-fg-1' : 'shrink pr-2 text-fg-2 hover:bg-ghost-hover hover:text-fg-1 group-data-compact/tabs:pr-1.5'
+                  on ? 'shrink-0 bg-ghost-active pr-1 text-fg-1' : 'shrink pr-2 text-fg-2 hover:bg-ghost-hover hover:text-fg-1 group-data-compact/tabs:pr-2'
                 }`}
               >
                 {d.icon}
                 {/* every tab is labelled; only when the header runs out of room do the tabs behind show just their icon */}
                 <span className={on ? 'truncate' : 'truncate group-data-compact/tabs:hidden'}>{d.title}</span>
-                <button
-                  type="button"
-                  aria-label={`Close ${d.title}`}
-                  title={`Close ${d.title}`}
-                  tabIndex={-1}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => close(id)}
-                  className={`size-4 shrink-0 items-center justify-center rounded-sm text-fg-3 hover:text-fg-1 [&_svg]:size-3! ${on ? 'flex hover:bg-foreground/10' : 'absolute right-1 hidden bg-panel group-hover/tab:flex'}`}
-                >
-                  <XIcon />
-                </button>
+                {on && (
+                  <button
+                    type="button"
+                    aria-label={`Close ${d.title}`}
+                    title={`Close ${d.title}`}
+                    tabIndex={-1}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => close(id)}
+                    className="flex size-4 shrink-0 items-center justify-center rounded-sm text-fg-3 hover:bg-foreground/10 hover:text-fg-1 [&_svg]:size-3!"
+                  >
+                    <XIcon />
+                  </button>
+                )}
               </div>
             );
           })}

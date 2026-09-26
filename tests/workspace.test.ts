@@ -32,25 +32,25 @@ const fresh = () => {
 describe('workspace layout', () => {
   it('starts from the walkthrough preset', () => {
     const ws = fresh();
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation']);
     expect(ws.value.right.stacks[0].panels).toEqual(['logs']);
   });
 
   it('moves a panel between a sidebar\'s slots, never beyond two, and hides an empty bottom slot', () => {
     const ws = fresh();
     ws.dock('interpretation', 'left', 'bottom');
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'features'], ['properties', 'interpretation']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene'], ['properties', 'interpretation']]);
     ws.dock('properties', 'left', 'top');
     ws.dock('interpretation', 'left', 'top');
     // the bottom slot emptied: the top one fills the sidebar
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'features', 'properties', 'interpretation']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'properties', 'interpretation']]);
     // a bottom slot is made again when asked for
     ws.dock('scene', 'left', 'bottom');
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['features', 'properties', 'interpretation'], ['scene']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['properties', 'interpretation'], ['scene']]);
     // the bottom panel has a single slot
     ws.dock('logs', 'bottom', 'bottom');
-    ws.dock('features', 'bottom', 'bottom');
-    expect(ws.value.bottom.stacks.map((x) => x.panels)).toEqual([['logs', 'features']]);
+    ws.dock('interpretation', 'bottom', 'bottom');
+    expect(ws.value.bottom.stacks.map((x) => x.panels)).toEqual([['logs', 'interpretation']]);
     expect(ws.value.right.stacks).toHaveLength(0);
   });
 
@@ -58,11 +58,11 @@ describe('workspace layout', () => {
     const ws = fresh();
     ws.undock('interpretation', { x: 10, y: 20, w: 300, h: 200 });
     expect(locate(ws.value, 'interpretation')).toMatchObject({ kind: 'float', win: { x: 10, y: 20, w: 300, h: 200 } });
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene']);
     ws.setFloat(ws.value.floating[0].id, { x: 50, y: 60 });
     ws.dockBack('interpretation');
     expect(ws.value.floating).toHaveLength(0);
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation', 'features'], ['properties']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
     // undocked again, it floats where it was last
     ws.undock('interpretation', { x: 0, y: 0, w: 400, h: 400 });
     expect(ws.value.floating[0]).toMatchObject({ x: 50, y: 60, w: 300, h: 200 });
@@ -74,36 +74,35 @@ describe('workspace layout', () => {
     ws.undock('properties', { x: 10, y: 20, w: 300, h: 200 });
     expect(ws.value.left.stacks).toHaveLength(1);
     ws.dockBack('properties');
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation', 'features'], ['properties']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
     // the whole top slot floats away: it comes back above the bottom one
     const top = ws.value.left.stacks[0].id;
-    for (const p of ['scene', 'interpretation', 'features']) ws.undock(p, { x: 10, y: 20, w: 300, h: 200 });
+    for (const p of ['scene', 'interpretation']) ws.undock(p, { x: 10, y: 20, w: 300, h: 200 });
     expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['properties']]);
     // docked back in the reverse order, each finds its tab
-    ws.dockBackWindow(ws.value.floating.find((f) => f.panels.includes('features'))!.id);
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['features'], ['properties']]);
+    ws.dockBackWindow(ws.value.floating.find((f) => f.panels.includes('interpretation'))!.id);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['interpretation'], ['properties']]);
     expect(ws.value.left.stacks[0].id).toBe(top);
-    ws.dockBack('interpretation');
     ws.dockBack('scene');
-    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation', 'features'], ['properties']]);
+    expect(ws.value.left.stacks.map((x) => x.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
   });
 
   it('reorders tabs within a group', () => {
     const ws = fresh();
     const s = ws.value.left.stacks[0].id;
-    ws.move('scene', { stack: s, index: 3 });
-    expect(ws.value.left.stacks[0].panels).toEqual(['interpretation', 'features', 'scene']);
+    ws.move('scene', { stack: s, index: 2 });
+    expect(ws.value.left.stacks[0].panels).toEqual(['interpretation', 'scene']);
     ws.move('scene', { stack: s, index: 0 });
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation']);
   });
 
   it('reopens a closed panel where it was', () => {
     const ws = fresh();
-    ws.dock('features', 'bottom');
-    ws.close('features');
-    expect(openPanels(ws.value)).not.toContain('features');
-    ws.open('features');
-    expect(locate(ws.value, 'features')).toMatchObject({ kind: 'dock', zone: 'bottom' });
+    ws.dock('interpretation', 'bottom');
+    ws.close('interpretation');
+    expect(openPanels(ws.value)).not.toContain('interpretation');
+    ws.open('interpretation');
+    expect(locate(ws.value, 'interpretation')).toMatchObject({ kind: 'dock', zone: 'bottom' });
   });
 
   it('clamps column sizes and folds columns', () => {
@@ -263,7 +262,7 @@ describe('workspaces', () => {
     store.set('bw.workspaces.v2', '"nope"');
     let ws = new Workspace();
     expect(ws.current.value).toBe('walkthrough');
-    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation', 'features']);
+    expect(ws.value.left.stacks[0].panels).toEqual(['scene', 'interpretation']);
     expect(ws.saved.value).toEqual([]);
 
     // an unknown active workspace and broken layouts
@@ -281,7 +280,7 @@ describe('fixed regions: migration of freely docked layouts', () => {
   /** a layout of the free-docking version: four groups on the left, two in the bottom column, a floating window */
   const old = () => ({
     v: 1,
-    left: { size: 300, collapsed: false, stacks: [stack('a', 'scene'), stack('b', 'interpretation'), stack('c', 'features'), stack('d', 'properties')] },
+    left: { size: 300, collapsed: false, stacks: [stack('a', 'scene'), stack('b', 'interpretation'), stack('c', 'live'), stack('d', 'properties')] },
     right: { size: 400, collapsed: false, stacks: [stack('e', 'logs')] },
     bottom: { size: 260, collapsed: false, stacks: [stack('f', 'crossplot'), stack('g', 'geosteer', 'section')] },
     floating: [{ id: 'w', panels: ['mapview'], active: 'mapview', x: 10, y: 20, w: 300, h: 200 }],
@@ -290,7 +289,7 @@ describe('fixed regions: migration of freely docked layouts', () => {
   it("merges groups beyond a region's slots into its last slot as tabs, keeping windows floating with a home", () => {
     const L = normalise(old());
     expect(L.v).toBe(2);
-    expect(L.left.stacks.map((s) => s.panels)).toEqual([['scene'], ['interpretation', 'features', 'properties']]);
+    expect(L.left.stacks.map((s) => s.panels)).toEqual([['scene'], ['interpretation', 'live', 'properties']]);
     expect(L.left.stacks[1].active).toBe('interpretation');
     expect(L.bottom.stacks.map((s) => s.panels)).toEqual([['crossplot', 'geosteer', 'section']]);
     expect(L.floating[0].home?.mapview).toMatchObject({ zone: 'bottom', slot: 'top' });
@@ -308,7 +307,7 @@ describe('fixed regions: migration of freely docked layouts', () => {
     ws.dockBack('mapview');
     expect(locate(ws.value, 'mapview')).toMatchObject({ kind: 'dock', zone: 'bottom' });
     ws.switchTo('w1', all);
-    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene'], ['interpretation', 'features', 'properties']]);
+    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene'], ['interpretation', 'live', 'properties']]);
     ws.reset('w1', all);
     expect(ws.value.left.stacks).toHaveLength(2);
     expect(JSON.parse(store.get('bw.workspace.v2')!).layouts.walkthrough.v).toBe(2);

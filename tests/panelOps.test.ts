@@ -15,7 +15,7 @@ describe('panel operations (rail, group menus, actions)', () => {
     expect(locate(ws.value, 'interpretation')).toMatchObject({ kind: 'dock', zone: 'right' });
     expect(atDefault(ws, 'interpretation')).toBe(false);
     place(ws, { id: 'interpretation' }, 'default');
-    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'features', 'interpretation'], ['properties']]);
+    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
     expect(atDefault(ws, 'interpretation')).toBe(true);
   });
 
@@ -24,7 +24,7 @@ describe('panel operations (rail, group menus, actions)', () => {
     place(ws, { id: 'properties' }, 'right');
     expect(ws.value.left.stacks).toHaveLength(1);
     place(ws, { id: 'properties' }, 'default');
-    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'interpretation', 'features'], ['properties']]);
+    expect(ws.value.left.stacks.map((s) => s.panels)).toEqual([['scene', 'interpretation'], ['properties']]);
     expect(atDefault(ws, 'properties')).toBe(true);
   });
 
@@ -51,13 +51,13 @@ describe('panel operations (rail, group menus, actions)', () => {
     place(ws, { id: 'logs', title: 'Well logs' }, 'right-bottom');
     place(ws, { id: 'scene', title: 'Scene' }, 'float');
     place(ws, { id: 'scene', title: 'Scene' }, 'dock');
-    closePanel(ws, { id: 'features', title: 'Features' });
+    closePanel(ws, { id: 'scene', title: 'Scene' });
     closePanel(ws, { id: 'interpretation', title: 'Interpretation' }, false);
-    expect(seen).toEqual(['Well logs moved to the bottom of the right sidebar', 'Scene undocked', 'Scene docked back', 'Features closed']);
+    expect(seen).toEqual(['Well logs moved to the bottom of the right sidebar', 'Scene undocked', 'Scene docked back', 'Scene closed']);
     ws.undo();
     expect(ws.isOpen('interpretation')).toBe(true);
     ws.undo();
-    expect(ws.isOpen('features')).toBe(true);
+    expect(ws.isOpen('scene')).toBe(true);
   });
 
   it('floats, then docks, a closed panel after opening it', () => {
@@ -82,10 +82,10 @@ describe('panel operations (rail, group menus, actions)', () => {
     const ws = fresh();
     ws.setCollapsed('left', true);
     ws.hidden.set(true);
-    reveal(ws, { id: 'features' });
+    reveal(ws, { id: 'interpretation' });
     expect(ws.hidden.value).toBe(false);
     expect(ws.value.left.collapsed).toBe(false);
-    expect(ws.isShown('features')).toBe(true);
+    expect(ws.isShown('interpretation')).toBe(true);
   });
 
   it('opens a tool window through its feature, never straight into the layout', () => {

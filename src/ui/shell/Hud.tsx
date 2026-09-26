@@ -213,7 +213,7 @@ function Attitude({ inc }: { inc: number }) {
   const i = Math.max(0, Math.min(95, inc));
   const [nx, ny] = pt(i, R - 3);
   return (
-    <svg viewBox="0 0 92 34" className="h-[34px] w-[92px] shrink-0" role="img" aria-label={`Inclination ${fmt.n(inc, 1)}°`}>
+    <svg viewBox="0 0 92 34" className="h-[2.43rem] w-[6.57rem] shrink-0" role="img" aria-label={`Inclination ${fmt.n(inc, 1)}°`}>
       <path d={arc(0, 90)} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-muted" />
       <path d={arc(0, Math.min(i, 90))} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-ui-accent/70" />
       {[30, 60].map((d) => {

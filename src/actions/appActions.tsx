@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { COLORMAPS, type ColormapName } from '../data/colormap';
 import { DEFAULT_PARAMS, type PetroParams } from '../data/petro';
 import { FORMATION_BY_ID, MODEL_HORIZONS } from '../data/stratigraphy';
-import { FEATURES, type FeatureId } from '../features/registry';
+import { FEATURES, graphicsQuality, labelOf, setGraphicsQuality, type FeatureDef, type FeatureId, type GraphicsQuality } from '../features/registry';
 import type { App } from '../ui/app';
 import type { ConnectionState } from '../connect/hub';
 import { REPLAY_OFFSETS } from '../connect/offsets';
@@ -31,7 +31,7 @@ import { defineAction, type Action, type AnyAction } from './registry';
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', features: 'Features', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -54,6 +54,25 @@ const FEATURE_WINDOWS: Partial<Record<FeatureId, { title: string; keywords: stri
   simulation: { title: 'Reservoir simulation', keywords: ['eclipse', 'pressure', 'saturation', 'grid'] },
   views: { title: 'Saved views', keywords: ['bookmarks', 'presentation', 'camera'] },
 };
+
+/** How each home names a feature in the palette. */
+const HOME_WORD: Record<FeatureDef['home'], string> = { view: 'view', overlay: 'overlay', colour: 'colour by', wells: 'wells', graphics: 'graphics', tool: 'tool' };
+
+/** A `features.set` choice, in the words of the feature's home: "Show Log curtain", "Open Crossplot", "Show more Volve wells". */
+function featureChoice(f: FeatureDef, on: boolean): string {
+  switch (f.home) {
+    case 'overlay':
+      return `${on ? 'Hide' : 'Show'} ${labelOf(f.id)}`;
+    case 'view':
+      return `${on ? 'Close' : 'Open'} ${FEATURE_WINDOWS[f.id]?.title ?? f.name}`;
+    case 'wells':
+      return on ? 'Show fewer wells' : 'Show more Volve wells';
+    case 'graphics':
+      return `${on ? 'Turn off' : 'Turn on'} ${labelOf(f.id)} (graphics)`;
+    default:
+      return `${on ? 'Turn off' : 'Turn on'} ${f.name}`;
+  }
+}
 
 type PanelPlace = { id: string; title: string; location: string; about?: string; keywords?: string[] };
 
@@ -294,7 +313,7 @@ export function appActions(): AnyAction<App>[] {
       choices: (app) =>
         PROPERTY_MODES.filter((m) => m !== 'rop' || app.optionalModes.value.has('rop')).map((mode) => ({ label: MODE_LABEL[mode], input: { mode }, current: app.engine.mode === mode })),
       run: (app, { mode }) => {
-        if (mode === 'rop' && !app.optionalModes.value.has('rop')) throw new Error('Turn on the “Drilling speed (ROP) mode” feature first.');
+        if (mode === 'rop' && !app.optionalModes.value.has('rop')) throw new Error(app.flags.on('rop') ? 'The active well has no ROP log.' : 'The ROP colouring is off: turn the “rop” feature on first.');
         app.setProperty(mode);
       },
     }),
@@ -483,7 +502,10 @@ export function appActions(): AnyAction<App>[] {
           if (tool) tool.show();
           else if (panel in BUILTIN_PANELS) app.workspace.open(panel);
         });
-        if (feature) app.flags.set(panel as FeatureId, true);
+        if (feature) {
+          if (tool) showTool(app, tool);
+          else app.flags.set(panel as FeatureId, true);
+        }
         return { panel, was: place.location, now: describeLocation(app.workspace.layout.value, panel) };
       },
     }),
@@ -592,7 +614,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Overlays',
       description: 'Collapses the cards over the 3D view (colour key, chapter card) to one-line chips, or expands them.',
       category: 'Panels',
-      where: 'Personalise › Overlays',
+      where: 'Settings › Overlays',
       input: z.object({ collapsed: z.boolean() }),
       choices: () => [
         { label: 'Collapse all', input: { collapsed: true } },
@@ -709,15 +731,56 @@ export function appActions(): AnyAction<App>[] {
     A({
       id: 'features.set',
       title: 'Feature',
-      description: 'Turns an optional feature (geosteering, cross-section, crossplots, simulation…) on or off.',
+      description:
+        'Turns an optional feature on or off: an overlay in 3D (log curtain, oil–water contact, uncertainty cones, geosteering band), a view (cross-section, correlation, crossplots, map, simulation: on opens its window), a graphics effect, the further Volve wells, the ROP colouring or a toolbar tool.',
       category: 'Features',
-      where: 'Features',
+      where: 'Scene › Overlays · Rail › Views · Settings › Graphics · Well picker',
       input: z.object({ feature: z.enum(FEATURE_IDS), on: z.boolean() }),
-      choices: (app) => FEATURES.map((f) => ({ label: `${app.flags.on(f.id) ? 'Turn off' : 'Turn on'} ${f.name}`, input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group], description: f.desc })),
+      choices: (app) => FEATURES.map((f) => ({ label: featureChoice(f, app.flags.on(f.id)), input: { feature: f.id, on: !app.flags.on(f.id) }, keywords: [f.group, f.name, HOME_WORD[f.home]], description: f.desc })),
       // an overlay or a contact drawn by a feature: switching the feature shows or hides it
       appliesTo: ['overlay', 'contact'],
-      onSelection: (sel, app) => (isFeature(sel.id) ? { input: { feature: sel.id, on: !app.flags.on(sel.id) }, label: app.flags.on(sel.id) ? 'Turn off' : 'Turn on' } : null),
-      run: (app, { feature, on }) => app.flags.set(feature, on),
+      onSelection: (sel, app) => (isFeature(sel.id) ? { input: { feature: sel.id, on: !app.flags.on(sel.id) }, label: app.flags.on(sel.id) ? 'Hide' : 'Show' } : null),
+      run: (app, { feature, on }) => {
+        // opening a view shows its window even when the feature does not open it by itself (nothing loaded yet)
+        const tool = on && FEATURES.find((f) => f.id === feature)?.home === 'view' ? toolWindows.value.find((w) => w.opts.id === feature) : undefined;
+        if (tool) withTransition(() => showTool(app, tool));
+        else app.flags.set(feature, on);
+      },
+    }),
+    A({
+      id: 'features.all',
+      title: 'Every optional feature',
+      description: 'Turns every optional feature (overlays, views, graphics effects, the further Volve wells, tools) on or off at once.',
+      category: 'Features',
+      keywords: ['all on', 'all off', 'features'],
+      input: z.object({ on: z.boolean() }),
+      choices: () => [
+        { label: 'All on', input: { on: true } },
+        { label: 'All off', input: { on: false } },
+      ],
+      run: (app, { on }) => FEATURES.forEach((f) => app.flags.set(f.id, on)),
+    }),
+    A({
+      id: 'features.reset',
+      title: 'Reset optional features to defaults',
+      description: 'Puts every optional feature back as it starts: the overlays, views, graphics quality, wells and tools.',
+      category: 'Features',
+      keywords: ['defaults', 'features', 'restore'],
+      run: (app) => app.flags.resetDefaults(app.engine.quality === 'low'),
+    }),
+    A({
+      id: 'graphics.quality',
+      title: 'Graphics quality',
+      description: 'Low, Medium or High: sets the GPU-heavy effects (photo textures, shadows and ambient occlusion, inside-the-hole effects, sea surface detail) at once. Low suits integrated GPUs, remote desktops and VMs.',
+      category: 'Preferences',
+      where: 'Settings › Graphics',
+      keywords: ['performance', 'slow', 'gpu', 'textures', 'shadows'],
+      input: z.object({ quality: z.enum(['low', 'medium', 'high']) }),
+      choices: (app) => {
+        const q = graphicsQuality((id) => app.flags.on(id));
+        return (['low', 'medium', 'high'] as GraphicsQuality[]).map((quality) => ({ label: quality[0].toUpperCase() + quality.slice(1), input: { quality }, current: q === quality }));
+      },
+      run: (app, { quality }) => setGraphicsQuality(app.flags, quality),
     }),
     A({
       id: 'tools.run',
@@ -962,7 +1025,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Theme',
       description: 'Dark, light, or follow the system setting.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       keywords: ['dark mode', 'light mode', 'appearance'],
       input: z.object({ theme: z.enum(['dark', 'light', 'system']) }),
       choices: () => (['dark', 'light', 'system'] as Theme[]).map((theme) => ({ label: theme[0].toUpperCase() + theme.slice(1), input: { theme }, current: prefs.value.theme === theme })),
@@ -973,7 +1036,7 @@ export function appActions(): AnyAction<App>[] {
       title: 'Density',
       description: 'The size of text and controls.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       input: z.object({ density: z.enum(['compact', 'default', 'comfortable']) }),
       choices: () =>
         (['compact', 'default', 'comfortable'] as Density[]).map((density) => ({ label: density[0].toUpperCase() + density.slice(1), input: { density }, current: prefs.value.density === density })),
@@ -984,15 +1047,16 @@ export function appActions(): AnyAction<App>[] {
       title: 'Accent colour',
       description: 'The colour of the cursor, playhead and selections.',
       category: 'Preferences',
-      where: 'Personalise',
+      where: 'Settings',
       input: z.object({ accent: z.enum(ACCENTS.map((a) => a.id) as [Accent, ...Accent[]]) }),
       choices: () => ACCENTS.map((a) => ({ label: a.label, input: { accent: a.id }, current: prefs.value.accent === a.id })),
       run: (_app, { accent }) => setPrefs({ accent }),
     }),
     A({
       id: 'prefs.open',
-      title: 'Personalise…',
-      description: 'Opens the personalisation dialog (theme, density, accent, panel glass, labels, motion).',
+      title: 'Settings…',
+      description: 'Opens Settings: theme, density, accent, panel glass, labels, graphics quality, motion.',
+      keywords: ['personalise', 'preferences', 'graphics', 'quality'],
       category: 'Preferences',
       where: 'Rail › Settings',
       run: (app) => app.personaliseOpen.set(true),

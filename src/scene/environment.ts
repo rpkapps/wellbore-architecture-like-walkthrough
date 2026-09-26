@@ -15,7 +15,7 @@ export class Environment {
   sky!: THREE.Mesh;
   private seaUniforms = { uTime: { value: 0 }, uDetail: { value: 0 } };
 
-  /** Reflective multi-scale sea surface (Features → Sea surface & seabed detail). */
+  /** Reflective multi-scale sea surface (Settings › Graphics › Sea surface & seabed detail). */
   setDetail(on: boolean) {
     this.seaUniforms.uDetail.value = on ? 1 : 0;
     const m = this.sea.material as THREE.MeshStandardMaterial;

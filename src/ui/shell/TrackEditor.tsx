@@ -15,6 +15,7 @@ import { CompactSelect, Note, SwitchField, type OptionGroup } from '../controls'
 import { IconButton } from '../icon-button';
 import { useRev } from '../signal';
 import { SortableList } from '../sortable';
+import { AllToggle } from '../switchGroup';
 
 const WIDTHS: [number, string][] = [
   [0.6, 'Narrow'],
@@ -55,15 +56,12 @@ export function TrackEditor({ app }: { app: App }) {
   return (
     <ScrollArea className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
       <div className="flex flex-col gap-3 pr-2">
-        <div className="flex items-center gap-2">
-          {/* every track at once */}
-          <Switch
-            aria-label={logs.tracks.every((t) => !t.hidden) ? 'Hide every track' : 'Show every track'}
-            isSelected={logs.tracks.every((t) => !t.hidden)}
-            onChange={(on) => (logs.tracks.forEach((t) => (t.hidden = !on)), change())}
-            className="ml-6"
-          />
-          <span className="type-caption flex-1">{logs.tracks.filter((t) => !t.hidden).length} tracks shown</span>
+        <div className="flex h-6 items-center gap-0.5">
+          <span className="type-caption flex-1 truncate">
+            <span className="type-value text-fg-1!">{logs.tracks.filter((t) => !t.hidden).length}</span> of {logs.tracks.length} tracks shown
+          </span>
+          {/* every track at once: a quiet text action, not a "parent" switch */}
+          <AllToggle on={logs.tracks.filter((t) => !t.hidden).length} total={logs.tracks.length} what="tracks" verb="show" onAll={(on) => (logs.tracks.forEach((t) => (t.hidden = !on)), change())} />
           <Button
             variant="ghost"
             size="xs"

@@ -131,19 +131,19 @@ export const PRESETS: { id: PresetId; label: string; context?: WorkspaceContext;
   {
     id: 'walkthrough',
     label: 'Walkthrough',
-    build: () => ({ v: 2, left: col(300, ['scene', 'interpretation', 'features'], ['properties']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
+    build: () => ({ v: 2, left: col(300, ['scene', 'interpretation'], ['properties']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
   },
   {
     id: 'petrophysics',
     label: 'Petrophysics',
     context: { colour: 'hydrocarbon' },
-    build: () => ({ v: 2, left: col(320, ['interpretation', 'scene', 'features'], ['properties']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
+    build: () => ({ v: 2, left: col(320, ['interpretation', 'scene'], ['properties']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
   },
   {
     id: 'geosteering',
     label: 'Geosteering',
     context: { nav: 'guided', guidedView: 'chase' },
-    build: () => ({ v: 2, left: col(280, ['scene', 'interpretation', 'features'], ['properties']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
+    build: () => ({ v: 2, left: col(280, ['scene', 'interpretation'], ['properties']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
   },
 ];
 
@@ -154,11 +154,11 @@ const isPreset = (id: string): id is PresetId => PRESETS.some((p) => p.id === id
  * whether they are open, these belong to a workspace's layout, so switching
  * workspace does not carry them along.
  */
-export const DOCK_PANELS: ReadonlySet<string> = new Set(['scene', 'properties', 'interpretation', 'features', 'logs', 'sources', 'live']);
+export const DOCK_PANELS: ReadonlySet<string> = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
-  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' || id === 'features' ? 'left' : 'bottom';
+  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' ? 'left' : 'bottom';
 }
 
 /** The end of a region's slot (by default its top slot): where a panel with no remembered place goes. */
