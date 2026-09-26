@@ -2,10 +2,15 @@ import type { Thread } from './types';
 
 /*
  * A tiny external store for `useSyncExternalStore`: `set` stores the next
- * snapshot and publishes it at most once per animation frame (streaming
- * tokens do not re-render the panel more often than the screen refreshes);
- * `set(next, {flush: true})` publishes at once (status changes, actions).
+ * snapshot and publishes it on an animation frame, at most every
+ * `MIN_INTERVAL_MS` (streaming tokens re-render the panel about 30 times a
+ * second: smooth to read, and half the layout work of every frame, which the
+ * host's own animation keeps); `set(next, {flush: true})` publishes at once
+ * (status changes, actions).
  */
+
+/** Shortest time between two published snapshots while values stream in. */
+export const MIN_INTERVAL_MS = 33;
 
 export interface Store<T> {
   /** the published snapshot (what subscribers have been told about) */
@@ -21,7 +26,15 @@ export interface Store<T> {
 
 type Cancel = () => void;
 
-function schedule(fn: () => void): Cancel {
+function schedule(fn: () => void, delay: number): Cancel {
+  if (delay > 0) {
+    let inner: Cancel | null = null;
+    const t = setTimeout(() => (inner = schedule(fn, 0)), delay);
+    return () => {
+      clearTimeout(t);
+      inner?.();
+    };
+  }
   if (typeof requestAnimationFrame === 'function' && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
     const id = requestAnimationFrame(fn);
     // a hidden tab gets no frames: fall back to a timer so the transcript still completes
@@ -40,13 +53,16 @@ export function createStore<T>(initial: T): Store<T> {
   let published = initial;
   let latest = initial;
   let cancel: Cancel | null = null;
+  let publishedAt = -Infinity;
   const listeners = new Set<() => void>();
+  const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
   const publish = () => {
     cancel?.();
     cancel = null;
     if (published === latest) return;
     published = latest;
+    publishedAt = clock();
     for (const l of [...listeners]) {
       try {
         l();
@@ -65,7 +81,7 @@ export function createStore<T>(initial: T): Store<T> {
     set(next, opts) {
       latest = next;
       if (opts?.flush) publish();
-      else if (!cancel) cancel = schedule(publish);
+      else if (!cancel) cancel = schedule(publish, Math.max(0, MIN_INTERVAL_MS - (clock() - publishedAt)));
     },
     subscribe(listener) {
       listeners.add(listener);
