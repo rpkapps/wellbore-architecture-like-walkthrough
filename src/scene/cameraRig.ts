@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ExploreNav } from './exploreNav';
 import type { WellboreAssembly } from './wellbore';
 
 export type NavMode = 'guided' | 'explore';
@@ -46,11 +47,12 @@ export class CameraRig {
   private orbitOffset = new THREE.Vector3(-60, 30, 60);
   onMdChange?: (md: number) => void;
   onUserInput?: () => void;
-  /** The point of the scene under a pointer position (set by the engine), for zooming toward it. */
+  /** The point of the scene under a pointer position (set by the engine): Explore turns around, zooms toward and drags it. */
   pickPoint?: (clientX: number, clientY: number) => THREE.Vector3 | null;
-  /** Explore's wheel zoom still to apply (log of the scale), eased in over a few frames, toward `zoomAnchor`. */
-  private zoomPending = 0;
-  private zoomAnchor = new THREE.Vector3();
+  /** The scene's extent (set by the engine): Explore's view stays on it. */
+  sceneBounds?: () => THREE.Box3 | null;
+  /** Explore's mouse navigation (orbit view) */
+  private nav: ExploreNav;
   wellbore?: WellboreAssembly;
   mdMax = 1000;
   chaseDistance = 1;
@@ -67,18 +69,20 @@ export class CameraRig {
     this.orbit.zoomSpeed = 1.1;
     this.orbit.enabled = false;
     this.orbit.addEventListener('start', () => this.onUserInput?.());
-    // Explore's orbit zooms toward the point under the pointer (the orbit controls' own zoom goes
-    // toward the orbit centre): caught before the controls see the wheel. Guided keeps its own.
-    dom.addEventListener(
-      'wheel',
-      (e) => {
-        if (this.mode !== 'explore' || this.exploreView !== 'orbit' || !this.orbit.enabled) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        this.zoomAt(e);
-      },
-      { passive: false, capture: true },
-    );
+    // Explore's orbit view has its own mouse navigation (around, toward and by what is under the
+    // pointer); the orbit controls keep theirs for Guided's orbit view
+    this.nav = new ExploreNav(camera, this.orbit.target, dom, () => this.mode === 'explore' && this.exploreView === 'orbit');
+    this.nav.pickPoint = (x, y) => this.pickPoint?.(x, y) ?? null;
+    this.nav.bounds = () => this.sceneBounds?.() ?? null;
+    this.nav.onInput = () => {
+      // a flight in progress stops where it is
+      if (this.flight) {
+        this.orbit.target.copy(this.lookTarget);
+        this.flight = null;
+      }
+      this.onUserInput?.();
+    };
+    this.syncOrbitInput();
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
       this.keys.add(e.code);
@@ -136,6 +140,7 @@ export class CameraRig {
     if (mode === this.mode) return;
     this.mode = mode;
     this.flight = null;
+    this.syncOrbitInput();
     if (mode === 'explore') {
       this.syncAnglesFromCamera();
       this.setExploreView(this.exploreView);
@@ -162,6 +167,7 @@ export class CameraRig {
 
   setExploreView(v: ExploreView) {
     this.exploreView = v;
+    this.syncOrbitInput();
     if (this.mode !== 'explore') return;
     if (v === 'orbit') {
       const dir = new THREE.Vector3();
@@ -187,6 +193,7 @@ export class CameraRig {
   instantMoves = false;
 
   flyTo(pos: THREE.Vector3, target: THREE.Vector3, dur = 2.2, done?: () => void) {
+    this.nav.stop();
     if (this.instantMoves) dur = 0.01;
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
@@ -291,49 +298,17 @@ export class CameraRig {
     this.camera.lookAt(this.smoothedLook);
   }
 
-  /** Queue a wheel zoom toward the point under the pointer (or along its ray, at the orbit centre's distance). */
-  private zoomAt(e: WheelEvent) {
-    if (this.flight) {
-      this.orbit.target.copy(this.lookTarget);
-      this.flight = null;
-    }
-    // lines and pages as pixels; a notch of a mouse wheel (~100 px) is about 16 %
-    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-    const hit = this.pickPoint?.(e.clientX, e.clientY);
-    if (hit) this.zoomAnchor.copy(hit);
-    else {
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const ndc = new THREE.Vector3(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1, 0.5);
-      const dir = ndc.unproject(this.camera).sub(this.camera.position).normalize();
-      this.zoomAnchor.copy(this.camera.position).addScaledVector(dir, this.camera.position.distanceTo(this.orbit.target));
-    }
-    this.zoomPending += Math.max(-0.6, Math.min(0.6, dy * 0.0015 * this.orbit.zoomSpeed));
-    this.onUserInput?.();
-  }
-
-  /**
-   * Ease in the queued zoom: the camera and the orbit centre scale about the
-   * anchor, so the point under the pointer stays under it. Never closer than
-   * a few metres to the anchor, nor further than the orbit allows.
-   */
-  private applyZoom(dt: number) {
-    if (Math.abs(this.zoomPending) < 1e-4) {
-      this.zoomPending = 0;
-      return;
-    }
-    const step = this.zoomPending * Math.min(1, dt * 14);
-    this.zoomPending -= step;
-    const a = this.zoomAnchor;
-    const d = this.camera.position.distanceTo(a);
-    const k = Math.max(Math.min(1, 3 / Math.max(d, 1e-6)), Math.min(this.orbit.maxDistance / Math.max(d, 1e-6), Math.exp(step)));
-    if (k === 1) return;
-    this.camera.position.sub(a).multiplyScalar(k).add(a);
-    this.orbit.target.sub(a).multiplyScalar(k).add(a);
+  /** The orbit controls take the mouse everywhere but in Explore's orbit view, which navigates by itself. */
+  private syncOrbitInput() {
+    const own = this.mode === 'explore' && this.exploreView === 'orbit';
+    this.orbit.enableRotate = this.orbit.enablePan = this.orbit.enableZoom = !own;
+    this.orbit.enableDamping = !own;
+    if (!own) this.nav.stop();
   }
 
   private updateExplore(dt: number) {
     if (this.exploreView === 'orbit') {
-      this.applyZoom(dt);
+      this.nav.update(dt);
       this.orbit.update();
       this.panWithKeys(dt);
       return;

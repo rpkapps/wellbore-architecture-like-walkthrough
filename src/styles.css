@@ -290,6 +290,22 @@
   }
 }
 
+/* ------------------------------------------------------------------ 3D navigation */
+/* the point Explore's view turns around while it is being rotated */
+.nav-pivot {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ui-accent);
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--ui-accent) 35%, transparent);
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
 /* ------------------------------------------------------------------ view transitions */
 /* the page underneath keeps drawing live (the 3D view must not freeze) */
 ::view-transition-group(root) {

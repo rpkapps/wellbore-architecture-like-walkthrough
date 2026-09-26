@@ -221,8 +221,18 @@ export class Engine {
     this.composer.addPass(this.final);
 
     this.rig = new CameraRig(this.camera, this.renderer.domElement);
-    // Explore's wheel zooms toward what is under the pointer
+    // Explore turns around, zooms toward and drags what is under the pointer, and stays on the scene
     this.rig.pickPoint = (x, y) => this.pick(x, y)?.point ?? null;
+    let bounds: THREE.Box3 | null = null;
+    this.rig.sceneBounds = () => {
+      // the model block (its full extent, whatever the section box) and the platform above it
+      if (!bounds || bounds.isEmpty()) {
+        const f = this.geology.fullBox;
+        const g = new THREE.Box3().setFromObject(this.geology.group);
+        bounds = g.isEmpty() ? null : new THREE.Box3(new THREE.Vector3(f.xMin, g.min.y, -f.nMax), new THREE.Vector3(f.xMax, 250, -f.nMin));
+      }
+      return bounds;
+    };
     this.lutTex = makeLutTexture('resistivity');
 
     this.env = new Environment(field);
