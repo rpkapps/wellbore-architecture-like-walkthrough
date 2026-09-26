@@ -3,14 +3,21 @@ import type { PropertyMode } from '../../scene/wellbore';
 import { Signal } from '../signal';
 
 /**
- * The panel layout of the workspace, Illustrator style: three dock columns
- * (left, right, bottom) of vertically stacked tab groups, plus free-floating
- * windows. The 3D view is never part of it: panels float over it, so moving
- * or resizing them never resizes the canvas.
+ * The panel layout of the workspace: three fixed regions (the left and right
+ * sidebars and the bottom panel) that hold tabbed groups, plus floating
+ * windows. The 3D view and the timeline are never part of it: panels lie over
+ * the view, so moving or resizing them never resizes the canvas.
+ *
+ * Docking is deliberately simple (P10): nothing creates a new region or a
+ * further split. Each sidebar has a top slot and an optional bottom slot (a
+ * draggable divider between them; the bottom slot disappears while empty),
+ * and the bottom panel has one slot. A panel moves between them from its menus
+ * ("Move to…"), and floats only when it is undocked on purpose; Dock back
+ * returns it to the slot and tab it came from. Dragging a tab only reorders it
+ * within its group. Every change made from a menu can be undone.
  *
  * The model is plain data (persisted per browser); the Workspace class holds
- * it in a signal and applies the edits the frame's drag and drop and menus
- * make.
+ * it in a signal and applies the edits the frame's menus and drags make.
  *
  * Workspaces work as in Blender: each one (the built-in Walkthrough,
  * Petrophysics and Geosteering, and the user's own) keeps its own live
@@ -23,6 +30,12 @@ import { Signal } from '../signal';
 export type Zone = 'left' | 'right' | 'bottom';
 export const ZONES: Zone[] = ['left', 'right', 'bottom'];
 
+/** A sidebar's two slots: the top one, and the one below its divider. */
+export type Slot = 'top' | 'bottom';
+
+/** How many groups (slots) each region holds: a sidebar splits once, the bottom panel not at all. */
+export const MAX_STACKS: Record<Zone, number> = { left: 2, right: 2, bottom: 1 };
+
 export interface Stack {
   id: string;
   panels: string[];
@@ -32,6 +45,7 @@ export interface Stack {
 }
 
 export interface Column {
+  /** the slots in use, top first (at most `MAX_STACKS`) */
   stacks: Stack[];
   /** width (left / right) or height (bottom) in px */
   size: number;
@@ -39,35 +53,59 @@ export interface Column {
   collapsed: boolean;
 }
 
-export interface FloatWin {
-  id: string;
-  panels: string[];
-  active: string;
+export interface FloatRect {
   x: number;
   y: number;
   w: number;
   h: number;
 }
 
+/** Where a docked panel was: what Dock back (and reopening a closed panel) returns it to. */
+export interface Origin {
+  zone: Zone;
+  slot: Slot;
+  /** the group it was in (the slot is recreated if that group is gone) */
+  stack: string;
+  /** its tab position */
+  index: number;
+  /** the group's share of the sidebar, for a recreated slot */
+  weight?: number;
+  /** the other slot's group at the time: a top slot comes back above it */
+  peer?: string;
+}
+
+export interface FloatWin extends FloatRect {
+  id: string;
+  panels: string[];
+  active: string;
+  /** where each of its panels came from (Dock back) */
+  home?: Record<string, Origin>;
+}
+
 export interface Layout {
-  v: 1;
+  v: 2;
   left: Column;
   right: Column;
   bottom: Column;
   /** back to front */
   floating: FloatWin[];
+  /** each panel's last floating rectangle, used when it is undocked again */
+  rects?: Record<string, FloatRect>;
 }
 
-export type DropTarget =
-  | { kind: 'tab'; stack: string; index: number }
-  | { kind: 'split'; zone: Zone; stack: string; where: 'before' | 'after' }
-  | { kind: 'zone'; zone: Zone }
-  | { kind: 'float'; x: number; y: number; w: number; h: number };
+/** A position among a group's tabs (the only place a tab can be dragged to). */
+export interface TabTarget {
+  stack: string;
+  index: number;
+}
 
 export type Place = { kind: 'dock'; zone: Zone; stack: Stack; index: number } | { kind: 'float'; win: FloatWin; index: number };
 
 /** smallest sizes of the columns; the largest is whatever the window leaves (the frame caps a drag) */
 export const SIZE_LIMITS: Record<Zone, [number, number]> = { left: [220, 4000], right: [240, 4000], bottom: [120, 4000] };
+
+/** how many layout changes Undo can take back */
+const UNDO_DEPTH = 20;
 
 let seq = 0;
 const uid = (p: string) => `${p}${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -93,19 +131,19 @@ export const PRESETS: { id: PresetId; label: string; context?: WorkspaceContext;
   {
     id: 'walkthrough',
     label: 'Walkthrough',
-    build: () => ({ v: 1, left: col(300, ['scene', 'interpretation'], ['properties']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
+    build: () => ({ v: 2, left: col(300, ['scene', 'interpretation'], ['properties']), right: col(400, ['logs']), bottom: col(260), floating: [] }),
   },
   {
     id: 'petrophysics',
     label: 'Petrophysics',
     context: { colour: 'hydrocarbon' },
-    build: () => ({ v: 1, left: col(320, ['interpretation'], ['scene'], ['properties']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
+    build: () => ({ v: 2, left: col(320, ['interpretation', 'scene'], ['properties']), right: col(520, ['logs']), bottom: col(280, ['crossplot']), floating: [] }),
   },
   {
     id: 'geosteering',
     label: 'Geosteering',
     context: { nav: 'guided', guidedView: 'chase' },
-    build: () => ({ v: 1, left: col(280, ['scene', 'interpretation'], ['properties']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
+    build: () => ({ v: 2, left: col(280, ['scene', 'interpretation'], ['properties']), right: col(420, ['logs']), bottom: col(300, ['geosteer', 'correlation', 'section']), floating: [] }),
   },
 ];
 
@@ -123,6 +161,12 @@ export function defaultZone(id: string): Zone {
   return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' ? 'left' : 'bottom';
 }
 
+/** The end of a region's slot (by default its top slot): where a panel with no remembered place goes. */
+export const defaultOrigin = (id: string, zone = defaultZone(id), slot: Slot = 'top'): Origin => ({ zone, slot, stack: '', index: 999 });
+
+/** A group's slot in its region: the first is the top one. */
+export const slotAt = (index: number): Slot => (index === 0 ? 'top' : 'bottom');
+
 export function locate(L: Layout, id: string): Place | null {
   for (const zone of ZONES) {
     const c = L[zone];
@@ -136,6 +180,14 @@ export function openPanels(L: Layout): string[] {
   return [...ZONES.flatMap((z) => L[z].stacks.flatMap((s) => s.panels)), ...L.floating.flatMap((f) => f.panels)];
 }
 
+/** Where a docked panel is, as Dock back and a reopen need it. */
+export function originOf(L: Layout, id: string): Origin | null {
+  const p = locate(L, id);
+  if (!p || p.kind !== 'dock') return null;
+  const peer = L[p.zone].stacks[p.index === 0 ? 1 : 0]?.id;
+  return { zone: p.zone, slot: slotAt(p.index), stack: p.stack.id, index: p.stack.panels.indexOf(id), weight: p.stack.weight, ...(peer ? { peer } : {}) };
+}
+
 const clone = (L: Layout): Layout => structuredClone(L);
 
 function detach(L: Layout, id: string): Layout {
@@ -146,58 +198,114 @@ function detach(L: Layout, id: string): Layout {
       s.panels = s.panels.filter((p) => p !== id);
       if (s.active === id) s.active = s.panels[0] ?? '';
     }
+    // an empty slot goes: an empty bottom slot hides, and a sidebar's remaining group fills it
     c.stacks = c.stacks.filter((s) => s.panels.length);
   }
   for (const f of M.floating) {
     f.panels = f.panels.filter((p) => p !== id);
     if (f.active === id) f.active = f.panels[0] ?? '';
+    if (f.home) delete f.home[id];
   }
   M.floating = M.floating.filter((f) => f.panels.length);
   return M;
 }
 
-function attach(L: Layout, id: string, t: DropTarget): Layout {
+/**
+ * Dock a panel (not in the layout) at an origin: in its group if that still
+ * exists; otherwise the slot is recreated when the region has room for it
+ * (a bottom slot below the sidebar's group, a top slot above the group that
+ * was below it), else it joins the group in that slot's place.
+ */
+function dockAt(L: Layout, id: string, o: Origin): Layout {
   const M = clone(L);
-  if (t.kind === 'tab') {
-    const s = ZONES.flatMap((z) => M[z].stacks).find((x) => x.id === t.stack) ?? M.floating.find((x) => x.id === t.stack);
-    if (s) {
-      s.panels.splice(Math.max(0, Math.min(t.index, s.panels.length)), 0, id);
-      s.active = id;
-      return M;
+  const c = M[o.zone];
+  const max = MAX_STACKS[o.zone];
+  const fresh = (): Stack => ({ id: o.stack || uid('s'), panels: [id], active: id, weight: o.weight ?? c.stacks[0]?.weight ?? 1 });
+  let s = c.stacks.find((x) => x.id === o.stack);
+  if (!s) {
+    if (!c.stacks.length) c.stacks.push(fresh());
+    else if (o.slot === 'bottom' && max > 1) {
+      if (c.stacks.length < max) c.stacks.push(fresh());
+      else s = c.stacks[max - 1];
+    } else if (o.slot === 'top' && c.stacks.length < max && o.peer && c.stacks[0].id === o.peer) c.stacks.unshift(fresh());
+    else s = c.stacks[0];
+  }
+  if (s) {
+    s.panels.splice(Math.max(0, Math.min(o.index, s.panels.length)), 0, id);
+    s.active = id;
+  }
+  c.collapsed = false;
+  return M;
+}
+
+/** Add a panel (not in the layout) as a tab of a group; a group that is gone sends it to its default place. */
+function attachTab(L: Layout, id: string, t: TabTarget): Layout {
+  const M = clone(L);
+  const s = ZONES.flatMap((z) => M[z].stacks).find((x) => x.id === t.stack) ?? M.floating.find((x) => x.id === t.stack);
+  if (!s) return dockAt(L, id, defaultOrigin(id));
+  s.panels.splice(Math.max(0, Math.min(t.index, s.panels.length)), 0, id);
+  s.active = id;
+  return M;
+}
+
+const rectOf = (f: FloatRect): FloatRect => ({ x: f.x, y: f.y, w: f.w, h: f.h });
+
+/** Float a panel (not in the layout) in a window of its own, remembering where it docks back to and its rectangle. */
+function floatAt(L: Layout, id: string, r: FloatRect, home: Origin): Layout {
+  const M = clone(L);
+  M.floating.push({ id: uid('f'), panels: [id], active: id, ...rectOf(r), home: { [id]: home } });
+  M.rects = { ...M.rects, [id]: rectOf(r) };
+  return M;
+}
+
+/**
+ * Bring a stored layout (of any earlier version) into the shape the regions
+ * allow: groups beyond a region's slots merge into its last slot as tabs,
+ * and floating windows keep floating with a remembered home (their panel's
+ * default place) for Dock back. Idempotent.
+ */
+export function normalise(L: Layout | { v: number }): Layout {
+  const M = structuredClone(L) as unknown as Layout;
+  M.v = 2;
+  for (const z of ZONES) {
+    const c = M[z];
+    const stacks = c.stacks.filter((s) => s && Array.isArray(s.panels) && s.panels.length);
+    const max = MAX_STACKS[z];
+    if (stacks.length > max) {
+      const last = stacks[max - 1];
+      for (const extra of stacks.slice(max)) for (const p of extra.panels) if (!last.panels.includes(p)) last.panels.push(p);
+      stacks.length = max;
     }
-    return attach(M, id, { kind: 'zone', zone: defaultZone(id) });
+    for (const s of stacks) if (!s.panels.includes(s.active)) s.active = s.panels[0];
+    c.stacks = stacks;
   }
-  if (t.kind === 'split') {
-    const c = M[t.zone];
-    const i = c.stacks.findIndex((x) => x.id === t.stack);
-    const neighbour = c.stacks[i];
-    const w = neighbour ? neighbour.weight / 2 : 1;
-    if (neighbour) neighbour.weight = w;
-    c.stacks.splice(i < 0 ? c.stacks.length : t.where === 'before' ? i : i + 1, 0, { id: uid('s'), panels: [id], active: id, weight: w });
-    c.collapsed = false;
-    return M;
+  M.floating = M.floating.filter((f) => f && Array.isArray(f.panels) && f.panels.length);
+  for (const f of M.floating) {
+    const home = (f.home ??= {});
+    for (const p of f.panels) home[p] ??= defaultOrigin(p);
   }
-  if (t.kind === 'zone') {
-    const c = M[t.zone];
-    c.stacks.push({ id: uid('s'), panels: [id], active: id, weight: c.stacks.length ? c.stacks.reduce((a, s) => a + s.weight, 0) / c.stacks.length : 1 });
-    c.collapsed = false;
-    return M;
-  }
-  M.floating.push({ id: uid('f'), panels: [id], active: id, x: t.x, y: t.y, w: t.w, h: t.h });
   return M;
 }
 
 /** Remembered placements for closed panels, so they reopen where they were. */
-export interface Memory {
-  /** the group (or floating rectangle) and, for a docked panel, its column in case the group is gone */
-  [panel: string]: { target: DropTarget; zone?: Zone };
+interface Memory {
+  /** its docked place (for a floating panel, where Dock back would take it), and its window if it floated */
+  [panel: string]: { home: Origin; float?: FloatRect };
 }
 
-function placeOf(L: Layout, id: string): Memory[string] | null {
-  const p = locate(L, id);
-  if (!p) return null;
-  if (p.kind === 'dock') return { target: { kind: 'tab', stack: p.stack.id, index: p.stack.panels.indexOf(id) }, zone: p.zone };
-  return { target: { kind: 'float', x: p.win.x, y: p.win.y, w: p.win.w, h: p.win.h } };
+/** One layout change Undo can take back. */
+interface UndoEntry {
+  /** the workspace it was made in */
+  ws: string;
+  before: Layout;
+  n: number;
+}
+
+/** A layout change made from a menu or button: the toast that reports it offers Undo. */
+export interface LayoutChange {
+  label: string;
+  /** pass to `undo` to take back this change (and any made after it) */
+  n: number;
 }
 
 function load<T>(key: string): T | null {
@@ -260,9 +368,10 @@ interface LiveState {
 
 function loadSaved(): SavedWorkspace[] {
   const list = load<SavedWorkspace[]>(SAVED);
-  if (Array.isArray(list)) return list.filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && !isPreset(w.id) && valid(w.layout));
+  if (Array.isArray(list))
+    return list.filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && !isPreset(w.id) && valid(w.layout)).map((w) => ({ ...w, layout: normalise(w.layout) }));
   const old = load<Layout>(CUSTOM);
-  return valid(old) ? [{ id: uid('w'), name: 'My workspace', layout: old }] : [];
+  return valid(old) ? [{ id: uid('w'), name: 'My workspace', layout: normalise(old) }] : [];
 }
 
 /**
@@ -274,16 +383,19 @@ function loadLive(exists: (id: string) => boolean): { active: string; layouts: R
   const st = load<LiveState>(LIVE);
   const layouts: Record<string, Layout> = {};
   if (st && typeof st === 'object' && st.layouts && typeof st.layouts === 'object') {
-    for (const [id, L] of Object.entries(st.layouts)) if (exists(id) && valid(L)) layouts[id] = L;
+    for (const [id, L] of Object.entries(st.layouts)) if (exists(id) && valid(L)) layouts[id] = normalise(L);
     return { active: typeof st.active === 'string' && exists(st.active) ? st.active : PRESETS[0].id, layouts };
   }
   const legacy = load<Layout>(LEGACY_LAYOUT);
-  if (valid(legacy)) layouts[PRESETS[0].id] = legacy;
+  if (valid(legacy)) layouts[PRESETS[0].id] = normalise(legacy);
   return { active: PRESETS[0].id, layouts };
 }
 
-function valid(L: Layout | null | undefined): L is Layout {
-  return !!L && typeof L === 'object' && L.v === 1 && ZONES.every((z) => Array.isArray(L[z]?.stacks)) && Array.isArray(L.floating);
+/** A stored layout of this version or an earlier one (1: free docking, which `normalise` brings into the fixed regions). */
+function valid(L: Layout | { v: number } | null | undefined): L is Layout {
+  if (!L || typeof L !== 'object' || (L.v !== 1 && L.v !== 2)) return false;
+  const M = L as Layout;
+  return ZONES.every((z) => Array.isArray(M[z]?.stacks)) && Array.isArray(M.floating);
 }
 
 export class Workspace {
@@ -368,29 +480,39 @@ export class Workspace {
     return p.stack.active === id && !this.value[p.zone].collapsed;
   }
 
-  /** Open (where it was last, or in its default column) and bring to the front. */
-  open(id: string, where?: DropTarget) {
+  /**
+   * Where Reset location puts a panel: its place in the layout the active
+   * workspace starts from (Properties below Scene, say), or the top slot of
+   * its default region for a panel that layout does not name.
+   */
+  defaultPlace(id: string): { zone: Zone; slot: Slot } {
+    const p = locate(this.base(this.current.value), id);
+    return p?.kind === 'dock' ? { zone: p.zone, slot: slotAt(p.index) } : { zone: defaultZone(id), slot: 'top' };
+  }
+
+  /** Open (where it was last, or in its default place) and bring to the front; `where` opens it as a tab of a group. */
+  open(id: string, where?: TabTarget) {
     const L = this.value;
-    const p = locate(L, id);
-    if (p) {
+    if (locate(L, id)) {
       this.activate(id);
       return;
     }
     const mem = this.memory[id];
-    const t = where ?? mem?.target ?? { kind: 'zone', zone: defaultZone(id) };
-    // the remembered group may be gone: its column then, or the default one
-    const ok = t.kind !== 'tab' || ZONES.some((z) => L[z].stacks.some((s) => s.id === t.stack)) || L.floating.some((f) => f.id === t.stack);
-    const target: DropTarget = ok ? t : { kind: 'zone', zone: mem?.zone ?? defaultZone(id) };
-    // a new panel for a column that has groups joins its first group as a tab
-    const Z = target.kind === 'zone' ? L[target.zone] : null;
-    this.layout.set(Z && Z.stacks.length ? attach(L, id, { kind: 'tab', stack: Z.stacks[0].id, index: Z.stacks[0].panels.length }) : attach(L, id, target));
+    if (where) this.layout.set(attachTab(L, id, where));
+    else if (mem?.float) this.layout.set(floatAt(L, id, mem.float, mem.home));
+    else {
+      const d = this.defaultPlace(id);
+      this.layout.set(dockAt(L, id, mem?.home ?? defaultOrigin(id, d.zone, d.slot)));
+    }
     this.activate(id);
   }
 
   close(id: string) {
-    const place = placeOf(this.value, id);
-    if (place) this.memory[id] = place;
-    this.layout.set(detach(this.value, id));
+    const L = this.value;
+    const p = locate(L, id);
+    if (!p) return;
+    this.memory[id] = p.kind === 'dock' ? { home: originOf(L, id)! } : { home: p.win.home?.[id] ?? defaultOrigin(id), float: rectOf(p.win) };
+    this.layout.set(detach(L, id));
   }
 
   toggle(id: string) {
@@ -418,13 +540,16 @@ export class Workspace {
     this.layout.set(M);
   }
 
-  move(id: string, t: DropTarget) {
+  /**
+   * Put a panel at a position among a group's tabs: a drag reorders within
+   * its group; "+ Add view" brings a panel into another group.
+   */
+  move(id: string, t: TabTarget) {
     const before = this.value;
     const p = locate(before, id);
-    // dropping the only tab of a group back onto that group changes nothing
-    if (p && t.kind === 'tab' && ((p.kind === 'dock' && p.stack.id === t.stack) || (p.kind === 'float' && p.win.id === t.stack))) {
+    if (p && (p.kind === 'dock' ? p.stack.id : p.win.id) === t.stack) {
       const M = clone(before);
-      const g = p.kind === 'dock' ? locate(M, id)! : locate(M, id)!;
+      const g = locate(M, id)!;
       const list = g.kind === 'dock' ? g.stack.panels : g.win.panels;
       const from = list.indexOf(id);
       list.splice(from, 1);
@@ -434,17 +559,59 @@ export class Workspace {
       this.layout.set(M);
       return;
     }
-    if (p && t.kind === 'split' && p.kind === 'dock' && p.stack.id === t.stack && p.stack.panels.length === 1) return;
-    this.layout.set(attach(detach(before, id), id, t));
+    this.layout.set(attachTab(detach(before, id), id, t));
   }
 
-  /** Float a panel's whole group at a position (panel menu "Float"). */
-  float(id: string, rect: { x: number; y: number; w: number; h: number }) {
-    this.move(id, { kind: 'float', ...rect });
+  /**
+   * Move a panel to a region's slot ("Move to left sidebar", "Move to
+   * bottom of left sidebar"): as the last tab of that slot's group, which is
+   * made when the slot is empty. The bottom panel has only its top slot.
+   */
+  dock(id: string, zone: Zone, slot: Slot = 'top') {
+    const L = this.value;
+    const at = locate(L, id);
+    const s = MAX_STACKS[zone] > 1 ? slot : 'top';
+    if (at?.kind === 'dock' && at.zone === zone && slotAt(at.index) === s) {
+      this.activate(id);
+      return;
+    }
+    const rest = detach(L, id);
+    const c = rest[zone];
+    // the group now in that slot, if there is one (a bottom slot exists only below a top one)
+    const g = s === 'top' ? c.stacks[0] : c.stacks[1];
+    this.layout.set(dockAt(rest, id, g ? { zone, slot: s, stack: g.id, index: g.panels.length } : defaultOrigin(id, zone, s)));
   }
 
-  dock(id: string, zone: Zone) {
-    this.move(id, { kind: 'zone', zone });
+  /**
+   * Undock a panel into a floating window of its own (remembering where it
+   * was, for Dock back) at `rect`, or where it last floated. A panel that
+   * already floats stays as it is.
+   */
+  undock(id: string, rect: FloatRect) {
+    const L = this.value;
+    const at = locate(L, id);
+    if (at?.kind === 'float') return;
+    const home = originOf(L, id) ?? this.memory[id]?.home ?? defaultOrigin(id);
+    this.layout.set(floatAt(at ? detach(L, id) : L, id, L.rects?.[id] ?? rect, home));
+  }
+
+  /** Return a floating panel to the slot and tab it came from (its window closes when it was the last tab). */
+  dockBack(id: string) {
+    const L = this.value;
+    const at = locate(L, id);
+    if (at?.kind !== 'float') return;
+    const home = at.win.home?.[id] ?? defaultOrigin(id);
+    const M = detach(L, id);
+    M.rects = { ...M.rects, [id]: rectOf(at.win) };
+    this.layout.set(dockAt(M, id, home));
+  }
+
+  /** Dock back every panel of a floating window (its ↙ button, a double click on its header). */
+  dockBackWindow(win: string) {
+    const f = this.value.floating.find((x) => x.id === win);
+    if (!f) return;
+    for (const id of f.panels) this.dockBack(id);
+    this.activate(f.active);
   }
 
   setSize(zone: Zone, size: number) {
@@ -460,7 +627,7 @@ export class Workspace {
     this.layout.set(M);
   }
 
-  /** Move the split between two neighbouring groups of a column. */
+  /** Move a sidebar's divider between its top and bottom slots. */
   resizeSplit(zone: Zone, i: number, weights: [number, number]) {
     const M = clone(this.value);
     const c = M[zone];
@@ -470,11 +637,14 @@ export class Workspace {
     this.layout.set(M);
   }
 
-  setFloat(win: string, r: Partial<Pick<FloatWin, 'x' | 'y' | 'w' | 'h'>>) {
+  /** Move or resize a floating window; its panels remember the rectangle for the next time they are undocked. */
+  setFloat(win: string, r: Partial<FloatRect>) {
     const M = clone(this.value);
     const f = M.floating.find((x) => x.id === win);
     if (!f) return;
     Object.assign(f, r);
+    M.rects = { ...M.rects };
+    for (const p of f.panels) M.rects[p] = rectOf(f);
     this.layout.set(M);
   }
 
@@ -488,9 +658,66 @@ export class Workspace {
     this.layout.set(M);
   }
 
+  // ------------------------------------------------------------------ undo
+
+  private undoStack: UndoEntry[] = [];
+  private depth = 0;
+  private changeSeq = 0;
+  /** the last change made with a label (the app shows it as a toast with Undo) */
+  readonly changes = new Signal<LayoutChange | null>(null);
+
+  /**
+   * Make a layout change that Undo can take back (Ctrl Z, or the toast's
+   * Undo). With a label it is announced on `changes`; without one (a drag,
+   * a fold) it is only recorded. A change made inside another counts as part
+   * of it. Returns whether the layout changed.
+   */
+  change(label: string | null, fn: () => void): boolean {
+    if (this.depth) {
+      fn();
+      return false;
+    }
+    const before = this.value;
+    const ws = this.current.value;
+    this.depth++;
+    try {
+      fn();
+    } finally {
+      this.depth--;
+    }
+    if (this.value === before || this.current.value !== ws || JSON.stringify(this.value) === JSON.stringify(before)) return false;
+    const n = ++this.changeSeq;
+    this.undoStack.push({ ws, before, n });
+    if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
+    if (label) this.changes.set({ label, n });
+    return true;
+  }
+
+  /** Is there a change in the active workspace to undo? */
+  canUndo() {
+    return this.undoStack.some((e) => e.ws === this.current.value);
+  }
+
+  /**
+   * Take back the last layout change made in the active workspace, or (given
+   * a change's `n`, from its toast) that change and every one made after it.
+   * Returns false when there is nothing to undo.
+   */
+  undo(n?: number): boolean {
+    const ws = this.current.value;
+    const mine = this.undoStack.filter((e) => e.ws === ws);
+    const i = n === undefined ? mine.length - 1 : mine.findIndex((e) => e.n === n);
+    if (i < 0) return false;
+    const target = mine[i];
+    const dropped = new Set(mine.slice(i));
+    this.undoStack = this.undoStack.filter((e) => !dropped.has(e));
+    this.layout.set(target.before);
+    return true;
+  }
+
   /** Replace the layout, keeping open tool windows it does not mention and dropping panels it names that do not exist. */
   apply(next: Layout, available: (id: string) => boolean) {
-    const M = clone(next);
+    const M = normalise(next);
     for (const z of ZONES) {
       for (const s of M[z].stacks) {
         s.panels = s.panels.filter(available);
@@ -502,7 +729,7 @@ export class Workspace {
     const inNext = new Set(openPanels(M));
     let out = M;
     // a feature's window is open because its feature is on, whichever workspace shows it
-    for (const id of openPanels(this.value)) if (!inNext.has(id) && available(id) && !DOCK_PANELS.has(id)) out = attach(out, id, { kind: 'zone', zone: defaultZone(id) });
+    for (const id of openPanels(this.value)) if (!inNext.has(id) && available(id) && !DOCK_PANELS.has(id)) out = dockAt(out, id, defaultOrigin(id));
     this.layout.set(out);
   }
 

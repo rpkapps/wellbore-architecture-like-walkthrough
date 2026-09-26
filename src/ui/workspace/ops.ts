@@ -1,5 +1,5 @@
 import { Signal } from '../signal';
-import { defaultZone, locate, type DropTarget, type Workspace, type Zone } from './layout';
+import { locate, slotAt, type FloatRect, type Slot, type TabTarget, type Workspace, type Zone } from './layout';
 import type { PanelDef } from './panels';
 
 /**
@@ -7,16 +7,32 @@ import type { PanelDef } from './panels';
  * feature's tool window opens and closes through its feature (the workspace
  * follows the window, see `useToolSync`), so these never put a closed tool
  * window into the layout by hand.
+ *
+ * The ones made from a menu or button (move, undock, dock back, reset
+ * location, close) go through `Workspace.change`, so the app announces them
+ * with a toast that offers Undo, and Ctrl Z takes them back.
  */
 
-/** Enough of a panel to open or close it (a `PanelDef`, or one built from a tool window). */
-export type PanelRef = Pick<PanelDef, 'id' | 'tool' | 'open' | 'onReveal'>;
+/** Enough of a panel to open or close it (a `PanelDef`, or one built from a tool window); the title names it in the toast. */
+export type PanelRef = Pick<PanelDef, 'id' | 'tool' | 'open' | 'onReveal'> & { title?: string };
 
-/** Where the panel's context menu can put it: a column, floating, or back where it opens by default. */
-export type Placement = Zone | 'float' | 'default';
+/**
+ * Where a panel's menus (and the palette) can put it: a sidebar's top slot
+ * (`left`, `right`), a sidebar's bottom slot, the bottom panel, a floating
+ * window (Undock), back where it was docked (Dock back), or its default place.
+ */
+export type Placement = 'left' | 'left-bottom' | 'right' | 'right-bottom' | 'bottom' | 'float' | 'dock' | 'default';
 
-/** Where a panel floats when it is sent to float from a menu. */
-export const FLOAT_RECT = { x: 120, y: 80, w: 380, h: 340 };
+export const PLACEMENTS: Placement[] = ['dock', 'left', 'left-bottom', 'right', 'right-bottom', 'bottom', 'float', 'default'];
+
+/** Where a panel floats when nothing better is known (no remembered window, no docked size to keep). */
+export const FLOAT_RECT: FloatRect = { x: 120, y: 80, w: 380, h: 340 };
+
+/**
+ * Set by the frame: the rectangle a panel's window takes when it is first
+ * undocked: its docked group's size, nudged in from the edge, inside the stage.
+ */
+export const undockRect: { of: ((id: string) => FloatRect | null) | null } = { of: null };
 
 /**
  * The group maximised to fill the stage (`Ctrl Space`, or a double click on a
@@ -48,46 +64,119 @@ export function reveal(ws: Workspace, p: PanelRef) {
   ws.activate(p.id);
 }
 
-/** Close a panel (a feature's window turns its feature off). */
-export function closePanel(ws: Workspace, p: PanelRef) {
-  if (p.tool) p.tool.close();
-  else ws.close(p.id);
+const name = (p: PanelRef) => p.title ?? p.id;
+
+/**
+ * Close a panel (a feature's window turns its feature off). From a tab or a
+ * menu the toast offers Undo; the rail's toggle (`announce` false) closes
+ * quietly, though Ctrl Z still takes it back.
+ */
+export function closePanel(ws: Workspace, p: PanelRef, announce = true) {
+  ws.change(announce ? `${name(p)} closed` : null, () => {
+    if (p.tool) p.tool.close();
+    else ws.close(p.id);
+  });
 }
 
 /** Open a panel as a tab of one group ("+ Add view"). */
 export function openIn(ws: Workspace, p: PanelRef, group: string) {
   const L = ws.value;
   const g = [...L.left.stacks, ...L.right.stacks, ...L.bottom.stacks, ...L.floating].find((s) => s.id === group);
-  const t: DropTarget = { kind: 'tab', stack: group, index: g ? g.panels.length : 999 };
+  const t: TabTarget = { stack: group, index: g ? g.panels.length : 999 };
   if (p.tool) {
     ensureOpen(ws, p);
     ws.move(p.id, t);
   } else ws.open(p.id, t);
 }
 
-/** Dock, float or reset a panel (opening it first when it is closed). */
-export function place(ws: Workspace, p: PanelRef, where: Placement) {
-  ensureOpen(ws, p);
-  const at = locate(ws.value, p.id);
-  if (where === 'float') {
-    if (at?.kind !== 'float') ws.float(p.id, FLOAT_RECT);
-    return;
-  }
-  const zone = where === 'default' ? defaultZone(p.id) : where;
-  if (at?.kind === 'dock' && at.zone === zone) {
-    ws.activate(p.id);
-    return;
-  }
-  // back to its default column: as a tab of that column's first group, as a panel opens there
-  const first = ws.value[zone].stacks[0];
-  if (where === 'default' && first) ws.move(p.id, { kind: 'tab', stack: first.id, index: first.panels.length });
-  else ws.dock(p.id, zone);
+const ZONE_NAME: Record<Zone, string> = { left: 'left sidebar', right: 'right sidebar', bottom: 'bottom panel' };
+
+type DockPlacement = Exclude<Placement, 'float' | 'dock' | 'default'>;
+
+/** A placement as a region and slot. */
+function target(where: DockPlacement): { zone: Zone; slot: Slot } {
+  return where === 'left-bottom' ? { zone: 'left', slot: 'bottom' } : where === 'right-bottom' ? { zone: 'right', slot: 'bottom' } : { zone: where, slot: 'top' };
 }
 
-/** Is the panel docked in its default column (so Reset location has nothing to do)? */
-export function atDefault(ws: Workspace, id: string) {
+/** A panel's region and slot, when it is docked. */
+function slotOf(ws: Workspace, id: string): { zone: Zone; slot: Slot } | null {
   const at = locate(ws.value, id);
-  return at?.kind === 'dock' && at.zone === defaultZone(id);
+  return at?.kind === 'dock' ? { zone: at.zone, slot: slotAt(at.index) } : null;
+}
+
+/**
+ * A placement's menu label for a panel where it is now; within its own
+ * sidebar the slots read as top and bottom ("Move to bottom of left sidebar").
+ */
+export function placementLabel(ws: Workspace, id: string, where: Placement): string {
+  if (where === 'float') return 'Undock';
+  if (where === 'dock') return 'Dock back';
+  if (where === 'default') return 'Reset location';
+  const t = target(where);
+  if (t.slot === 'bottom') return `Move to bottom of ${ZONE_NAME[t.zone]}`;
+  if (t.zone !== 'bottom' && slotOf(ws, id)?.zone === t.zone) return `Move to top of ${ZONE_NAME[t.zone]}`;
+  return `Move to ${ZONE_NAME[t.zone]}`;
+}
+
+/**
+ * The placements that would move the panel from where it is now. The menus
+ * (`menu`) keep the list short: the other slot of its own sidebar and the
+ * other regions; the palette lists every slot. A closed panel can go anywhere
+ * (it opens first). Reset location is left out: the menus show it apart.
+ */
+export function placements(ws: Workspace, id: string, menu = false): Placement[] {
+  const at = locate(ws.value, id);
+  const here = slotOf(ws, id);
+  const out: Placement[] = [];
+  if (at?.kind === 'float') out.push('dock');
+  for (const p of ['left', 'left-bottom', 'right', 'right-bottom', 'bottom'] as const) {
+    const t = target(p);
+    if (here && here.zone === t.zone && here.slot === t.slot) continue;
+    // menus offer a bottom slot only within the panel's own sidebar
+    if (menu && t.slot === 'bottom' && here?.zone !== t.zone) continue;
+    out.push(p);
+  }
+  if (at?.kind !== 'float') out.push('float');
+  return out;
+}
+
+/** What a placement did, for its toast. */
+function placedLabel(p: PanelRef, where: Placement): string {
+  if (where === 'float') return `${name(p)} undocked`;
+  if (where === 'dock') return `${name(p)} docked back`;
+  if (where === 'default') return `${name(p)} back in its default place`;
+  const t = target(where);
+  return `${name(p)} moved to the ${t.slot === 'bottom' ? `bottom of the ${ZONE_NAME[t.zone]}` : ZONE_NAME[t.zone]}`;
+}
+
+/** Move, undock, dock back or reset a panel (opening it first when it is closed), announced with Undo. */
+export function place(ws: Workspace, p: PanelRef, where: Placement) {
+  ws.change(placedLabel(p, where), () => {
+    ensureOpen(ws, p);
+    const at = locate(ws.value, p.id);
+    if (where === 'float') {
+      if (at?.kind !== 'float') ws.undock(p.id, undockRect.of?.(p.id) ?? FLOAT_RECT);
+      return;
+    }
+    if (where === 'dock') {
+      if (at?.kind === 'float') ws.dockBack(p.id);
+      return;
+    }
+    const t = where === 'default' ? ws.defaultPlace(p.id) : target(where);
+    ws.dock(p.id, t.zone, t.slot);
+  });
+}
+
+/** Dock back a whole floating window (its ↙ button, a double click on its header), announced with Undo. */
+export function dockBackWindow(ws: Workspace, win: string, title: string) {
+  ws.change(`${title} docked back`, () => ws.dockBackWindow(win));
+}
+
+/** Is the panel docked in its default place (so Reset location has nothing to do)? */
+export function atDefault(ws: Workspace, id: string) {
+  const here = slotOf(ws, id);
+  const d = ws.defaultPlace(id);
+  return !!here && here.zone === d.zone && here.slot === d.slot;
 }
 
 /** The group a panel is in, if it is open. */

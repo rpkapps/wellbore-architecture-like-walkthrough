@@ -8,6 +8,8 @@ import {
   DropdownMenuTrigger,
 } from '@tecton/react/components/dropdown-menu';
 import {
+  ArrowDownLeftIcon,
+  ArrowUpRightIcon,
   ChevronsLeftRightIcon,
   EllipsisIcon,
   Maximize2Icon,
@@ -23,8 +25,8 @@ import { Activity, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import { IconButton } from '../icon-button';
 import { animate, useAnimatedSignal, withTransition } from '../transition';
 import { SURFACE } from '../shell/overlay';
-import { SIZE_LIMITS, ZONES, type Column, type DropTarget, type FloatWin, type Layout, type Stack, type Workspace, type Zone } from './layout';
-import { atDefault, closePanel, isOpen, maximised, openIn, place, toggleMaximised } from './ops';
+import { SIZE_LIMITS, ZONES, type Column, type FloatWin, type Layout, type Stack, type TabTarget, type Workspace, type Zone } from './layout';
+import { atDefault, closePanel, dockBackWindow, groupOf, isOpen, maximised, openIn, place, placementLabel, placements, toggleMaximised, undockRect, type Placement } from './ops';
 import { RAIL_ENTRIES, viewGroups, type PanelDef } from './panels';
 import { Rail } from './Rail';
 
@@ -80,22 +82,25 @@ export interface RailSlots {
   footer?: ReactNode;
 }
 
-/** stage-relative rectangles of the drop targets, filled in by the groups as they render */
+/** each group as it renders: its box and tab strip (a tab drag reorders against the strip; an undock keeps the box size) */
 interface Registered {
   el: HTMLElement;
   strip: HTMLElement | null;
   zone: Zone | null;
 }
 
-type Indicator = (Rect & { line?: boolean }) | null;
+/** the insertion line of a tab being reordered */
+type Indicator = Rect | null;
 
 /**
- * The workspace: the 3D view fills the stage and never changes size; the dock
- * columns, their groups of tabbed panels and the floating windows lie over it.
- * Tabs drag between groups, into a new group above or below another, to an
- * empty edge of the window, or out onto the view to float. Column edges and
- * the splits between groups drag to resize; a column folds to a strip of
- * icons that open its panels as flyouts.
+ * The workspace: the 3D view fills the stage and never changes size; the
+ * three regions (left and right sidebars, bottom panel), their groups of
+ * tabbed panels and the floating windows lie over it. Docking is kept simple
+ * on purpose: a tab drags only to reorder within its group (a drop anywhere
+ * else snaps back); panels move between regions and slots from their menus,
+ * and float only when undocked with ↗ (↙ or a double click on the window's
+ * header docks them back). Region edges and a sidebar's divider drag to
+ * resize; a region folds to a strip of icons that open its panels as flyouts.
  */
 export function WorkspaceFrame({
   ws,
@@ -182,9 +187,27 @@ export function WorkspaceFrame({
     return () => window.removeEventListener('keydown', key);
   }, [ws]);
 
-  const dnd = useMemo(() => createDnd(ws, stage, registry, ghost, () => geoRef.current), [ws]);
+  const dnd = useMemo(() => createDnd(ws, stage, registry, ghost), [ws]);
   const geoRef = useRef(geo);
   geoRef.current = geo;
+
+  // a panel undocked for the first time keeps its docked size, nudged in from its edge
+  useEffect(() => {
+    undockRect.of = (id) => {
+      const g = groupOf(ws, id);
+      const reg = g ? registry.current.get(g) : null;
+      const st = stage.current;
+      if (!reg || !st || !reg.zone) return null;
+      const a = reg.el.getBoundingClientRect();
+      const s = st.getBoundingClientRect();
+      const nudge = 28;
+      const r = { x: a.left - s.left + (reg.zone === 'right' ? -nudge : nudge), y: a.top - s.top + (reg.zone === 'bottom' ? -nudge : nudge), w: a.width, h: a.height };
+      return clampRect(r, geoRef.current.full);
+    };
+    return () => {
+      undockRect.of = null;
+    };
+  }, [ws]);
 
   // a column edge being dragged: the columns, their edges and the free area
   // follow the pointer by writing styles directly (no React render per move);
@@ -259,8 +282,6 @@ export function WorkspaceFrame({
                   panels={panels}
                   dnd={dnd}
                   registry={registry.current}
-                  bounds={size}
-                  minX={geo.x0 + G}
                   full={geo.full}
                   maximised={max}
                   others={L.floating.filter((o) => o !== f)}
@@ -285,6 +306,16 @@ export function WorkspaceFrame({
 }
 
 const px = (r: Rect) => ({ left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+
+/** smallest floating window */
+const MIN_FLOAT = { w: 220, h: 140 };
+
+/** A floating window kept inside an area (the stage less the rail and the timeline), no smaller than MIN_FLOAT. */
+function clampRect(q: Rect, area: Rect): Rect {
+  const w = Math.round(Math.max(Math.min(MIN_FLOAT.w, area.w), Math.min(area.w, q.w)));
+  const h = Math.round(Math.max(Math.min(MIN_FLOAT.h, area.h), Math.min(area.h, q.h)));
+  return { x: Math.round(Math.max(area.x, Math.min(area.x + area.w - w, q.x))), y: Math.round(Math.max(area.y, Math.min(area.y + area.h - h, q.y))), w, h };
+}
 
 /** Write only the inline styles that change (a drag writes every frame). */
 function setStyle(el: HTMLElement, s: Record<string, string>) {
@@ -445,7 +476,10 @@ function DockColumn({
         ka.style.flex = `${weights[0]} 1 0`;
         kb.style.flex = `${weights[1]} 1 0`;
       },
-      () => weights && ws.resizeSplit(zone, i, weights),
+      () => {
+        const w = weights;
+        if (w) ws.change(null, () => ws.resizeSplit(zone, i, w));
+      },
     );
   };
 
@@ -477,7 +511,7 @@ function DockColumn({
           </div>
         ))}
       </div>
-      {!maximised && <EdgeHandle zone={zone} rect={rect} size={col.size} max={max} onLive={onLive} onCommit={(v) => ws.setSize(zone, v)} />}
+      {!maximised && <EdgeHandle zone={zone} rect={rect} size={col.size} max={max} onLive={onLive} onCommit={(v) => ws.change(null, () => ws.setSize(zone, v))} />}
     </ViewTransition>
   );
 }
@@ -637,6 +671,7 @@ function StackView({
   active: activeOverride,
   onActivate,
   onHeaderDown,
+  onDockBack,
   maxed = false,
 }: {
   ws: Workspace;
@@ -650,6 +685,8 @@ function StackView({
   onActivate?: (id: string) => void;
   /** a floating window moves by its header */
   onHeaderDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  /** a floating window's ↙ (and a double click on its header): back to where its panels were docked */
+  onDockBack?: () => void;
   /** this group is maximised */
   maxed?: boolean;
 }) {
@@ -670,10 +707,11 @@ function StackView({
   const activate = onActivate ?? ((id: string) => ws.activate(id));
   const close = (id: string) => {
     const d = panels.get(id);
-    if (d) closePanel(ws, d);
-    else ws.close(id);
+    withTransition(() => (d ? closePanel(ws, d) : ws.close(id)));
   };
   const toggleMax = () => withTransition(() => toggleMaximised(group.id));
+  // a floating window of one panel moves by its tab too (there is nothing to reorder)
+  const tabMovesWindow = !!onHeaderDown && group.panels.length === 1;
   return (
     <section
       ref={el}
@@ -687,7 +725,12 @@ function StackView({
         }
       }}
     >
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border-subtle pr-1 pl-1" onPointerDown={onHeaderDown}>
+      <div
+        className="flex h-8 shrink-0 items-center gap-1 border-b border-border-subtle pr-1 pl-1"
+        onPointerDown={onHeaderDown}
+        // a floating window's header, like a title bar: a double click docks it back
+        onDoubleClick={onDockBack && !maxed ? (e) => !(e.target as HTMLElement).closest('button') && onDockBack() : undefined}
+      >
         <div ref={strip} role="tablist" aria-label="Panels" className="group/tabs flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
           {group.panels.map((id) => {
             const d = panels.get(id);
@@ -702,10 +745,11 @@ function StackView({
                 aria-selected={on}
                 title={d.title}
                 onPointerDown={(e) => {
+                  if (tabMovesWindow) return;
                   e.stopPropagation();
-                  dnd.start(e, id, d.title, () => activate(id));
+                  dnd.start(e, group.id, id, d.title, () => activate(id));
                 }}
-                onDoubleClick={toggleMax}
+                onDoubleClick={onDockBack && !maxed ? undefined : toggleMax}
                 onAuxClick={(e) => {
                   if (e.button === 1) close(id);
                 }}
@@ -749,6 +793,17 @@ function StackView({
             </IconButton>
           )}
           <AddView ws={ws} group={group.id} panels={panels} />
+          {onDockBack ? (
+            <IconButton label="Dock back" size="icon-xs" onPress={onDockBack}>
+              <ArrowDownLeftIcon />
+            </IconButton>
+          ) : (
+            def && (
+              <IconButton label={`Undock ${def.title}`} size="icon-xs" onPress={() => withTransition(() => place(ws, def, 'float'))}>
+                <ArrowUpRightIcon />
+              </IconButton>
+            )
+          )}
           {def && <PanelMenu ws={ws} def={def} zone={zone} maxed={maxed} onMaximise={toggleMax} />}
         </div>
       </div>
@@ -856,14 +911,18 @@ function AddViewItems({ ws, panels }: { ws: Workspace; panels: Map<string, Panel
   );
 }
 
-/** The group header's ⋯ menu for the panel showing in it: where it goes, maximise, fold and close. */
+/**
+ * The group header's ⋯ menu for the panel showing in it: where it goes (the
+ * other slot of its sidebar, the other regions, undock or dock back, reset),
+ * maximise, fold and close. Read as the menu opens.
+ */
 function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: PanelDef; zone: Zone | null; maxed: boolean; onMaximise: () => void }) {
   const act = (k: string) => {
     if (k === 'max') return onMaximise();
     withTransition(() => {
-      if (k === 'float' || k === 'left' || k === 'right' || k === 'bottom' || k === 'default') place(ws, def, k);
-      else if (k === 'fold' && zone) ws.setCollapsed(zone, true);
+      if (k === 'fold' && zone) ws.change(null, () => ws.setCollapsed(zone, true));
       else if (k === 'close') closePanel(ws, def);
+      else place(ws, def, k as Placement);
     });
   };
   const FoldIcon = zone === 'right' ? PanelRightCloseIcon : zone === 'bottom' ? PanelBottomCloseIcon : PanelLeftCloseIcon;
@@ -873,16 +932,7 @@ function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: P
         <EllipsisIcon />
       </IconButton>
       <DropdownMenu placement="bottom end" className="w-max min-w-48" onAction={(k) => act(String(k))}>
-        <DropdownMenuGroup>
-          {zone !== 'left' && <DropdownMenuItem id="left">Move to left</DropdownMenuItem>}
-          {zone !== 'right' && <DropdownMenuItem id="right">Move to right</DropdownMenuItem>}
-          {zone !== 'bottom' && <DropdownMenuItem id="bottom">Move to bottom</DropdownMenuItem>}
-          {zone !== null && <DropdownMenuItem id="float">Undock</DropdownMenuItem>}
-          <DropdownMenuItem id="default" isDisabled={atDefault(ws, def.id)}>
-            <RotateCcwIcon />
-            Reset location
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
+        <MoveItems ws={ws} id={def.id} />
         <DropdownMenuSeparator />
         <DropdownMenuItem id="max">
           {maxed ? <Minimize2Icon /> : <Maximize2Icon />}
@@ -892,7 +942,7 @@ function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: P
         {zone && !maxed && (
           <DropdownMenuItem id="fold">
             <FoldIcon />
-            Fold column to icons
+            Fold to icons
           </DropdownMenuItem>
         )}
         <DropdownMenuItem id="close">
@@ -904,8 +954,31 @@ function PanelMenu({ ws, def, zone, maxed, onMaximise }: { ws: Workspace; def: P
   );
 }
 
+/** The ⋯ menu's placements for a panel where it is now (the rail's right-click menu lists the same). */
+function MoveItems({ ws, id }: { ws: Workspace; id: string }) {
+  return (
+    <DropdownMenuGroup>
+      {placements(ws, id, true).map((p) => (
+        <DropdownMenuItem key={p} id={p} textValue={placementLabel(ws, id, p)}>
+          {p === 'float' ? <ArrowUpRightIcon /> : p === 'dock' ? <ArrowDownLeftIcon /> : null}
+          {placementLabel(ws, id, p)}
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuItem id="default" isDisabled={atDefault(ws, id)}>
+        <RotateCcwIcon />
+        Reset location
+      </DropdownMenuItem>
+    </DropdownMenuGroup>
+  );
+}
+
 // ---------------------------------------------------------------- floating windows
 
+/**
+ * An undocked panel's window. Its header moves it and its edges and corners
+ * resize it, always inside the stage (clear of the rail and the timeline);
+ * moving it never docks it. ↙ or a double click on the header docks it back.
+ */
 function FloatWindow({
   ws,
   win,
@@ -913,8 +986,6 @@ function FloatWindow({
   panels,
   dnd,
   registry,
-  bounds,
-  minX,
   full,
   maximised,
   others,
@@ -926,10 +997,7 @@ function FloatWindow({
   panels: Map<string, PanelDef>;
   dnd: Dnd;
   registry: Map<string, Registered>;
-  bounds: { W: number; H: number };
-  /** windows stay clear of the rail */
-  minX: number;
-  /** the rectangle a maximised group fills */
+  /** the area windows stay in (the stage less the rail and the timeline), which a maximised group fills */
   full: Rect;
   maximised: string | null;
   others: FloatWin[];
@@ -939,15 +1007,11 @@ function FloatWindow({
   // so waiting for the next one would only add a frame of lag); the layout is
   // written on release
   const el = useRef<HTMLDivElement>(null);
-  const rect = { x: win.x, y: win.y, w: win.w, h: win.h };
-  const clampR = (q: Rect): Rect => {
-    const w = Math.max(220, Math.min(bounds.W - G - minX, q.w));
-    const h = Math.max(140, Math.min(bounds.H - 2 * G, q.h));
-    return { x: Math.max(minX, Math.min(bounds.W - w - G, q.x)), y: Math.max(G, Math.min(bounds.H - h - G, q.y)), w, h };
-  };
+  // (kept inside the area as the window resizes; the stored rectangle is left alone until the window is moved)
+  const rect = clampRect(win, full);
   const snap = (q: Rect): Rect => {
-    const xs = [minX, bounds.W - G, ...others.flatMap((o) => [o.x, o.x + o.w, o.x - G, o.x + o.w + G])];
-    const ys = [G, bounds.H - G, ...others.flatMap((o) => [o.y, o.y + o.h, o.y - G, o.y + o.h + G])];
+    const xs = [full.x, full.x + full.w, ...others.flatMap((o) => [o.x, o.x + o.w, o.x - G, o.x + o.w + G])];
+    const ys = [full.y, full.y + full.h, ...others.flatMap((o) => [o.y, o.y + o.h, o.y - G, o.y + o.h + G])];
     const near = (v: number, list: number[]) => list.find((t) => Math.abs(t - v) < 8);
     let { x, y } = q;
     const sx = near(x, xs) ?? (near(x + q.w, xs) !== undefined ? near(x + q.w, xs)! - q.w : undefined);
@@ -970,7 +1034,7 @@ function FloatWindow({
     follow(
       e,
       (ev) => {
-        last = clampR(f(ev.clientX - x0, ev.clientY - y0, r0));
+        last = clampRect(f(ev.clientX - x0, ev.clientY - y0, r0), full);
         if (moveOnly) node.style.transform = `translate(${last.x - r0.x}px, ${last.y - r0.y}px)`;
         else setStyle(node, px(last));
       },
@@ -978,7 +1042,7 @@ function FloatWindow({
         node.style.transform = '';
         node.style.willChange = '';
         setStyle(node, px(last));
-        if (last.x !== r0.x || last.y !== r0.y || last.w !== r0.w || last.h !== r0.h) ws.setFloat(win.id, last);
+        if (last.x !== win.x || last.y !== win.y || last.w !== win.w || last.h !== win.h) ws.change(null, () => ws.setFloat(win.id, last));
       },
     );
   };
@@ -995,6 +1059,7 @@ function FloatWindow({
   // maximised, the window fills the stage (its own rectangle is kept for the restore); another group maximised hides it
   const maxed = maximised === win.id;
   const at = maxed ? full : rect;
+  const title = panels.get(win.active)?.title ?? win.active;
   return (
     <ViewTransition default="none" enter="ws-enter" exit="ws-exit" update="ws-morph">
       <div
@@ -1015,6 +1080,7 @@ function FloatWindow({
           onHeaderDown={(e) => {
             if (e.button === 0 && !maxed) track(e, (dx, dy, q) => snap({ ...q, x: q.x + dx, y: q.y + dy }), true);
           }}
+          onDockBack={() => withTransition(() => dockBackWindow(ws, win.id, win.panels.length > 1 ? `${title} and ${win.panels.length - 1} more` : title))}
         />
         {!maxed &&
           edges.map(([k, cls, f]) => <div key={k} aria-hidden className={`absolute touch-none ${cls}`} onPointerDown={(e) => e.button === 0 && track(e, f)} />)}
@@ -1023,92 +1089,53 @@ function FloatWindow({
   );
 }
 
-// ---------------------------------------------------------------- drag and drop of tabs
+// ---------------------------------------------------------------- reordering tabs
 
 interface Dnd {
-  start: (e: ReactPointerEvent<HTMLElement>, panel: string, title: string, onClick: () => void) => void;
+  /** a tab's pointerdown: a click activates it, a drag reorders it within its group */
+  start: (e: ReactPointerEvent<HTMLElement>, group: string, panel: string, title: string, onClick: () => void) => void;
 }
 
-/** The drop targets as laid out when a tab drag begins (nothing moves until the drop), in client px. */
+/** The group's tab strip as laid out when the drag begins (nothing moves until the drop), in client px. */
 interface Snapshot {
   stage: DOMRect;
-  /** floating windows front to back, then the docked groups */
-  groups: { id: string; zone: Zone | null; r: DOMRect; strip: DOMRect | null; tabs: DOMRect[] }[];
+  strip: DOMRect;
+  tabs: DOMRect[];
 }
 
-function snapshot(ws: Workspace, stage: HTMLElement, registry: Map<string, Registered>): Snapshot {
-  const order = ws.value.floating.map((f) => f.id).reverse();
-  const rank = (id: string, r: Registered) => (r.zone === null ? order.indexOf(id) : 1000);
-  const groups = [...registry.entries()]
-    .sort((a, b) => rank(a[0], a[1]) - rank(b[0], b[1]))
-    .map(([id, reg]) => ({
-      id,
-      zone: reg.zone,
-      r: reg.el.getBoundingClientRect(),
-      strip: reg.strip?.getBoundingClientRect() ?? null,
-      tabs: [...(reg.strip?.querySelectorAll<HTMLElement>('[data-tab]') ?? [])].map((t) => t.getBoundingClientRect()),
-    }));
-  return { stage: stage.getBoundingClientRect(), groups };
-}
-
-function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, registry: { current: Map<string, Registered> }, ghost: { current: Ghost | null }, geo: () => Geometry): Dnd {
-  const hit = (snap: Snapshot, cx: number, cy: number): { target: DropTarget | null; indicator: Indicator } => {
-    const st = snap.stage;
-    const x = cx - st.left;
-    const y = cy - st.top;
-    const rel = (r: DOMRect): Rect => ({ x: r.left - st.left, y: r.top - st.top, w: r.width, h: r.height });
-    for (const { id, zone, r, strip: s, tabs } of snap.groups) {
-      if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) continue;
-      if (s && cy <= s.bottom + 2) {
-        let index = tabs.length;
-        let lx = tabs.length ? tabs[tabs.length - 1].right + 1 : s.left + 4;
-        for (let i = 0; i < tabs.length; i++) {
-          const t = tabs[i];
-          if (cx < t.left + t.width / 2) {
-            index = i;
-            lx = t.left - 1;
-            break;
-          }
-        }
-        return { target: { kind: 'tab', stack: id, index }, indicator: { x: lx - st.left - 1, y: s.top - st.top + 5, w: 2, h: s.height - 10, line: true } };
+/**
+ * Dragging a tab only reorders it within its own group: over the group's tab
+ * strip a line shows where it will go; let go anywhere else (or press Escape)
+ * and it snaps back. Moving a panel to another region is a menu command, so a
+ * missed drop can never rearrange the workspace.
+ */
+function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, registry: { current: Map<string, Registered> }, ghost: { current: Ghost | null }): Dnd {
+  /** how far above and below the strip still counts as over it (px) */
+  const SLACK = 24;
+  const hit = (snap: Snapshot, group: string, cx: number, cy: number): { target: TabTarget | null; indicator: Indicator } => {
+    const { stage: st, strip: s, tabs } = snap;
+    if (cx < s.left || cx > s.right || cy < s.top - SLACK || cy > s.bottom + SLACK) return { target: null, indicator: null };
+    let index = tabs.length;
+    let lx = tabs.length ? tabs[tabs.length - 1].right + 1 : s.left + 4;
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i];
+      if (cx < t.left + t.width / 2) {
+        index = i;
+        lx = t.left - 1;
+        break;
       }
-      const R = rel(r);
-      if (zone) {
-        const horiz = zone === 'bottom';
-        const f = horiz ? (cx - r.left) / r.width : (cy - r.top) / r.height;
-        if (f < 0.3) return { target: { kind: 'split', zone, stack: id, where: 'before' }, indicator: horiz ? { ...R, w: R.w / 2 } : { ...R, h: R.h / 2 } };
-        if (f > 0.7) return { target: { kind: 'split', zone, stack: id, where: 'after' }, indicator: horiz ? { ...R, x: R.x + R.w / 2, w: R.w / 2 } : { ...R, y: R.y + R.h / 2, h: R.h / 2 } };
-      }
-      return { target: { kind: 'tab', stack: id, index: 999 }, indicator: R };
     }
-    const g = geo();
-    const bottomLimit = g.cols.left ? g.cols.left.y + g.cols.left.h : g.H - G;
-    const edge = 56;
-    const L = ws.value;
-    // (over the rail counts as the left edge)
-    if (x < g.x0 + edge) return { target: { kind: 'zone', zone: 'left' }, indicator: { x: g.x0 + G, y: G, w: L.left.stacks.length ? 6 : L.left.size, h: bottomLimit - G } };
-    if (x > g.W - edge)
-      return { target: { kind: 'zone', zone: 'right' }, indicator: { x: g.W - G - (L.right.stacks.length ? 6 : L.right.size), y: G, w: L.right.stacks.length ? 6 : L.right.size, h: bottomLimit - G } };
-    if (y > g.H - g.free.bottom - edge && y < bottomLimit + G) {
-      const bx = g.free.left + G;
-      const bw = g.W - g.free.right - G - bx;
-      return { target: { kind: 'zone', zone: 'bottom' }, indicator: { x: bx, y: bottomLimit - (L.bottom.stacks.length ? 6 : L.bottom.size), w: bw, h: L.bottom.stacks.length ? 6 : L.bottom.size } };
-    }
-    const w = 380;
-    const h = 320;
-    const fx = Math.max(g.x0 + G, Math.min(g.W - w - G, x - 60));
-    const fy = Math.max(G, Math.min(g.H - h - G, y - 14));
-    return { target: { kind: 'float', x: fx, y: fy, w, h }, indicator: { x: fx, y: fy, w, h } };
+    return { target: { stack: group, index }, indicator: { x: lx - st.left - 1, y: s.top - st.top + 5, w: 2, h: s.height - 10 } };
   };
 
   return {
-    start(e, panel, title, onClick) {
+    start(e, group, panel, title, onClick) {
       if (e.button !== 0) return;
       const x0 = e.clientX;
       const y0 = e.clientY;
       // measured once, when the tab starts to move
       let snap: Snapshot | null = null;
-      let target: DropTarget | null = null;
+      let target: TabTarget | null = null;
       let done = false;
       const key = (ev: KeyboardEvent) => ev.key === 'Escape' && end(false);
       const end = (commit: boolean) => {
@@ -1120,12 +1147,10 @@ function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, reg
           if (commit) onClick();
           return;
         }
-        if (commit && target) {
-          const t = target;
-          withTransition(() => ws.move(panel, t));
-        }
+        const t = target;
+        if (commit && t) withTransition(() => ws.change(null, () => ws.move(panel, t)));
       };
-      // the ghost and the drop indicator are moved by writing their styles:
+      // the ghost and the indicator are moved by writing their styles:
       // no React render and no layout read per move
       follow(
         e,
@@ -1133,10 +1158,16 @@ function createDnd(ws: Workspace, stage: { current: HTMLDivElement | null }, reg
           if (done) return;
           if (!snap) {
             if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5 || !stage.current) return;
-            snap = snapshot(ws, stage.current, registry.current);
+            const reg = registry.current.get(group);
+            if (!reg?.strip) return;
+            snap = {
+              stage: stage.current.getBoundingClientRect(),
+              strip: reg.strip.getBoundingClientRect(),
+              tabs: [...reg.strip.querySelectorAll<HTMLElement>('[data-tab]')].map((t) => t.getBoundingClientRect()),
+            };
             ghost.current?.show(title);
           }
-          const h = hit(snap, ev.clientX, ev.clientY);
+          const h = hit(snap, group, ev.clientX, ev.clientY);
           target = h.target;
           ghost.current?.move(ev.clientX - snap.stage.left, ev.clientY - snap.stage.top, h.indicator);
         },
@@ -1153,11 +1184,10 @@ interface Ghost {
   hide: () => void;
 }
 
-/** The dragged tab's label and the drop indicator, driven imperatively by the drag (see `Ghost`). */
+/** The dragged tab's label and the insertion line, driven imperatively by the drag (see `Ghost`). */
 const DragLayer = memo(function DragLayer({ api }: { api: { current: Ghost | null } }) {
   const root = useRef<HTMLDivElement>(null);
   const line = useRef<HTMLDivElement>(null);
-  const box = useRef<HTMLDivElement>(null);
   const tag = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const place = (el: HTMLElement | null, r: Rect | null) => {
@@ -1166,7 +1196,6 @@ const DragLayer = memo(function DragLayer({ api }: { api: { current: Ghost | nul
         if (el.style.display !== 'none') el.style.display = 'none';
         return;
       }
-      // shown from display: none, a box starts where it is put rather than transitioning from its last place
       setStyle(el, { display: '', ...px(r) });
     };
     api.current = {
@@ -1175,14 +1204,16 @@ const DragLayer = memo(function DragLayer({ api }: { api: { current: Ghost | nul
         root.current?.removeAttribute('hidden');
       },
       move(x, y, i) {
-        place(line.current, i?.line ? i : null);
-        place(box.current, i && !i.line ? i : null);
-        if (tag.current) tag.current.style.transform = `translate(${x + 12}px, ${y + 10}px)`;
+        place(line.current, i);
+        if (tag.current) {
+          tag.current.style.transform = `translate(${x + 12}px, ${y + 10}px)`;
+          // away from its strip the tag fades: letting go there puts the tab back
+          tag.current.style.opacity = i ? '' : '0.55';
+        }
       },
       hide() {
         root.current?.setAttribute('hidden', '');
         place(line.current, null);
-        place(box.current, null);
       },
     };
     return () => {
@@ -1192,7 +1223,6 @@ const DragLayer = memo(function DragLayer({ api }: { api: { current: Ghost | nul
   return (
     <div ref={root} hidden className="pointer-events-none absolute inset-0 z-50">
       <div ref={line} className="absolute rounded-full bg-ui-accent" style={{ display: 'none' }} />
-      <div ref={box} className="absolute rounded-lg border-2 border-ui-accent bg-ui-accent/12 transition-all duration-75" style={{ display: 'none' }} />
       <div
         ref={tag}
         className="absolute top-0 left-0 flex h-6 items-center gap-1.5 rounded-md bg-popover px-2 text-xs font-medium text-fg-1 shadow-lg ring-1 ring-ui-accent/60 will-change-transform"

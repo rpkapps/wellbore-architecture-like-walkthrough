@@ -103,7 +103,7 @@ describe('a stored layout naming the retired Features panel', () => {
   it('loads, and drops the panel as the layout is applied', () => {
     expect(DOCK_PANELS.has('features')).toBe(false);
     const L: Layout = {
-      v: 1,
+      v: 2,
       left: { size: 300, collapsed: false, stacks: [{ id: 's1', panels: ['scene', 'features'], active: 'features', weight: 1 }] },
       right: { size: 400, collapsed: false, stacks: [] },
       bottom: { size: 260, collapsed: false, stacks: [] },
