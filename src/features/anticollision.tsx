@@ -336,7 +336,7 @@ export class AntiCollisionFeature implements FeatureModule {
         if (iv.md !== o.md) continue;
         const el = document.createElement('div');
         el.className = `label3d ac ${iv.status}`;
-        el.innerHTML = `<b>${o.name}</b><span>${fmt.n(o.dist, 0)} m · SF ${fmt.n(o.minSF, 2)}</span>`;
+        el.innerHTML = `<b>${o.name}</b><span>· ${fmt.n(o.dist, 0)} m · SF ${fmt.n(o.minSF, 2)}</span>`;
         const lab = new CSS2DObject(el);
         lab.position.copy(a).lerp(b, 0.5);
         this.group.add(lab);
