@@ -42,6 +42,8 @@ export interface ReasoningPart {
   redacted?: string;
   /** how long the model thought, once the next part started */
   durationMs?: number;
+  /** provider-specific data replayed with the part, namespaced by provider kind (`{ gemini: { thoughtSignature } }`) */
+  providerMeta?: Record<string, unknown>;
 }
 
 /** An image the user attached (or a capture of the app's view): sent to vision models. */
@@ -104,6 +106,8 @@ export interface ToolCallPart {
   datasets?: string[];
   startedAt?: number;
   endedAt?: number;
+  /** provider-specific data replayed with the call, namespaced by provider kind (`{ gemini: { thoughtSignature } }`) */
+  providerMeta?: Record<string, unknown>;
 }
 
 /**
@@ -400,7 +404,7 @@ export type StreamEvent =
   /** Anthropic: the thinking block's signature, at its end */
   | { type: 'reasoning-signature'; signature: string }
   | { type: 'reasoning-redacted'; data: string }
-  | { type: 'tool-call-start'; id: string; name: string }
+  | { type: 'tool-call-start'; id: string; name: string; providerMeta?: Record<string, unknown> }
   | { type: 'tool-call-delta'; id: string; argsText: string }
   /** the call is complete; `args` parsed (`{}` for empty), or `argsError` when the JSON was invalid */
   | { type: 'tool-call-end'; id: string; args: unknown; argsError?: string }
