@@ -139,8 +139,12 @@ export function LiveBody({ app }: { app: App }) {
 
   // The chart draws from per-channel min / max bins (see liveEnvelope.ts), so a
   // frame costs one span per pixel column however many readings there are.
-  // While readings stream in, the time axis moves on every frame, trailing the
-  // newest reading a little, instead of jumping with each batch; the pointer's
+  // While readings stream in, the time axis moves smoothly, trailing the
+  // newest reading a little, instead of jumping with each batch. The chart is
+  // drawn again once the strip has moved by a pixel, not on every frame: a
+  // frame's tracks cost the same to rasterise however little they moved, and
+  // at 2 h or All (a few pixels a second, and many readings a bin, so tall
+  // spans) drawing every frame kept the page busy for nothing. The pointer's
   // line and values are on an overlay canvas, so hovering never redraws the
   // chart. Nothing is drawn while the chart is out of sight.
   useEffect(() => {
@@ -156,26 +160,36 @@ export function LiveBody({ app }: { app: App }) {
     let visible = true;
     let raf = 0;
     let dirty = true;
+    let hoverDirty = true;
     const frame = () => {
       raf = 0;
       if (!visible || document.hidden || !size.W || !size.H) return;
       const now = performance.now();
       const moving = clock.moving(now);
-      if (dirty || moving) {
+      const t1 = clock.edge(now);
+      // how far the strip moved since it was drawn, in px (NaN before any reading)
+      const moved = view ? (Math.abs(t1 - view.t1) / view.span) * (size.W - 8) : Infinity;
+      if (dirty || moved >= 1 || (!moving && moved > 0)) {
         dirty = false;
-        view = paint(c, size.W, size.H, series, channels, win, clock.edge(now), envelopes);
+        hoverDirty = true;
+        view = paint(c, size.W, size.H, series, channels, win, t1, envelopes);
       }
-      paintHover(o, size.W, size.H, series, channels, view, hoverX);
+      if (hoverDirty) {
+        hoverDirty = false;
+        paintHover(o, size.W, size.H, series, channels, view, hoverX);
+      }
       // keep the strip moving while readings arrive; at rest, draw only on a change
       if (moving) raf = requestAnimationFrame(frame);
     };
     const kick = (redraw = true) => {
       if (redraw) dirty = true;
+      hoverDirty = true;
       if (!raf) raf = requestAnimationFrame(frame);
     };
+    // new readings show as the strip moves on to them (see `frame`)
     const arrive = () => {
       clock.arrive(series.last, performance.now());
-      kick();
+      kick(false);
     };
     clock.arrive(series.last, performance.now());
     const offData = app.hub.seriesRev.subscribe(arrive);
@@ -249,6 +263,8 @@ const GAP = 4;
 /** What the last chart frame drew: the time mapping and where each track is, for the pointer overlay. */
 interface View {
   t0: number;
+  /** the time at the right edge */
+  t1: number;
   span: number;
   axis: number;
   tracks: { top: number; th: number; color: string }[];
@@ -268,7 +284,7 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
   // a fixed window once there is enough data; until then the data fills the width
   const t0 = Number.isFinite(windowMs) ? Math.max(t1 - windowMs, s.first) : s.first;
   const span = Math.max(1, t1 - t0);
-  const view: View = { t0, span, axis: AXIS, tracks: [] };
+  const view: View = { t0, t1, span, axis: AXIS, tracks: [] };
   const x = (t: number) => xOf(view, W, t);
   // the bins stay the same while the window only slides: for "All" the width steps up as the data doubles
   const bin = binWidth(Number.isFinite(windowMs) ? windowMs : span, W - 8);
@@ -331,19 +347,34 @@ function paint(c: HTMLCanvasElement, W: number, H: number, s: TimeSeries, names:
     }
     g.stroke();
     g.restore();
-    // labels: name and unit on the left, the latest value on the right
+    // labels: name, unit and range on the left, the latest value on the right, each on a backdrop so the trace never hides them
+    const info = `${ch.unit || ''}  ${fmt(lo + pad)}–${fmt(hi - pad)}`;
+    const value = Number.isNaN(last) ? '—' : fmt(last);
+    const big = th > 44;
     g.font = font.sans(11, 600);
-    g.fillStyle = color;
-    g.textBaseline = 'top';
-    g.fillText(name, 8, top + textLen(5));
     const nameW = g.measureText(name).width;
     g.font = font.sans(10);
+    const infoW = g.measureText(info).width;
+    g.font = font.mono(big ? 16 : 12, 600);
+    const valueW = g.measureText(value).width;
+    g.globalAlpha = 0.8;
+    g.fillStyle = ink.card;
+    g.beginPath();
+    g.roundRect(4, top + textLen(3), nameW + infoW + 14, textLen(15), 3);
+    g.roundRect(W - 12 - valueW, top + textLen(2), valueW + 8, textLen(big ? 21 : 16), 3);
+    g.fill();
+    g.globalAlpha = 1;
+    g.textBaseline = 'top';
+    g.font = font.sans(11, 600);
+    g.fillStyle = color;
+    g.fillText(name, 8, top + textLen(5));
+    g.font = font.sans(10);
     g.fillStyle = ink.muted;
-    g.fillText(`${ch.unit || ''}  ${fmt(lo + pad)}–${fmt(hi - pad)}`, 14 + nameW, top + textLen(6));
-    g.font = font.mono(th > 44 ? 16 : 12, 600);
+    g.fillText(info, 14 + nameW, top + textLen(6));
+    g.font = font.mono(big ? 16 : 12, 600);
     g.fillStyle = ink.text;
     g.textAlign = 'right';
-    g.fillText(Number.isNaN(last) ? '—' : fmt(last), W - 8, top + textLen(4));
+    g.fillText(value, W - 8, top + textLen(4));
     g.textAlign = 'left';
   });
 
