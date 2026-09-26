@@ -19,6 +19,7 @@ export type FeatureId =
   | 'owc'
   | 'rop'
   | 'uncertainty'
+  | 'anticollision'
   | 'extraWells'
   | 'simulation'
   | 'mapview'
@@ -141,6 +142,17 @@ export const FEATURES: FeatureDef[] = [
     default: false,
     desc: 'Position-uncertainty ellipses that widen with depth (simplified MWD error model), with a larger allowance where the path is reconstructed from picks.',
     read: 'Each ellipse is where the well could be at that depth, at the chosen confidence. They widen with depth as the survey errors add up; wider where the path is reconstructed from picks.',
+  },
+  {
+    id: 'anticollision',
+    home: 'overlay',
+    label: 'Anti-collision',
+    name: 'Well anti-collision',
+    group: 'Drilling & survey',
+    prov: 'calculated',
+    default: false,
+    desc: 'How close the active well comes to every other wellbore: a separation factor (centre-to-centre distance over the summed uncertainty-ellipse radii, simplified MWD model) every 10 m from the seabed, with the close approaches drawn in 3D and the offset wells listed by risk. Hole shared with a parent or sidetrack above the kick-off is not counted.',
+    read: 'A line joins the active well to the nearest point of each well it passes closely: red where the separation factor is under 1 (the uncertainty ellipses overlap, collision risk), amber under the caution threshold. The same colours mark those stretches along the active well; each label names the other well, the centre-to-centre distance and the separation factor.',
   },
   {
     id: 'extraWells',
