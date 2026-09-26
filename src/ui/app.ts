@@ -658,9 +658,15 @@ export class App {
 
   // ------------------------------------------------------------------ geology
   private pendingBox: Partial<SectionBox> | null = null;
+  private pendingPreview = false;
 
-  /** Section box edits from sliders: coalesced to one rebuild per frame. */
-  setBox(b: Partial<SectionBox>, immediate = false) {
+  /**
+   * Section box edits from sliders: coalesced to one rebuild per frame.
+   * `preview` marks the steps of a drag, which update the slabs' buffers in
+   * place at the grid resolution the drag started with; the drag's last call
+   * (without it) rebuilds at the box's own resolution.
+   */
+  setBox(b: Partial<SectionBox>, immediate = false, preview = false) {
     const geo = this.engine.geology;
     if (immediate) {
       this.pendingBox = null;
@@ -670,11 +676,12 @@ export class App {
     }
     const first = !this.pendingBox;
     this.pendingBox = { ...this.pendingBox, ...b };
+    this.pendingPreview = preview;
     if (first)
       requestAnimationFrame(() => {
         const p = this.pendingBox;
         this.pendingBox = null;
-        if (p) geo.setBox(p);
+        if (p) geo.setBox(p, this.pendingPreview);
       });
   }
 
