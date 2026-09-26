@@ -1,4 +1,5 @@
 import type { App } from '../ui/app';
+import { AntiCollisionFeature } from './anticollision';
 import { ContactsFeature } from './contacts';
 import { CorrelationFeature } from './correlation';
 import { CrossplotFeature } from './crossplot';
@@ -25,6 +26,7 @@ export function createFeatureModules(app: App): FeatureModule[] {
     new ContactsFeature(app),
     new RopFeature(app),
     new UncertaintyFeature(app),
+    new AntiCollisionFeature(app),
     new ExtraWellsFeature(app),
     new SimulationFeature(app),
     new MapViewFeature(app),

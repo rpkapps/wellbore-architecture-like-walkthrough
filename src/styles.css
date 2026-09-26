@@ -200,6 +200,13 @@
   .label3d.unc {
     border-color: rgba(184, 200, 255, 0.4);
   }
+  /* anti-collision: the colour of the separation-factor status (AC_COLOR) */
+  .label3d.ac.collision {
+    border-color: rgba(255, 90, 103, 0.75);
+  }
+  .label3d.ac.caution {
+    border-color: rgba(255, 181, 71, 0.7);
+  }
   .label3d.curtain {
     border-color: rgba(155, 226, 122, 0.4);
   }
