@@ -40,7 +40,7 @@ interface Connector {
   name: string;
 }
 
-const BADGE: Record<AcStatus, 'destructive' | 'warning' | 'success' | 'secondary'> = {
+export const BADGE: Record<AcStatus, 'destructive' | 'warning' | 'success' | 'secondary'> = {
   collision: 'destructive',
   caution: 'warning',
   clear: 'success',
@@ -50,7 +50,7 @@ const BADGE: Record<AcStatus, 'destructive' | 'warning' | 'success' | 'secondary
 /** Rows the offset list shows before "Show all". */
 const LIST_ROWS = 8;
 
-const short = (name: string) => name.replace(/^15\/9-/, '');
+export const short = (name: string) => name.replace(/^15\/9-/, '');
 
 /**
  * Well anti-collision: the active well against every other wellbore of the
@@ -73,6 +73,13 @@ export class AntiCollisionFeature implements FeatureModule {
   private connectors: Connector[] = [];
   private showAll = false;
   private group = new THREE.Group();
+
+  /**
+   * Bumped when the ellipse size or the caution threshold changes: the
+   * travelling cylinder shares them with this overlay, and reads them whether
+   * or not the overlay is on.
+   */
+  readonly options = new Rev();
 
   constructor(private app: App) {
     this.group.name = 'anticollision';
@@ -109,6 +116,25 @@ export class AntiCollisionFeature implements FeatureModule {
   }
 
   // ------------------------------------------------------------------ analysis
+  /** Set the ellipse size (k) and / or the caution threshold (SF), for this overlay and the travelling cylinder. */
+  setOptions(o: { sigma?: number; caution?: number }) {
+    const sigma = o.sigma ?? this.sigma;
+    const caution = o.caution ?? this.caution;
+    if (sigma === this.sigma && caution === this.caution) return;
+    this.sigma = sigma;
+    this.caution = caution;
+    this.options.bump();
+    // a hidden overlay computes nothing: its settings only show the new values
+    if (this.app.flags.on(this.id)) this.rebuild();
+    else this.rev.bump();
+  }
+
+  /** Every wellbore of the field, prepared for the scan (kept between calls): the overlay's and the travelling cylinder's. */
+  fieldWells(): AcWell[] {
+    const f = this.app.field;
+    return fieldWellbores(f.wells, f.context, { picksFor: (n) => f.topsForWell(n), cache: this.cache });
+  }
+
   /** Scan the active well again when it, its trajectory or a setting changed. */
   private compute() {
     const e = this.app.engine;
@@ -119,7 +145,7 @@ export class AntiCollisionFeature implements FeatureModule {
       return;
     }
     const f = this.app.field;
-    this.wells = fieldWellbores(f.wells, f.context, { picksFor: (n) => f.topsForWell(n), cache: this.cache });
+    this.wells = this.fieldWells();
     const ref = this.wells.find((a) => a.key === w.id) ?? null;
     const key = `${w.id}|${this.sigma}|${this.caution}|${f.wells.length}`;
     if (ref === this.ref && key === this.scanKey && this.scan) return;
@@ -199,19 +225,13 @@ export class AntiCollisionFeature implements FeatureModule {
         <SelectField
           label="Ellipse size"
           value={String(this.sigma)}
-          onChange={(v) => {
-            this.sigma = +v;
-            this.rebuild();
-          }}
+          onChange={(v) => this.setOptions({ sigma: +v })}
           options={[1, 2, 3].map((k) => ({ id: String(k), label: `${k}σ (${k === 1 ? '68' : k === 2 ? '95' : '99.7'}% for a 1-D error)` }))}
         />
         <SelectField
           label="Caution below"
           value={String(this.caution)}
-          onChange={(v) => {
-            this.caution = +v;
-            this.rebuild();
-          }}
+          onChange={(v) => this.setOptions({ caution: +v })}
           options={CAUTION_CHOICES.map((c) => ({ id: String(c), label: `SF ${c.toFixed(2)}` }))}
         />
         {!s || !w ? (
