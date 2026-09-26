@@ -21,6 +21,7 @@ import { atDefault, groupOf, maximised, place, placementLabel, placements, PLACE
 import { showTool } from '../ui/workspace/panels';
 import { describeLocation } from '../ui/workspace/where';
 import { depthOf, formationOf, SELECTION_KINDS, SelectionSchema, type Selection } from '../ui/selection';
+import { assistantActions } from '../assistant-host/actions';
 import { defineAction, type Action, type AnyAction } from './registry';
 
 /*
@@ -37,7 +38,7 @@ import { defineAction, type Action, type AnyAction } from './registry';
 
 const PROPERTY_MODES = ['resistivity', 'hydrocarbon', 'lithology', 'rop'] as const;
 const MODE_LABEL: Record<(typeof PROPERTY_MODES)[number], string> = { resistivity: 'Resistivity', hydrocarbon: 'Hydrocarbons', lithology: 'Lithology', rop: 'Drilling speed (ROP)' };
-const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts' } as const;
+const BUILTIN_PANELS = { scene: 'Scene', properties: 'Properties', interpretation: 'Interpretation', logs: 'Well logs', sources: 'Live data', live: 'Live charts', assistant: 'Assistant' } as const;
 const FEATURE_IDS = FEATURES.map((f) => f.id) as [FeatureId, ...FeatureId[]];
 const FORMATIONS = MODEL_HORIZONS as unknown as [string, ...string[]];
 const formationName = (id: string) => FORMATION_BY_ID.get(id)?.name ?? id;
@@ -1322,5 +1323,8 @@ export function appActions(): AnyAction<App>[] {
       where: 'Top bar › Full screen',
       run: () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()),
     }),
+
+    // ------------------------------------------------------------------ assistant
+    ...assistantActions(),
   ];
 }

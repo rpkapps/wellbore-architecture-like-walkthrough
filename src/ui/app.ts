@@ -1166,6 +1166,14 @@ export class App {
       },
       true,
     );
+    // ⌘I / Ctrl I opens or closes the assistant from anywhere, even its own composer (not mid-IME
+    // composition, and not in rich text, where it is italics)
+    window.addEventListener('keydown', (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'i' || e.isComposing || e.defaultPrevented) return;
+      if ((e.target as HTMLElement).closest?.('[contenteditable="true"]')) return;
+      e.preventDefault();
+      void this.actions.run('assistant.toggle');
+    });
     // Ctrl Z (outside text fields, menus and dialogs) takes back the last layout change
     window.addEventListener('keydown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;

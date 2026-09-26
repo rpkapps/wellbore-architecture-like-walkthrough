@@ -154,11 +154,17 @@ const isPreset = (id: string): id is PresetId => PRESETS.some((p) => p.id === id
  * whether they are open, these belong to a workspace's layout, so switching
  * workspace does not carry them along.
  */
-export const DOCK_PANELS: ReadonlySet<string> = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
+export const DOCK_PANELS: ReadonlySet<string> = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live', 'assistant']);
+
+/**
+ * App panels that stay open across workspaces, like a feature's window: the
+ * assistant keeps its conversation beside you (and can switch workspace itself).
+ */
+export const CARRIED_PANELS: ReadonlySet<string> = new Set(['assistant']);
 
 /** Where a panel opens when it has no remembered place. */
 export function defaultZone(id: string): Zone {
-  return id === 'logs' || id === 'sources' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' ? 'left' : 'bottom';
+  return id === 'logs' || id === 'sources' || id === 'assistant' ? 'right' : id === 'scene' || id === 'properties' || id === 'interpretation' ? 'left' : 'bottom';
 }
 
 /** The end of a region's slot (by default its top slot): where a panel with no remembered place goes. */
@@ -718,18 +724,21 @@ export class Workspace {
   /** Replace the layout, keeping open tool windows it does not mention and dropping panels it names that do not exist. */
   apply(next: Layout, available: (id: string) => boolean) {
     const M = normalise(next);
+    const now = new Set(openPanels(this.value));
+    // a carried panel is open in the next layout only if it is open now
+    const keep = (id: string) => available(id) && (!CARRIED_PANELS.has(id) || now.has(id));
     for (const z of ZONES) {
       for (const s of M[z].stacks) {
-        s.panels = s.panels.filter(available);
+        s.panels = s.panels.filter(keep);
         if (!s.panels.includes(s.active)) s.active = s.panels[0] ?? '';
       }
       M[z].stacks = M[z].stacks.filter((s) => s.panels.length);
     }
-    M.floating = M.floating.filter((f) => (f.panels = f.panels.filter(available)).length);
+    M.floating = M.floating.filter((f) => (f.panels = f.panels.filter(keep)).length);
     const inNext = new Set(openPanels(M));
     let out = M;
-    // a feature's window is open because its feature is on, whichever workspace shows it
-    for (const id of openPanels(this.value)) if (!inNext.has(id) && available(id) && !DOCK_PANELS.has(id)) out = dockAt(out, id, defaultOrigin(id));
+    // a feature's window is open because its feature is on, whichever workspace shows it (and a carried panel goes along)
+    for (const id of now) if (!inNext.has(id) && available(id) && (!DOCK_PANELS.has(id) || CARRIED_PANELS.has(id))) out = dockAt(out, id, defaultOrigin(id));
     this.layout.set(out);
   }
 
