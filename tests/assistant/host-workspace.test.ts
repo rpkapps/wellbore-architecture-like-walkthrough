@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { keepChatInView } from '../../src/assistant-host/tools';
+import type { App } from '../../src/ui/app';
 import { DOCK_PANELS, locate, Workspace } from '../../src/ui/workspace/layout';
 
 beforeEach(() => {
@@ -34,5 +36,24 @@ describe('the assistant panel', () => {
     ws.switchTo('walkthrough', available);
     expect(ws.isOpen('assistant')).toBe(false);
     expect(ws.isOpen('logs')).toBe(true);
+  });
+
+  it('keeps the chat in view when a tool brings a panel of its group to the front', async () => {
+    const ws = new Workspace();
+    ws.open('assistant');
+    const app = { workspace: ws } as unknown as App;
+    await keepChatInView(app, async () => ws.open('logs'));
+    expect(ws.isShown('assistant')).toBe(true);
+    expect(ws.isShown('logs')).toBe(true);
+    expect(locate(ws.value, 'assistant')).toMatchObject({ zone: 'right', index: 0 });
+    expect(locate(ws.value, 'logs')).toMatchObject({ zone: 'right', index: 1 });
+  });
+
+  it('leaves the layout alone when the chat was not showing', async () => {
+    const ws = new Workspace();
+    const app = { workspace: ws } as unknown as App;
+    await keepChatInView(app, async () => ws.open('logs'));
+    expect(ws.isOpen('assistant')).toBe(false);
+    expect(ws.value.right.stacks).toHaveLength(1);
   });
 });

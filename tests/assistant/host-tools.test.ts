@@ -155,7 +155,7 @@ describe('the app’s actions as tools', () => {
       defineAction({ id: 'assistant.toggle', title: 'Assistant', description: 'Opens.', category: 'Panels', run: () => null }),
       defineAction({ id: 'app.fullscreen', title: 'Full screen', description: '.', category: 'View', run: () => null }),
     );
-    const app = { actions: reg, field, engine: undefined, flags: undefined, feature: () => undefined } as unknown as App;
+    const app = { actions: reg, field, engine: undefined, flags: undefined, feature: () => undefined, workspace: { isShown: () => false } } as unknown as App;
     const list = appTools(app);
     const by = new Map(list.map((t) => [t.name, t]));
     expect(by.has('assistant.toggle')).toBe(false);

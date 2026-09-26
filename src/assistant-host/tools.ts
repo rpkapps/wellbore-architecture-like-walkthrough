@@ -4,6 +4,7 @@ import type { AnyAction } from '../actions/registry';
 import type { ContactsFeature } from '../features/contacts';
 import type { SimulationFeature } from '../features/simulation';
 import type { App } from '../ui/app';
+import { locate } from '../ui/workspace/layout';
 import { dataTools, zodTool, type DataContext } from './dataTools';
 
 /*
@@ -89,11 +90,31 @@ function actionTool(app: App, a: AnyAction<App>): AssistantTool {
     needsApproval: !!a.needsApproval || ALWAYS_ASK.has(a.id),
     execute: async (args) => {
       if (!app.actions.enabled(a)) throw new Error(`“${a.title}” (${a.id}) is not available right now. Read app.state to see why (e.g. no selection, the well has no logs, the feature is off).`);
-      const r = await app.actions.run(a.id, a.input ? (args ?? {}) : undefined);
+      const r = await keepChatInView(app, () => app.actions.run(a.id, a.input ? (args ?? {}) : undefined));
       if (!r.ok) throw new Error(r.error);
       return (r.result ?? { done: true }) as Json;
     },
   };
+}
+
+/**
+ * Runs an action without letting it hide the conversation: a panel it brings
+ * to the front of the assistant's own tab group (asked to open the well
+ * logs, which share the right sidebar with it) moves to the sidebar's other
+ * slot instead, so the person sees both the chat and what it opened.
+ */
+export async function keepChatInView<T>(app: App, run: () => Promise<T>): Promise<T> {
+  const ws = app.workspace;
+  const shown = ws.isShown('assistant');
+  const result = await run();
+  if (!shown || ws.isShown('assistant')) return result;
+  const at = locate(ws.value, 'assistant');
+  if (at?.kind !== 'dock' || at.zone === 'bottom') return result;
+  const cover = at.stack.active;
+  if (cover === 'assistant') return result;
+  ws.dock(cover, at.zone, at.index === 0 ? 'bottom' : 'top');
+  ws.activate('assistant');
+  return result;
 }
 
 /** What the data tools read from the app. */
