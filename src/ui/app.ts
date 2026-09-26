@@ -1005,6 +1005,13 @@ export class App {
   }
 
   // ------------------------------------------------------------------ interaction
+  /** A right-click in the 3D view: the menu of the object under the pointer (and it is selected). */
+  private rightClickAt(x: number, y: number) {
+    const p = this.engine.pick(x, y);
+    const sel = p && inspect.selectionOf(this, p);
+    if (sel) this.openContextMenu(sel, x, y);
+  }
+
   private bindPicking() {
     const cv = this.engine.renderer.domElement;
     let down: { x: number; y: number; t: number } | null = null;
@@ -1035,10 +1042,43 @@ export class App {
       if (e.button !== 2 || !r) return;
       rdown = null;
       if (Math.hypot(e.clientX - r.x, e.clientY - r.y) > 5) return;
-      const p = this.engine.pick(e.clientX, e.clientY);
-      const sel = p && inspect.selectionOf(this, p);
-      if (sel) this.openContextMenu(sel, e.clientX, e.clientY);
+      this.rightClickAt(e.clientX, e.clientY);
     });
+    // A right-click while a menu is open lands on the menu's underlay (which covers the page and
+    // closes the menu only for a left click): close the menu, and pass the right-click on to what
+    // is under the pointer, so it opens that thing's menu as it would have with none open.
+    let passOn: { x: number; y: number } | null = null;
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.button !== 2 || !(e.target as Element | null)?.closest?.('[data-testid="underlay"]') || !document.querySelector('[role="menu"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        passOn = { x: e.clientX, y: e.clientY };
+        this.contextMenu.set(null);
+        // any other menu (a tab's, the rail's) closes as Escape closes it
+        const focus = document.activeElement;
+        if (focus && focus !== document.body) focus.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      },
+      true,
+    );
+    window.addEventListener(
+      'pointerup',
+      (e) => {
+        const at = passOn;
+        if (e.button !== 2 || !at) return;
+        passOn = null;
+        e.stopPropagation();
+        // once the menu and its underlay are gone
+        requestAnimationFrame(() => {
+          const el = document.elementsFromPoint(at.x, at.y).find((x) => !x.closest('[data-testid="underlay"], [role="menu"], [role="dialog"]'));
+          if (!el) return;
+          if (el === cv) this.rightClickAt(at.x, at.y);
+          else el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2, buttons: 0 }));
+        });
+      },
+      true,
+    );
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     // The app's own right-click menus stand in for the browser's everywhere: on some systems the
     // browser's arrives after ours opened, aimed at our menu rather than the view, so it is turned
