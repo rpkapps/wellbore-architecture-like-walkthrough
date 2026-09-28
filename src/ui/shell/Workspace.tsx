@@ -20,7 +20,7 @@ import { Timeline, timelineHeight } from './Timeline';
 import { TopBar } from './TopBar';
 import { ViewToolbar } from './ViewControls';
 
-const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live']);
+const BUILTIN = new Set(['scene', 'properties', 'interpretation', 'logs', 'sources', 'live', 'assistant']);
 
 /**
  * The application: the top bar, then the workspace, where the 3D view fills

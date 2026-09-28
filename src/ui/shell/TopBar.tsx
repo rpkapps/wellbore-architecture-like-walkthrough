@@ -4,7 +4,8 @@ import { Separator } from '@tecton/react/components/separator';
 import { AppShellBrand, AppShellHeader, useMinWidth } from '@tecton/react/tecton/app-shell';
 import { Overflow, OverflowDivider, OverflowItem, OverflowLabel, OverflowSpacer } from '@tecton/react/tecton/overflow';
 import { WellIcon } from '@tecton/react/icons';
-import { ListMinusIcon, ListPlusIcon, MaximizeIcon, SearchIcon } from 'lucide-react';
+import { Tooltip, TooltipTrigger } from '@tecton/react/components/tooltip';
+import { ListMinusIcon, ListPlusIcon, MaximizeIcon, SearchIcon, SparklesIcon } from 'lucide-react';
 import { memo, type ReactNode } from 'react';
 import type { Key } from 'react-aria-components';
 import type { App } from '../app';
@@ -12,7 +13,9 @@ import { useFlags } from '../flags';
 import { IconButton } from '../icon-button';
 import { Logo } from '../logo';
 import { useNameDialog, WorkspaceSubmenu, WorkspaceTabs } from '../workspace/menus';
-import { Signal, useRev, useSignal } from '../signal';
+import { Signal, useRev, useSignal, useSignalPart } from '../signal';
+import { ASSISTANT_SHORTCUT } from '../../assistant-host/actions';
+import { ASSISTANT_PANEL, prefetchAssistant } from '../../assistant-host/lazy';
 import { DataDialog } from './DataDialog';
 import { ConnectDialog } from './ConnectDialog';
 import { HelpDialog } from './HelpDialog';
@@ -80,6 +83,7 @@ const Controls = memo(function Controls({ app }: { app: App }) {
             the view tools on the viewport toolbar; colour-by on the colour key */}
         <IconItem id="fullscreen" priority={0} label="Fullscreen" icon={<MaximizeIcon />} onAction={fullscreen} />
         <GroupDivider />
+        <AssistantItem app={app} />
         <OverflowItem id="palette" priority={10} label="Command palette" icon={<SearchIcon />} shortcut={palette} onAction={() => app.paletteOpen.set(true)}>
           <Button variant="ghost" size="sm" aria-label="Command palette" className="gap-1.5 text-fg-2">
             <SearchIcon data-icon="inline-start" />
@@ -183,6 +187,28 @@ function WorkspaceItem({ app }: { app: App }) {
       </OverflowItem>
       {names.dialog}
     </>
+  );
+}
+
+/**
+ * The assistant's button: pressed while its panel shows. Hovering or focusing
+ * it starts loading the assistant's chunk, so the panel opens without a wait.
+ */
+function AssistantItem({ app }: { app: App }) {
+  const shown = useSignalPart(app.workspace.layout, () => app.workspace.isShown(ASSISTANT_PANEL));
+  const hidden = useSignal(app.workspace.hidden);
+  const on = shown && !hidden;
+  return (
+    <OverflowItem id="assistant" priority={8} label="Assistant" icon={<SparklesIcon />} shortcut={ASSISTANT_SHORTCUT} onAction={() => void app.actions.run('assistant.toggle')} labelBehavior="keep">
+      <TooltipTrigger delay={400}>
+        <Button variant={on ? 'secondary' : 'ghost'} size="icon-sm" aria-label="Assistant" aria-pressed={on} aria-keyshortcuts={isMac ? 'Meta+I' : 'Control+I'} onHoverStart={prefetchAssistant} onFocus={prefetchAssistant}>
+          <SparklesIcon />
+        </Button>
+        <Tooltip placement="bottom">
+          Assistant <Kbd className="h-4 px-1 text-[0.68rem]">{ASSISTANT_SHORTCUT}</Kbd>
+        </Tooltip>
+      </TooltipTrigger>
+    </OverflowItem>
   );
 }
 

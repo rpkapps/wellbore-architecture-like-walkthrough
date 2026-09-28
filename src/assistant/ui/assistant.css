@@ -1,0 +1,36 @@
+/*
+ * The streaming caret after the last block of an answer that is still
+ * arriving. Scoped to the panel, in the components layer so utilities win.
+ */
+@layer components {
+  @keyframes assistant-caret {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.15;
+    }
+  }
+
+  [data-slot='assistant-panel'] [data-slot='assistant-markdown'][data-streaming] > :is(p, h2, h3, h4, h5, h6):last-child::after,
+  [data-slot='assistant-panel'] [data-slot='assistant-markdown'][data-streaming] > :is(ul, ol):last-child > li:last-child > div > :last-child::after {
+    content: '';
+    display: inline-block;
+    width: 0.5em;
+    height: 1em;
+    margin-inline-start: 0.2em;
+    vertical-align: -0.15em;
+    border-radius: 1px;
+    background: currentColor;
+    opacity: 0.7;
+    animation: assistant-caret 1s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-slot='assistant-panel'] [data-slot='assistant-markdown'][data-streaming] > *::after,
+    [data-slot='assistant-panel'] [data-slot='assistant-markdown'][data-streaming] li *::after {
+      animation: none;
+    }
+  }
+}

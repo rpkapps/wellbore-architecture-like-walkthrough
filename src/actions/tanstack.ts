@@ -10,7 +10,10 @@ import type { ActionRegistry } from './registry';
  * way and shows up in the same run history. Actions marked `needsApproval`
  * pause the model until the person approves them in the chat.
  *
- * Nothing imports this module yet: it is the seam the assistant plugs into.
+ * The built-in Assistant does not go through TanStack AI: it has its own
+ * provider-agnostic kit (`src/assistant/`), and `src/assistant-host/tools.ts`
+ * maps the same registry to its tools. This adapter stays for an app that
+ * wants TanStack AI's `useChat` instead.
  */
 export function clientTools<Ctx>(registry: ActionRegistry<Ctx>) {
   return registry.list().map((a) =>

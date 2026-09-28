@@ -8,7 +8,7 @@ import { DownloadIcon, InfoIcon, RotateCcwIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Key } from 'react-aria-components';
 import { sampleCurve } from '../../data/las';
-import { DEFAULT_PARAMS, PARAM_NOTES, autoGrLimits, payIntervals, type PetroParams } from '../../data/petro';
+import { DEFAULT_PARAMS, PARAM_NOTES, PARAM_RANGES, autoGrLimits, payIntervals, type PetroParams } from '../../data/petro';
 import { FORMATION_BY_ID } from '../../data/stratigraphy';
 import type { App } from '../app';
 import { CompactSelect, Note } from '../controls';
@@ -37,8 +37,8 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
   {
     title: 'Shale volume',
     params: [
-      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1, range: [0, 80], hist: { curve: 'gr', keep: 'below' } },
-      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1, range: [50, 200], hist: { curve: 'gr', keep: 'above', tone: 'shale' } },
+      { key: 'grClean', label: 'GR clean sand', unit: 'API', step: 1, range: PARAM_RANGES.grClean, hist: { curve: 'gr', keep: 'below' } },
+      { key: 'grShale', label: 'GR shale', unit: 'API', step: 1, range: PARAM_RANGES.grShale, hist: { curve: 'gr', keep: 'above', tone: 'shale' } },
       {
         key: 'vshMethod',
         label: 'Vsh transform',
@@ -54,8 +54,8 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
   {
     title: 'Porosity',
     params: [
-      { key: 'rhoMa', label: 'Matrix density ρma', unit: 'g/cm³', step: 0.01, range: [2.6, 2.75] },
-      { key: 'rhoFl', label: 'Fluid density ρfl', unit: 'g/cm³', step: 0.01, range: [0.8, 1.2] },
+      { key: 'rhoMa', label: 'Matrix density ρma', unit: 'g/cm³', step: 0.01, range: PARAM_RANGES.rhoMa },
+      { key: 'rhoFl', label: 'Fluid density ρfl', unit: 'g/cm³', step: 0.01, range: PARAM_RANGES.rhoFl },
       {
         key: 'porosityMethod',
         label: 'Method',
@@ -79,20 +79,20 @@ const GROUPS: { title: string; params: ParamDef[] }[] = [
           ['simandoux', 'Modified Simandoux'],
         ],
       },
-      { key: 'rw', label: 'Rw', unit: 'Ω·m', step: 0.001, range: [0.005, 0.5], log: true },
-      { key: 'rwTemp', label: 'Rw reference temp.', unit: '°C', step: 1, range: [20, 150] },
-      { key: 'a', label: 'Tortuosity a', step: 0.05, range: [0.5, 1.5] },
-      { key: 'm', label: 'Cementation m', step: 0.05, range: [1.5, 2.6] },
-      { key: 'n', label: 'Saturation n', step: 0.05, range: [1.5, 3] },
-      { key: 'rsh', label: 'Rsh (Simandoux)', unit: 'Ω·m', step: 0.1, range: [0.5, 10] },
+      { key: 'rw', label: 'Rw', unit: 'Ω·m', step: 0.001, range: PARAM_RANGES.rw, log: true },
+      { key: 'rwTemp', label: 'Rw reference temp.', unit: '°C', step: 1, range: PARAM_RANGES.rwTemp },
+      { key: 'a', label: 'Tortuosity a', step: 0.05, range: PARAM_RANGES.a },
+      { key: 'm', label: 'Cementation m', step: 0.05, range: PARAM_RANGES.m },
+      { key: 'n', label: 'Saturation n', step: 0.05, range: PARAM_RANGES.n },
+      { key: 'rsh', label: 'Rsh (Simandoux)', unit: 'Ω·m', step: 0.1, range: PARAM_RANGES.rsh },
     ],
   },
   {
     title: 'Net pay cut-offs',
     params: [
-      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01, range: [0, 1], hist: { curve: 'vsh', keep: 'below' } },
-      { key: 'cutPhi', label: 'φ ≥', step: 0.01, range: [0, 0.3], hist: { curve: 'phie', keep: 'above' } },
-      { key: 'cutSw', label: 'Sw ≤', step: 0.01, range: [0, 1], hist: { curve: 'sw', keep: 'below' } },
+      { key: 'cutVsh', label: 'Vsh ≤', step: 0.01, range: PARAM_RANGES.cutVsh, hist: { curve: 'vsh', keep: 'below' } },
+      { key: 'cutPhi', label: 'φ ≥', step: 0.01, range: PARAM_RANGES.cutPhi, hist: { curve: 'phie', keep: 'above' } },
+      { key: 'cutSw', label: 'Sw ≤', step: 0.01, range: PARAM_RANGES.cutSw, hist: { curve: 'sw', keep: 'below' } },
     ],
   },
 ];
